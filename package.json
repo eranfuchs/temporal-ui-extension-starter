@@ -1,0 +1,35 @@
+{
+    "name": "temporal-ui-extension-starter",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Three standalone Chrome extensions, in increasing order of ambition, showing how to add your own view to the Temporal Web UI without a backend, a credential, or a change to Temporal.",
+    "license": "MIT",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "build": "node scripts/run-in-projects.mjs build",
+        "typecheck": "node scripts/run-in-projects.mjs typecheck",
+        "test": "node scripts/run-in-projects.mjs test",
+        "leak:gate": "node scripts/leak-gate.mjs",
+        "leak:history": "node scripts/leak-gate.mjs --history",
+        "leak:selftest": "node scripts/leak-gate.mjs --selftest",
+        "lineage": "node scripts/lineage.mjs",
+        "lineage:selftest": "node scripts/lineage.mjs --selftest",
+        "surface": "node scripts/surface.mjs",
+        "surface:selftest": "node scripts/surface.mjs --selftest",
+        "doc:paths": "node scripts/doc-paths.mjs",
+        "doc:selftest": "node scripts/doc-paths.mjs --selftest",
+        "preflight": "node scripts/preflight.mjs",
+        "icons": "node scripts/make-icons.mjs",
+        "package": "node scripts/package.mjs"
+    },
+    "devDependencies": {
+        "@types/chrome": "^0.2.7",
+        "esbuild": "^0.28.2",
+        "jsdom": "^30.0.1",
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.11"
+    }
+}

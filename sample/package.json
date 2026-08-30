@@ -1,0 +1,23 @@
+{
+    "name": "temporal-ui-extension-starter-sample",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Sample workflows that produce a parent/child hierarchy for the extension to draw. Its own npm project so the extension itself keeps zero runtime dependencies.",
+    "license": "MIT",
+    "scripts": {
+        "worker": "tsx src/worker.ts",
+        "start": "tsx src/client.ts",
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@temporalio/activity": "^1.23.0",
+        "@temporalio/client": "^1.23.0",
+        "@temporalio/worker": "^1.23.0",
+        "@temporalio/workflow": "^1.23.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsx": "^4.19.2",
+        "typescript": "^5.9.3"
+    }
+}

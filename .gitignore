@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.zip
+.DS_Store
+
+# Editor state. Never committed: a JetBrains workspace.xml records absolute
+# paths, run configurations and recent files from the machine it was written
+# on, none of which belong in a public repository.
+.idea/
+.vscode/
+*.iml
+
+# Your organisation's private terms for the leak gate. NEVER committed —
+# a public repo listing your internal hostnames defeats the purpose.
+# See leakgate.denylist.example for the format.
+leakgate.local.txt

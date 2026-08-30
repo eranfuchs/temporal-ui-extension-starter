@@ -1,0 +1,26 @@
+{
+    "name": "temporal-ui-starter-02-techniques",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Family tree plus the techniques around it: templated deep links, a settings pane, payload decoding. One permission: storage.",
+    "license": "MIT",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "build": "node esbuild.mjs",
+        "watch": "node esbuild.mjs --watch",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "package": "node ../scripts/package.mjs ."
+    },
+    "devDependencies": {
+        "@types/chrome": "^0.2.7",
+        "esbuild": "^0.28.2",
+        "jsdom": "^30.0.1",
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.11"
+    }
+}

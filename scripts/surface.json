@@ -1,0 +1,90 @@
+{
+    "_comment": [
+        "The attack surface each project is ALLOWED to have. scripts/surface.mjs",
+        "compares this against what the manifests and the source actually do, and",
+        "fails when a project exceeds its budget.",
+        "",
+        "This file is the security card in every project's README, in machine-",
+        "readable form. The README says '01 asks for no permissions'; this is what",
+        "stops that sentence from quietly becoming false. Growing a budget is a",
+        "deliberate edit to a reviewed file, which is the point: the diff that adds",
+        "a permission is the diff a reviewer needs to see.",
+        "",
+        "Every complete project must appear here. An unlisted project fails rather",
+        "than being skipped — otherwise adding 04-something would escape the",
+        "budget entirely by having no budget."
+    ],
+    "matches": {
+        "allowed": [
+            "https://cloud.temporal.io/*",
+            "http://localhost/*",
+            "http://127.0.0.1/*"
+        ],
+        "why": [
+            "Two hosts, repository-wide: Temporal Cloud, and a local `temporal server start-dev`.",
+            "A content script matching anything else — and above all <all_urls> or *://*/* —",
+            "means the extension runs on pages that have nothing to do with Temporal.",
+            "Self-hosted UIs live on hosts we cannot enumerate, so a fork adds its own host",
+            "here on purpose; that is a decision, not a default."
+        ]
+    },
+    "sinks": {
+        "banned": [
+            "innerHTML",
+            "outerHTML",
+            "insertAdjacentHTML",
+            "document.write",
+            "eval",
+            "new Function",
+            "setTimeout(string)",
+            "setInterval(string)"
+        ],
+        "why": [
+            "Every one of these turns workflow data into executable markup or code.",
+            "The extension renders strings it did not author — workflow ids, types, task",
+            "queue names — into a page it does not own. `textContent` cannot execute;",
+            "`innerHTML` can, and a workflow id is a perfectly good place to hide a",
+            "payload. There is no allowance list here on purpose: if a project ever needs",
+            "one of these, that is an edit to this file plus a written reason, reviewed."
+        ]
+    },
+    "binaries": {
+        "allowed": [
+            "*/public/icons/icon-*.png"
+        ],
+        "why": [
+            "No gate can read a binary. Not this one, not the leak gate, not any secret",
+            "scanner — so a committed image is a file nobody reviews. The icons are",
+            "exempt because they are GENERATED from arithmetic by scripts/make-icons.mjs;",
+            "the reviewable artefact is that script.",
+            "",
+            "Adding a screenshot or a GIF means adding it here, and it must have been",
+            "captured against `temporal server start-dev` with synthetic workflow names.",
+            "A recording of a real tenant cannot be redacted after the fact."
+        ]
+    },
+    "projects": {
+        "01-family-tree": {
+            "permissions": [],
+            "optional_permissions": [],
+            "host_permissions": [],
+            "background": false,
+            "web_accessible_resources": false,
+            "externally_connectable": false,
+            "content_security_policy": false,
+            "chrome_api": false,
+            "why": "The whole claim of this project is that a useful view costs nothing. No permissions key, no service worker, and no chrome.* call in src/ — enforced here and by tsconfig.json's \"types\": []."
+        },
+        "02-techniques": {
+            "permissions": ["storage"],
+            "optional_permissions": [],
+            "host_permissions": [],
+            "background": false,
+            "web_accessible_resources": false,
+            "externally_connectable": false,
+            "content_security_policy": false,
+            "chrome_api": true,
+            "why": "One permission, `storage`, for the user's own deep-link templates and toggles. Still no host_permissions: the deep links are navigations the user clicks, not fetches the extension makes."
+        }
+    }
+}

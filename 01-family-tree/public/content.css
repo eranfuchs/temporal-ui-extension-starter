@@ -1,0 +1,100 @@
+/* The tree connectors.
+ *
+ * Two decisions here are load-bearing and were both arrived at by getting them
+ * wrong first.
+ *
+ * 1. z-index: 0 — not 1, not -1.
+ *    At 1 the strokes painted OVER the table's sticky pagination bar, drawing
+ *    tree lines across a toolbar. At -1 they disappeared behind the row's own
+ *    background, which looks exactly like "the feature does not work". 0 puts
+ *    them above the background and below everything positioned.
+ *
+ * 2. The strokes are borders on absolutely-positioned pseudo-elements, not text
+ *    characters in the link. A text glyph cannot join across the row boundary,
+ *    because the cell's vertical padding sits between one row's glyph and the
+ *    next; the line breaks at every row and no amount of line-height fixes it.
+ *
+ * Colour is currentColor at low opacity so the connectors follow the UI's own
+ * light/dark theme without this file knowing which one is active.
+ */
+
+/* The overlay needs a positioned ancestor. Selecting the cell by the link it
+ * contains — rather than by nth-child or a class — survives the UI adding or
+ * reordering columns, which it does between versions. */
+td:has(a[href*="/workflows/"]) {
+    position: relative;
+}
+
+.tuis-prefix {
+    position: absolute;
+    z-index: 0;
+    top: 0;
+    bottom: 0;
+    /* The workflow-id cell carries ~8px of left padding; without this offset the
+     * first stroke sits outside the visible cell. */
+    left: 8px;
+    display: flex;
+    align-items: stretch;
+    /* Never intercept a click meant for the row or the link underneath. */
+    pointer-events: none;
+    user-select: none;
+    opacity: 0.4;
+}
+
+.tuis-seg {
+    position: relative;
+    /* Must match SEGMENT_WIDTH_PX in src/render.ts. */
+    width: 18px;
+    flex: 0 0 18px;
+    height: 100%;
+}
+
+/* An ancestor further up still has rows below: carry its line through. */
+.tuis-seg-cont::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid currentColor;
+}
+
+/* An ancestor whose subtree is finished: hold the column, draw nothing.
+ * (.tuis-seg-pad needs no rule — the empty box is the point.) */
+
+/* A child with siblings after it: full-height vertical, plus the stub to its own
+ * row. */
+.tuis-seg-branch::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid currentColor;
+}
+
+.tuis-seg-branch::after {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    width: 10px;
+    border-bottom: 1px solid currentColor;
+}
+
+/* The last child: an elbow. One box with a left and a bottom border and a
+ * rounded corner between them draws the whole shape. */
+.tuis-seg-last::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    height: 50%;
+    width: 10px;
+    border-left: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    border-bottom-left-radius: 10px;
+}
+
+/* That is the whole stylesheet. There is no on/off class and no button styling:
+ * this project has no settings to switch and nothing to click. */

@@ -1,0 +1,14 @@
+# Copy to `leakgate.local.txt` (gitignored) and list the strings that must
+# never appear in this repository: your company name, internal domains,
+# product codenames, ticket-key prefixes.
+#
+# One pattern per line. `#` starts a comment. Matching is case-insensitive.
+# A line starting with `re:` is treated as a JavaScript regular expression.
+#
+# The point of keeping this file out of git: a public repo that ships a list
+# of your internal names has leaked the list.
+
+# examples — replace with your own
+# acme-corp
+# internal.acme.example
+# re:ACME-\d+

@@ -1,0 +1,95 @@
+{
+    "_comment": [
+        "The registry scripts/lineage.mjs enforces. Read its header first.",
+        "Every file that exists in more than one project must appear here, in exactly",
+        "one of the two lists. 'shared' files must be byte-identical everywhere they",
+        "appear; 'forks' are allowed to differ and must say why. A duplicated file in",
+        "neither list fails the gate, which is the point: it forces the question",
+        "'is this supposed to be the same file?' to be answered once, in writing,",
+        "instead of being discovered as a bug months later."
+    ],
+    "shared": [
+        {
+            "path": "src/inject.ts",
+            "why": "The piggyback itself. Every project wraps window.fetch the same way; if this file ever differs between them, the thing the repository is teaching has forked."
+        },
+        {
+            "path": "src/types.ts",
+            "why": "The shapes crossing the postMessage boundary, mirroring the API response. A project that needed fewer fields would still receive them, so trimming buys nothing and costs the identity."
+        },
+        {
+            "path": "src/rows.ts",
+            "why": "API response to a flat row shape. Pure, and identical in every project."
+        },
+        {
+            "path": "src/tree.ts",
+            "why": "The feature as a pure function. This is the file a reader is most likely to copy out; it must be the same file in all three."
+        },
+        {
+            "path": "tests/helpers.ts",
+            "why": "Fixtures. Divergence here would make two projects' specs incomparable."
+        },
+        {
+            "path": "tests/unit/tree.spec.ts",
+            "why": "Pins the ordering and connector rules for the shared src/tree.ts."
+        },
+        {
+            "path": "tests/unit/rows.spec.ts",
+            "why": "Pins the shared src/rows.ts."
+        },
+        {
+            "path": "vitest.config.ts",
+            "why": "Same test policy everywhere, including allowOnly: false."
+        },
+        {
+            "path": "public/icons/icon-16.png",
+            "why": "One glyph, written into every project by scripts/make-icons.mjs."
+        },
+        {
+            "path": "public/icons/icon-32.png",
+            "why": "See icon-16.png."
+        },
+        {
+            "path": "public/icons/icon-48.png",
+            "why": "See icon-16.png."
+        },
+        {
+            "path": "public/icons/icon-128.png",
+            "why": "See icon-16.png."
+        }
+    ],
+    "forks": [
+        {
+            "path": "src/render.ts",
+            "why": "01 has no deep links and no on/off switch, so its applyToTable takes no options object at all: applyToTable(tbody, lookup). 02 and 03 pass RenderOptions and own LINK_CLASS, OFF_CLASS, syncDeepLinks, restoreOriginalOrder and removeAllDecoration. Parameterising one file to cover both would put the settings vocabulary back into the project whose whole claim is that it has none."
+        },
+        {
+            "path": "src/content.ts",
+            "why": "01's wiring uses no chrome.* API whatsoever — that is what lets its manifest omit permissions. 02 and 03 load settings, subscribe to changes and answer the popup. The difference IS the lesson."
+        },
+        {
+            "path": "tests/unit/render.spec.ts",
+            "why": "Follows src/render.ts. 01's copy drops the deep-link, off-switch and removeAllDecoration blocks; the shared assertions (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each project proves them on its own code."
+        },
+        {
+            "path": "public/content.css",
+            "why": "01 has no .tuis-link buttons and no html.tuis-off master switch, so it ships neither rule. The connector rules are the same in both."
+        },
+        {
+            "path": "public/manifest.json",
+            "why": "The permission ladder, which is the repository's main argument: 01 declares no permissions and no action; 02 and 03 declare storage and a popup. Names and descriptions differ so three loaded projects are distinguishable in chrome://extensions."
+        },
+        {
+            "path": "package.json",
+            "why": "Per-project name, description and dependency set. 01 does not depend on @types/chrome, because it uses no chrome API."
+        },
+        {
+            "path": "tsconfig.json",
+            "why": "01 sets \"types\": [] — it needs no ambient type package at all, and the typechecker is where that claim is enforced. 02 and 03 set \"types\": [\"chrome\"]."
+        },
+        {
+            "path": "esbuild.mjs",
+            "why": "Entry points differ: 01 builds inject + content, 02 and 03 also build the popup."
+        }
+    ]
+}
