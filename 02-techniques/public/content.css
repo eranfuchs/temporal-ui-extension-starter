@@ -117,9 +117,183 @@ td:has(a[href*="/workflows/"]) {
     opacity: 1;
 }
 
+/* A template that expanded to something we will not open (anything that is not
+ * an absolute http/https URL). It carries no href, so it is already unclickable;
+ * this only makes it LOOK unclickable, because a button that silently does
+ * nothing is indistinguishable from a broken extension. The title says why. */
+.tuis-link-blocked {
+    border-style: dashed;
+    text-decoration: line-through;
+    cursor: not-allowed;
+}
+
+/* The retrying-activity badge.
+ *
+ * Deliberately the loudest thing this extension draws, and the only place it uses
+ * a colour of its own: every other decoration is information the reader asked for,
+ * while this one is information they did not know to look for. A workflow whose
+ * activity has failed 900 times is still "Running" in the status column.
+ *
+ * color-mix onto Canvas rather than a fixed pair of hex values, so it stays
+ * readable in both themes without this file knowing which one is active. */
+.tuis-retry {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, #d97706 70%, CanvasText);
+    border-radius: 10px;
+    background: color-mix(in srgb, #d97706 18%, Canvas);
+    color: inherit;
+    font-size: 11px;
+    line-height: 16px;
+    white-space: nowrap;
+    /* There is a title to read, and nothing to click. */
+    cursor: help;
+}
+
+/* The "Last event" column. Narrow, quiet, and nowrap: it sits at the right-hand
+ * end of a table the UI already fills, so it must not be the thing that makes the
+ * table scroll sideways. */
+.tuis-last-event {
+    white-space: nowrap;
+    font-size: 11px;
+    opacity: 0.75;
+    /* Tabular figures so a column of ages does not jitter as digits change. */
+    font-variant-numeric: tabular-nums;
+}
+
+.tuis-col-head {
+    white-space: nowrap;
+    font-size: 11px;
+    /* Dotted underline: this header is ours, not the UI's, and a reader comparing
+     * the extension against a vanilla tab should be able to tell at a glance. */
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+
+/* The deep-link card on a single workflow's own page.
+ *
+ * Fixed, bottom-right, and that position is a DECISION rather than a default —
+ * see the note at the top of src/detailCard.ts. A workflow's page offers no
+ * meaning-anchored slot for "the row of activity N" (the timeline is SVG and the
+ * event list is virtualised), so there is nothing to attach to that would survive
+ * the next UI release.
+ *
+ * z-index is deliberately the opposite decision from .tuis-prefix above, and for
+ * the opposite reason. The connectors live INSIDE a table cell and must stay under
+ * the UI's own positioned chrome, so they sit at 0. This card is a floating overlay
+ * on <body> whose entire job is to be on top; under the sticky header it would be
+ * unreadable exactly when it is most useful.
+ *
+ * Canvas/CanvasText are the system colours, so it is legible in both themes
+ * without this file knowing which one the UI is using. It follows the BROWSER's
+ * scheme rather than the page's, which can differ for one frame after a theme
+ * switch — a trade taken knowingly, because the alternative is hardcoding two
+ * palettes that will not match the UI's next redesign either.
+ *
+ * max-height keeps a workflow with twenty listed activities from covering the page
+ * it is annotating; the body scrolls, and overscroll-behavior stops the wheel
+ * gesture continuing into the page once it reaches the end. */
+.tuis-card {
+    position: fixed;
+    z-index: 2147483000;
+    right: 16px;
+    bottom: 16px;
+    width: 300px;
+    max-width: calc(100vw - 32px);
+    border: 1px solid;
+    border-radius: 6px;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+    font:
+        12px/1.45 system-ui,
+        -apple-system,
+        sans-serif;
+}
+
+.tuis-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    font-weight: 600;
+}
+
+/* A <button> reset: the UI's own button styling would otherwise give this one a
+ * toolbar's background and padding. */
+.tuis-card-toggle {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.tuis-card-toggle:hover,
+.tuis-card-toggle:focus-visible {
+    opacity: 1;
+}
+
+.tuis-card-body {
+    max-height: 50vh;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px 8px;
+}
+
+/* Collapsed hides the body only, so the header stays as the affordance that
+ * brings it back. */
+.tuis-card-collapsed .tuis-card-body {
+    display: none;
+}
+
+.tuis-card-group {
+    padding: 4px 0;
+    border-top: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
+}
+
+/* An activity's own line: its type, how many attempts it has taken, how old it is.
+ * `anywhere` because an activity type is a symbol from somebody's source and can
+ * be long without containing a space. */
+.tuis-card-label {
+    display: block;
+    font-size: 11px;
+    opacity: 0.75;
+    overflow-wrap: anywhere;
+}
+
+/* The card's own asides — what has been observed, what has not, and the hint that
+ * an activity token turns a template into a per-activity link. */
+.tuis-card-note {
+    padding: 4px 0;
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+/* Inside the card the links are stacked in a narrow box rather than trailing a
+ * table cell, so the table's left margin would indent the first one oddly. */
+.tuis-card .tuis-link {
+    margin: 2px 4px 0 0;
+}
+
 /* The master switch. The content script also removes the nodes, but hiding them
  * by class takes effect in the same frame as the toggle. */
 html.tuis-off .tuis-prefix,
-html.tuis-off .tuis-link {
+html.tuis-off .tuis-link,
+html.tuis-off .tuis-retry,
+html.tuis-off .tuis-card {
     display: none !important;
+}
+
+/* The column is hidden with visibility, not display: a `display: none` on one cell
+ * of a table row leaves the row one cell short of the header and the whole table
+ * misaligns for the frame before the nodes are removed. */
+html.tuis-off .tuis-last-event,
+html.tuis-off .tuis-col-head {
+    visibility: hidden !important;
 }

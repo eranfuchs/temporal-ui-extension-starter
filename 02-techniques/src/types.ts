@@ -48,5 +48,11 @@ export interface WorkflowsMessage {
     source: typeof MESSAGE_SOURCE;
     type: 'workflows';
     url: string;
+    // Which request this is the answer to, counted from 1 in the order the
+    // requests were ISSUED — not the order they came back in. Two list requests
+    // can be in flight at once (change a filter twice quickly), they can answer
+    // in either order, and without this the older answer wins whenever it is
+    // slower. See judgeListResponse() in rows.ts.
+    generation: number;
     executions: TemporalApiWorkflow[];
 }

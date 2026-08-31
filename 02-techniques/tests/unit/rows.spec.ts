@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeExecutions, runKey, simplifyStatus } from '../../src/rows';
+import {
+    findPlacement,
+    indexPlacements,
+    judgeListResponse,
+    namespaceFromApiUrl,
+    normalizeExecutions,
+    runKey,
+    simplifyStatus,
+} from '../../src/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
 import type { TemporalApiWorkflow } from '../../src/types';
 
@@ -44,6 +52,140 @@ describe('normalizeExecutions', () => {
         expect(child!.parentRunId).toBe(parentRun);
         expect(root!.parentWorkflowId).toBeNull();
         expect(root!.parentRunId).toBeNull();
+    });
+});
+
+describe('indexPlacements + findPlacement', () => {
+    // What the renderer stores per row is irrelevant here, so store the least
+    // that still proves which row was found.
+    const label = (rows: ReturnType<typeof normalizeExecutions>) =>
+        indexPlacements(rows, (row, index) => `${row.workflowId}#${index}`);
+
+    it('resolves a run-less href when the id appears exactly once', () => {
+        const rows = normalizeExecutions([
+            apiWorkflow({ workflowId: 'alpha', runId: fakeRunId(10) }),
+            apiWorkflow({ workflowId: 'beta', runId: fakeRunId(11) }),
+        ]);
+        const index = label(rows);
+        expect(findPlacement(index, 'beta', null)).toBe('beta#1');
+        expect(findPlacement(index, 'beta', fakeRunId(11))).toBe('beta#1');
+    });
+
+    it('declines a run-less href when the same id has two runs', () => {
+        // A retried or continued-as-new workflow keeps its id and gets a new
+        // run, and both runs appear in the same list. Picking either one draws
+        // the row with the other run's indentation.
+        const first = fakeRunId(12);
+        const second = fakeRunId(13);
+        const rows = normalizeExecutions([
+            apiWorkflow({ workflowId: 'retried', runId: first }),
+            apiWorkflow({ workflowId: 'retried', runId: second }),
+        ]);
+        const index = label(rows);
+        expect(findPlacement(index, 'retried', null)).toBeUndefined();
+        // Each run is still individually addressable — only the guess is refused.
+        expect(findPlacement(index, 'retried', first)).toBe('retried#0');
+        expect(findPlacement(index, 'retried', second)).toBe('retried#1');
+    });
+
+    it('does not fall back to the workflow id when the run id is unknown', () => {
+        // An unseen run is not "this workflow's only run" — it is a run we have
+        // no rows for, and the honest answer is nothing.
+        const rows = normalizeExecutions([apiWorkflow({ workflowId: 'solo', runId: fakeRunId(14) })]);
+        expect(findPlacement(label(rows), 'solo', fakeRunId(99))).toBeUndefined();
+    });
+});
+
+describe('namespaceFromApiUrl', () => {
+    it('reads the namespace off the list route, absolute or relative', () => {
+        expect(namespaceFromApiUrl('/api/v1/namespaces/sample-namespace/workflows?query=x')).toBe(
+            'sample-namespace',
+        );
+        expect(
+            namespaceFromApiUrl('https://cloud.temporal.io/api/v1/namespaces/other-ns/workflows'),
+        ).toBe('other-ns');
+    });
+
+    it('decodes a percent-encoded namespace', () => {
+        expect(namespaceFromApiUrl('/api/v1/namespaces/ns%2Etest/workflows')).toBe('ns.test');
+    });
+
+    it('is null for every other API route', () => {
+        // These are all URLs the page really does fetch. Treating any of them as
+        // a workflow list is how unrelated data reached the table.
+        expect(namespaceFromApiUrl('/api/v1/namespaces/sample-namespace/workflow-count')).toBeNull();
+        expect(
+            namespaceFromApiUrl('/api/v1/namespaces/sample-namespace/workflows/id/history'),
+        ).toBeNull();
+        expect(namespaceFromApiUrl('/api/v1/namespaces')).toBeNull();
+        expect(namespaceFromApiUrl('/some/other/thing')).toBeNull();
+    });
+});
+
+describe('judgeListResponse', () => {
+    const listUrl = (namespace: string) => `/api/v1/namespaces/${namespace}/workflows?query=`;
+
+    it('accepts an answer newer than the one already applied', () => {
+        expect(
+            judgeListResponse({
+                generation: 4,
+                url: listUrl('sample-namespace'),
+                appliedGeneration: 3,
+                pageNamespace: 'sample-namespace',
+            }),
+        ).toBe('accept');
+    });
+
+    it('rejects an older answer that arrives late', () => {
+        // Two requests in flight, the first one answers second. Before the
+        // generation stamp this overwrote the newer rows and looked like a
+        // rendering glitch.
+        expect(
+            judgeListResponse({
+                generation: 1,
+                url: listUrl('sample-namespace'),
+                appliedGeneration: 2,
+                pageNamespace: 'sample-namespace',
+            }),
+        ).toBe('stale');
+    });
+
+    it('rejects a list belonging to a different namespace', () => {
+        expect(
+            judgeListResponse({
+                generation: 9,
+                url: listUrl('somebody-elses-ns'),
+                appliedGeneration: 1,
+                pageNamespace: 'sample-namespace',
+            }),
+        ).toBe('other-namespace');
+    });
+
+    it('skips the namespace check when the page URL names no namespace', () => {
+        // Nothing to compare against is not a licence to guess, but it is also
+        // not a reason to drop rows the page just fetched.
+        expect(
+            judgeListResponse({
+                generation: 1,
+                url: listUrl('sample-namespace'),
+                appliedGeneration: 0,
+                pageNamespace: null,
+            }),
+        ).toBe('accept');
+    });
+
+    it('rejects anything malformed, including a message with no generation', () => {
+        // This arrives over postMessage: any script on the page can send it, and
+        // a build of inject.ts older than the generation stamp sends none.
+        const base = { appliedGeneration: 1, pageNamespace: 'sample-namespace' };
+        expect(judgeListResponse({ ...base, generation: undefined, url: listUrl('sample-namespace') })).toBe(
+            'malformed',
+        );
+        expect(judgeListResponse({ ...base, generation: NaN, url: listUrl('sample-namespace') })).toBe(
+            'malformed',
+        );
+        expect(judgeListResponse({ ...base, generation: 2, url: 42 })).toBe('malformed');
+        expect(judgeListResponse({ ...base, generation: 2, url: '/api/v1/namespaces' })).toBe('malformed');
     });
 });
 

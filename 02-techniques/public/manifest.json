@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "Temporal starter 02 — techniques",
-    "version": "0.1.0",
-    "description": "Draws parent/child workflow families in the Temporal UI and links each row to your own log tool. No backend, no credentials, no host permissions.",
+    "version": "0.7.0",
+    "description": "Draws parent/child workflow families in the Temporal UI, adds a last-event column and a retrying-activity badge, and links each row to your own log tool. Reads no payload. No backend, no credentials, no host permissions.",
     "permissions": [
         "storage"
     ],
@@ -30,7 +30,8 @@
                 "http://127.0.0.1/*"
             ],
             "js": [
-                "inject.js"
+                "inject.js",
+                "apiInject.js"
             ],
             "world": "MAIN",
             "run_at": "document_start"

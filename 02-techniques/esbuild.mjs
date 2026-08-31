@@ -12,6 +12,7 @@ const watch = process.argv.includes('--watch');
 
 const ENTRY_POINTS = [
     'src/inject.ts', // MAIN world — wraps window.fetch
+    'src/apiInject.ts', // MAIN world — serves requests against the page's own API
     'src/content.ts', // ISOLATED world — renders
     'src/popup.ts', // toolbar popup
 ];

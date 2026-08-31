@@ -1,8 +1,9 @@
 // Where "the projects" is defined, once.
 //
-// This repository holds three independent extensions — 01-family-tree,
-// 02-techniques, 03-goodies — each a standalone TypeScript project that can be
-// cloned, built and loaded on its own. Every root-level script (preflight,
+// This repository holds a numbered series of independent extensions —
+// 01-family-tree, 02-techniques, and whatever rung comes next — each a standalone
+// TypeScript project that can be cloned, built and loaded on its own. `ls -d
+// [0-9][0-9]-*` prints the ones that are here now. Every root-level script (preflight,
 // packaging, icons, the lineage gate) has to agree on which directories those
 // are, so the answer lives here instead of in four hardcoded lists that drift.
 //
@@ -24,9 +25,9 @@ const PROJECT_DIR_RE = /^\d\d-[a-z0-9-]+$/;
  * they are meant to be read in).
  *
  * A numbered directory WITHOUT a package.json is reported as `incomplete`
- * rather than skipped. 03-goodies spends time in exactly that state, and a
- * gate that quietly ignores it would report a full pass over two thirds of the
- * repository.
+ * rather than skipped. Every new rung spends time in exactly that state, and a
+ * gate that quietly ignores it would report a full pass over a repository whose
+ * newest project it never opened.
  */
 export function discoverProjects(root = ROOT) {
     const projects = [];

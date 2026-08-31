@@ -1,4 +1,7 @@
-// Everything that writes to the page, and nothing else.
+// Everything that writes to the TABLE, and nothing else. (The one thing this
+// extension puts on the page outside the table is the deep-link card on a single
+// workflow's own page, which detailCard.ts owns; its class name is still declared
+// here, with the others, so removeAllDecoration() below can take it away too.)
 //
 // Kept apart from content.ts on purpose: content.ts is wiring (messages,
 // observer, settings) and cannot be unit-tested without a browser, while every
@@ -25,12 +28,32 @@
 //     The UI re-renders on its own schedule and will throw our nodes away. We
 //     do not try to prevent that. We re-apply, cheaply, after it settles.
 
-import { expandTemplate, type DeepLinkTemplate } from './deepLink';
+import { expandTemplate, templatesInScope, type DeepLinkTemplate } from './deepLink';
+import { formatAge, lastEventTitle, retryBadgeLabel, retryBadgeTitle } from './rowInfo';
+import type { RowInfo } from './rowInfoClient';
 import type { SegmentKind, WorkflowRow } from './types';
 
 export const PREFIX_CLASS = 'tuis-prefix';
 export const SEGMENT_CLASS = 'tuis-seg';
 export const LINK_CLASS = 'tuis-link';
+// A link whose template expanded to something we will not open. It still
+// renders: a button that vanishes reads as a broken extension, and the title
+// then has nowhere to explain itself.
+export const LINK_BLOCKED_CLASS = 'tuis-link-blocked';
+// The "Last event" column: one <th> appended to the header row, one <td> appended
+// to every body row. Both are needed for every row, always — a table where some
+// rows have the extra cell and some do not is a table with a visibly broken
+// layout, which is why the column is applied to the whole <tbody> at once rather
+// than inside decorateRow().
+export const LAST_EVENT_CLASS = 'tuis-last-event';
+export const COLUMN_HEAD_CLASS = 'tuis-col-head';
+// The retrying-activity badge, in the workflow-id cell beside the id.
+export const RETRY_CLASS = 'tuis-retry';
+// The deep-link card on a single workflow's own page. detailCard.ts builds it and
+// this file only ever removes it — same arrangement as PANEL_CLASS above, and for
+// the same reason: a selector and the node it is meant to find must not be able to
+// drift apart across two files.
+export const CARD_CLASS = 'tuis-card';
 export const OFF_CLASS = 'tuis-off';
 
 const SEGMENTS_ATTR = 'data-tuis-segments';
@@ -51,17 +74,30 @@ export interface Placement {
 export interface RenderOptions {
     treeEnabled: boolean;
     linksEnabled: boolean;
+    // The two features fed by rowInfoClient.ts. Separate switches because they
+    // cost one API request per running row EACH — see rowInfoServe.ts.
+    lastEventEnabled: boolean;
+    retryEnabled: boolean;
     links: DeepLinkTemplate[];
     namespace: string;
     // Injected rather than read from Date.now() so a test can pin the clock.
     nowMs: number;
+    // What came back for a run, if anything has yet. Undefined means "not asked or
+    // not answered", which is a third state and must not render as "nothing found".
+    info: RowInfoLookup;
 }
+
+export type RowInfoLookup = (workflowId: string, runId: string) => RowInfo | undefined;
 
 export interface RenderStats {
     rowsSeen: number;
     rowsMatched: number;
     rowsIndented: number;
     reordered: boolean;
+    // How many rows are currently showing a retry badge. Surfaced in the popup:
+    // the number is the answer to "is anything stuck right now?", and a feature
+    // whose effect cannot be seen from outside the page is hard to review.
+    retryBadges: number;
 }
 
 export type PlacementLookup = (workflowId: string, runId: string | null) => Placement | undefined;
@@ -141,19 +177,40 @@ export function applyToTable(
     // Re-read after a possible reorder so the decoration follows the rows.
     let rowsMatched = 0;
     let rowsIndented = 0;
+    let retryBadges = 0;
     for (const tr of rowsOf(tbody)) {
         const ids = idsFromRow(tr);
         if (!ids) continue;
         const placement = lookup(ids.workflowId, ids.runId);
         if (placement) rowsMatched++;
-        if (decorateRow(tr, placement, options)) rowsIndented++;
+        const decoration = decorateRow(tr, placement, options);
+        if (decoration.indented) rowsIndented++;
+        if (decoration.retrying) retryBadges++;
     }
 
-    return { rowsSeen: trs.length, rowsMatched, rowsIndented, reordered };
+    syncLastEventColumn(tbody, lookup, options);
+
+    return { rowsSeen: trs.length, rowsMatched, rowsIndented, reordered, retryBadges };
 }
 
 function rowsOf(tbody: HTMLTableSectionElement): HTMLTableRowElement[] {
     return Array.from(tbody.querySelectorAll<HTMLTableRowElement>(':scope > tr'));
+}
+
+// The rows this table is actually SHOWING, in table order.
+//
+// Deliberately not "the rows in the last list response": the page fetches more
+// rows than it draws, and rowInfoClient.ts turns each of these into a request. The
+// difference is the difference between paying for a screen and paying for a
+// namespace.
+export function visibleRows(tbody: HTMLTableSectionElement, lookup: PlacementLookup): WorkflowRow[] {
+    const rows: WorkflowRow[] = [];
+    for (const tr of rowsOf(tbody)) {
+        const ids = idsFromRow(tr);
+        const placement = ids ? lookup(ids.workflowId, ids.runId) : undefined;
+        if (placement) rows.push(placement.row);
+    }
+    return rows;
 }
 
 function reorderIntoFamilies(
@@ -188,20 +245,126 @@ function restoreOriginalOrder(tbody: HTMLTableSectionElement, trs: HTMLTableRowE
     return true;
 }
 
-// Returns true when this row ended up indented (i.e. it is somebody's child).
 function decorateRow(
     tr: HTMLTableRowElement,
     placement: Placement | undefined,
     options: RenderOptions,
-): boolean {
+): { indented: boolean; retrying: boolean } {
     const link = tr.querySelector<HTMLAnchorElement>('a[href*="/workflows/"]');
     const cell = link?.closest('td');
-    if (!link || !cell) return false;
+    if (!link || !cell) return { indented: false, retrying: false };
 
     const segments = options.treeEnabled ? (placement?.segments ?? []) : [];
     syncTreePrefix(cell, link, segments);
     syncDeepLinks(cell, placement, options);
-    return segments.length > 0;
+    const retrying = syncRetryBadge(cell, placement, options);
+    return { indented: segments.length > 0, retrying };
+}
+
+// The retrying-activity badge. Returns whether one is now on this row.
+//
+// It reports a fact the workflow list itself cannot: a workflow whose activity has
+// failed 900 times is still "Running", and looks exactly like one that is making
+// progress. The number is the whole point of the badge.
+//
+// The TITLE never contains the failure message — see the note at the top of
+// rowInfo.ts. That is a decision about what this project reads, not a formatting
+// choice, and the string it does contain says so.
+export function syncRetryBadge(
+    cell: HTMLTableCellElement,
+    placement: Placement | undefined,
+    options: RenderOptions,
+): boolean {
+    const existing = cell.querySelector<HTMLSpanElement>(`:scope > .${RETRY_CLASS}`);
+    const retry = options.retryEnabled && placement
+        ? options.info(placement.row.workflowId, placement.row.runId)?.retry
+        : undefined;
+
+    if (!retry) {
+        existing?.remove();
+        return false;
+    }
+
+    const badge = existing ?? cell.ownerDocument.createElement('span');
+    if (!existing) {
+        badge.className = RETRY_CLASS;
+        cell.appendChild(badge);
+    }
+    // Compare-then-write (rule 2). The attempt count changes every few seconds on
+    // a genuinely stuck activity, so this one really does get re-written — which is
+    // exactly why the unchanged case must not.
+    const label = retryBadgeLabel(retry);
+    if (badge.textContent !== label) badge.textContent = label;
+    const title = retryBadgeTitle(retry, options.nowMs);
+    if (badge.title !== title) badge.title = title;
+    return true;
+}
+
+// The "Last event" column, applied to the whole table at once.
+//
+// Appended, never inserted: a column pushed into the middle would have to agree
+// with the header's own column order, and the Temporal UI reorders and hides
+// columns at the user's request. Appending needs to agree with nothing.
+export function syncLastEventColumn(
+    tbody: HTMLTableSectionElement,
+    lookup: PlacementLookup,
+    options: RenderOptions,
+): void {
+    const table = tbody.closest('table');
+    const headRow = table?.querySelector<HTMLTableRowElement>('thead tr') ?? null;
+
+    if (!options.lastEventEnabled) {
+        headRow?.querySelector(`:scope > .${COLUMN_HEAD_CLASS}`)?.remove();
+        for (const cell of Array.from(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`))) cell.remove();
+        return;
+    }
+
+    if (headRow && !headRow.querySelector(`:scope > .${COLUMN_HEAD_CLASS}`)) {
+        const th = headRow.ownerDocument.createElement('th');
+        th.className = COLUMN_HEAD_CLASS;
+        th.textContent = 'Last event';
+        th.title = 'Added by this extension. One history request per running row — see src/rowInfoServe.ts.';
+        headRow.appendChild(th);
+    }
+
+    for (const tr of Array.from(tbody.querySelectorAll<HTMLTableRowElement>(':scope > tr'))) {
+        let cell = tr.querySelector<HTMLTableCellElement>(`:scope > .${LAST_EVENT_CLASS}`);
+        if (!cell) {
+            cell = tr.ownerDocument.createElement('td');
+            cell.className = LAST_EVENT_CLASS;
+            tr.appendChild(cell);
+        }
+        const ids = idsFromRow(tr);
+        const placement = ids ? lookup(ids.workflowId, ids.runId) : undefined;
+        const state = lastEventCellText(placement, options);
+        if (cell.textContent !== state.text) cell.textContent = state.text;
+        if (cell.title !== state.title) cell.title = state.title;
+    }
+}
+
+// FOUR STATES, and telling them apart is the whole difficulty.
+//
+// "not asked yet", "asked and it failed", "answered with nothing" and "answered"
+// all look like an empty cell if they are allowed to. The first three are the ones
+// that get mistaken for a broken extension.
+function lastEventCellText(
+    placement: Placement | undefined,
+    options: RenderOptions,
+): { text: string; title: string } {
+    if (!placement) return { text: '', title: '' };
+    if (placement.row.status !== 'Running') {
+        // Not asked, on purpose: a closed workflow's last event cannot change, so
+        // the request could never tell anyone anything.
+        return { text: '', title: '' };
+    }
+    const info = options.info(placement.row.workflowId, placement.row.runId);
+    if (!info) return { text: '…', title: 'Asking Temporal for this run’s most recent event.' };
+    if (info.error) return { text: '!', title: info.error };
+    if (!info.lastEvent) return { text: '—', title: 'Temporal returned no events for this run.' };
+    return {
+        text: `${formatAge(info.lastEvent.timeMs, options.nowMs)} · ${info.lastEvent.eventType}`,
+        title: lastEventTitle(info.lastEvent, options.nowMs),
+    };
 }
 
 // The connectors are an absolutely-positioned overlay inside the id cell, and
@@ -248,7 +411,13 @@ export function syncDeepLinks(
     placement: Placement | undefined,
     options: RenderOptions,
 ): void {
-    const wanted: DeepLinkTemplate[] = options.linksEnabled && placement ? options.links : [];
+    // WORKFLOW-SCOPED TEMPLATES ONLY. A template that mentions an activity token
+    // has nothing to fill from a table row — there is no activity in a list row —
+    // so its button belongs on a single workflow's own page and is drawn there by
+    // detailCard.ts. Rendering it here would produce a link with an unresolved
+    // token in it on every row. See "TWO SCOPES, ONE VOCABULARY" in deepLink.ts.
+    const wanted: DeepLinkTemplate[] =
+        options.linksEnabled && placement ? templatesInScope(options.links, 'workflow') : [];
     const existing = Array.from(cell.querySelectorAll<HTMLAnchorElement>(`:scope > .${LINK_CLASS}`));
 
     if (wanted.length === 0) {
@@ -257,7 +426,7 @@ export function syncDeepLinks(
     }
 
     wanted.forEach((template, index) => {
-        const { url, unknownTokens } = expandTemplate(template.urlTemplate, {
+        const { url, href, unknownTokens } = expandTemplate(template.urlTemplate, {
             namespace: options.namespace,
             row: placement!.row,
             nowMs: options.nowMs,
@@ -277,11 +446,29 @@ export function syncDeepLinks(
             anchor.referrerPolicy = 'no-referrer';
             cell.appendChild(anchor);
         }
-        // Compare-then-write, three times over (rule 2).
+        // Compare-then-write throughout (rule 2).
         if (anchor.textContent !== template.label) anchor.textContent = template.label;
-        if (anchor.getAttribute('href') !== url) anchor.setAttribute('href', url);
-        const title =
-            unknownTokens.length > 0 ? `${url}\n\nUnknown tokens: ${unknownTokens.join(' ')}` : url;
+
+        // The href is the only value here that can DO anything, so it is the one
+        // place that does not take the expanded URL on trust — see safeHref().
+        // No href at all, rather than a disabled-looking one: an anchor without
+        // it is unclickable, unfocusable and cannot be middle-clicked either.
+        if (href === null) {
+            if (anchor.hasAttribute('href')) anchor.removeAttribute('href');
+        } else if (anchor.getAttribute('href') !== href) {
+            anchor.setAttribute('href', href);
+        }
+        // toggle() with an explicit force is idempotent per spec: it returns
+        // early when the token is already in the wanted state, so this does not
+        // write the attribute on every pass.
+        anchor.classList.toggle(LINK_BLOCKED_CLASS, href === null);
+
+        const notes: string[] = [];
+        if (href === null) {
+            notes.push('Not opened: a link must be an absolute http:// or https:// URL.');
+        }
+        if (unknownTokens.length > 0) notes.push(`Unknown tokens: ${unknownTokens.join(' ')}`);
+        const title = notes.length > 0 ? `${url}\n\n${notes.join('\n')}` : url;
         if (anchor.title !== title) anchor.title = title;
     });
 
@@ -292,7 +479,23 @@ export function syncDeepLinks(
 // switch, so turning it off proves it is off rather than merely stopping
 // further writes.
 export function removeAllDecoration(root: ParentNode = document): void {
-    for (const node of Array.from(root.querySelectorAll(`.${PREFIX_CLASS}, .${LINK_CLASS}`))) {
+    const ours = [
+        `.${PREFIX_CLASS}`,
+        `.${LINK_CLASS}`,
+        `.${RETRY_CLASS}`,
+        // The card is in this list even though it lives on <body> and not in a row:
+        // "off" has to mean off, and it is the most visible thing this extension
+        // draws, so leaving one behind is the clearest possible way to look like the
+        // master switch does nothing — which is exactly what makes a security
+        // reviewer stop believing the rest of the claims. detailCard.ts rebuilds it
+        // on demand.
+        `.${CARD_CLASS}`,
+        // Both halves of the added column. Leaving the <th> behind would shift
+        // every header label one cell to the left of its data.
+        `.${LAST_EVENT_CLASS}`,
+        `.${COLUMN_HEAD_CLASS}`,
+    ].join(', ');
+    for (const node of Array.from(root.querySelectorAll(ours))) {
         node.remove();
     }
     for (const link of Array.from(root.querySelectorAll<HTMLElement>('a[href*="/workflows/"]'))) {

@@ -12,17 +12,25 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
     applyToTable,
+    CARD_CLASS,
+    COLUMN_HEAD_CLASS,
     findWorkflowTbody,
     idsFromRow,
+    LAST_EVENT_CLASS,
+    LINK_BLOCKED_CLASS,
     LINK_CLASS,
     namespaceFromLocation,
     PREFIX_CLASS,
     removeAllDecoration,
+    RETRY_CLASS,
     SEGMENT_WIDTH_PX,
+    visibleRows,
     type Placement,
     type PlacementLookup,
     type RenderOptions,
+    type RowInfoLookup,
 } from '../../src/render';
+import type { RowInfo } from '../../src/rowInfoClient';
 import { buildTree } from '../../src/tree';
 import { normalizeExecutions, runKey } from '../../src/rows';
 import { apiWorkflow, buildWorkflowTable, fakeRunId, rowOrder, workflowLink } from '../helpers';
@@ -31,9 +39,13 @@ import type { TemporalApiWorkflow } from '../../src/types';
 const OPTIONS: RenderOptions = {
     treeEnabled: true,
     linksEnabled: false,
+    lastEventEnabled: false,
+    retryEnabled: false,
     links: [],
     namespace: 'sample-namespace',
     nowMs: Date.parse('2026-01-01T12:00:00Z'),
+    // Nothing answered. The specs that care supply their own.
+    info: () => undefined,
 };
 
 function lookupFor(executions: TemporalApiWorkflow[]): PlacementLookup {
@@ -166,11 +178,41 @@ describe('applyToTable', () => {
             { workflowId: 'child-b', runId: CHILD_B_RUN },
             { workflowId: 'parent', runId: PARENT_RUN },
             { workflowId: 'child-a', runId: CHILD_A_RUN },
+            // A RUNNING row as well. The two request-backed features draw nothing
+            // on a closed workflow, so a family of closed ones would leave their
+            // write paths — the newest ones — out of the one assertion that has to
+            // cover all of them. (MIXED, withHeader, answers and A_RETRY are
+            // declared with the specs for those features, further down this file.)
+            { workflowId: 'live', runId: LIVE_RUN },
         ]);
-        const lookup = lookupFor(FAMILY);
-        const options = { ...OPTIONS, linksEnabled: true, links: [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }] };
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor([...FAMILY, ...MIXED]);
+        // Everything on at once, so the assertion covers every write path in the
+        // file rather than the tree alone.
+        const options = {
+            ...OPTIONS,
+            linksEnabled: true,
+            lastEventEnabled: true,
+            retryEnabled: true,
+            links: [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }],
+            info: answers({
+                live: {
+                    lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: OPTIONS.nowMs - 180_000 },
+                    retry: A_RETRY,
+                },
+            }),
+        };
 
         applyToTable(tbody, lookup, options);
+        // Every write path really did write on the first pass. Without this the test
+        // would still pass if a feature drew nothing at all — an assertion about
+        // idempotency is trivially satisfied by doing nothing twice.
+        expect(tbody.querySelectorAll(`.${PREFIX_CLASS}`).length).toBeGreaterThan(0);
+        expect(tbody.querySelectorAll(`.${LINK_CLASS}`).length).toBeGreaterThan(0);
+        expect(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`).length).toBeGreaterThan(0);
+        expect(document.querySelectorAll(`.${COLUMN_HEAD_CLASS}`)).toHaveLength(1);
+        expect(tbody.querySelectorAll(`.${RETRY_CLASS}`)).toHaveLength(1);
+
         const mutations = await mutationsDuring(() => {
             applyToTable(tbody, lookup, options);
         });
@@ -272,6 +314,57 @@ describe('deep links', () => {
         expect(tbody.querySelectorAll(`.${LINK_CLASS}`)).toHaveLength(0);
     });
 
+    it('renders a button with NO href when the template is not an http(s) URL', async () => {
+        // The template is a settings string, and the expanded URL can take its
+        // scheme from the workflow data, so this is the last line before a
+        // `javascript:` href sits in the Temporal page waiting to be clicked.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'child-a', runId: CHILD_A_RUN }]);
+        const options = {
+            ...OPTIONS,
+            linksEnabled: true,
+            links: [{ label: 'Bad', urlTemplate: 'javascript:alert(1)' }],
+        };
+        applyToTable(tbody, lookupFor(FAMILY), options);
+
+        // The blocked path is a render path too, so it obeys rule 2 as well: a
+        // class written unconditionally is the same infinite loop.
+        const mutations = await mutationsDuring(() => {
+            applyToTable(tbody, lookupFor(FAMILY), options);
+        });
+        expect(mutations).toEqual([]);
+
+        const anchor = tbody.querySelector<HTMLAnchorElement>(`.${LINK_CLASS}`)!;
+        // Still rendered — a button that silently disappears reads as a broken
+        // extension and has nowhere to explain itself.
+        expect(anchor.textContent).toBe('Bad');
+        expect(anchor.hasAttribute('href')).toBe(false);
+        expect(anchor.classList.contains(LINK_BLOCKED_CLASS)).toBe(true);
+        expect(anchor.title).toContain('http');
+    });
+
+    it('takes the href back when a template is edited into something unsafe', () => {
+        // Same anchor, re-rendered: the attribute has to be REMOVED, not merely
+        // left unwritten, or the previous safe URL stays clickable forever.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'child-a', runId: CHILD_A_RUN }]);
+        const lookup = lookupFor(FAMILY);
+        applyToTable(tbody, lookup, { ...OPTIONS, linksEnabled: true, links: links.slice(0, 1) });
+        const anchor = tbody.querySelector<HTMLAnchorElement>(`.${LINK_CLASS}`)!;
+        expect(anchor.hasAttribute('href')).toBe(true);
+
+        applyToTable(tbody, lookup, {
+            ...OPTIONS,
+            linksEnabled: true,
+            links: [{ label: 'Logs', urlTemplate: 'javascript:alert(1)' }],
+        });
+        expect(tbody.querySelector(`.${LINK_CLASS}`)).toBe(anchor); // the same node
+        expect(anchor.hasAttribute('href')).toBe(false);
+
+        // …and gives it back when the template is fixed.
+        applyToTable(tbody, lookup, { ...OPTIONS, linksEnabled: true, links: links.slice(0, 1) });
+        expect(anchor.classList.contains(LINK_BLOCKED_CLASS)).toBe(false);
+        expect(anchor.getAttribute('href')).toContain('https://example.com/search');
+    });
+
     it('does not add a button to a row it has no data for', () => {
         // Without a row there is nothing to put in the template, and a button
         // that searches for "{workflowId}" is worse than no button.
@@ -281,21 +374,266 @@ describe('deep links', () => {
     });
 });
 
+// ── The two features that cost a request ─────────────────────────────────────
+//
+// Both render an answer that arrives LATER than the row does, which is the part
+// that is easy to get wrong: an empty cell has four different meanings here, and
+// three of them look like a broken extension.
+
+// A running workflow (the only kind either feature asks about) and a closed one
+// beside it, so "we deliberately do not ask" is asserted rather than assumed.
+const LIVE_RUN = fakeRunId(201);
+const DONE_RUN = fakeRunId(202);
+const MIXED: TemporalApiWorkflow[] = [
+    apiWorkflow({ workflowId: 'live', runId: LIVE_RUN, status: 'RUNNING', closeTime: null }),
+    apiWorkflow({ workflowId: 'done', runId: DONE_RUN, status: 'COMPLETED' }),
+];
+
+// The real table has a <thead>; the shared fixture does not build one, because
+// nothing else in this repository reads it. The column does — it has to put its
+// header somewhere — so these specs add one. (tests/helpers.ts is byte-identical
+// across the projects, per scripts/lineage.json, so it is not the place to grow a
+// fixture only 02 needs.)
+function withHeader(tbody: HTMLTableSectionElement, labels: string[]): HTMLTableRowElement {
+    const table = tbody.closest('table')!;
+    const thead = table.ownerDocument.createElement('thead');
+    const tr = thead.appendChild(table.ownerDocument.createElement('tr'));
+    for (const label of labels) {
+        tr.appendChild(table.ownerDocument.createElement('th')).textContent = label;
+    }
+    table.insertBefore(thead, tbody);
+    return tr;
+}
+
+function answers(byWorkflowId: Record<string, Partial<RowInfo>>): RowInfoLookup {
+    return (workflowId) => {
+        const answer = byWorkflowId[workflowId];
+        return answer ? { lastEvent: null, retry: null, error: null, ...answer } : undefined;
+    };
+}
+
+const A_RETRY = {
+    activityType: 'ChargeCard',
+    attempt: 1518,
+    maximumAttempts: null,
+    nextRetryAtMs: Date.parse('2026-01-01T12:00:30Z'),
+    scheduledAtMs: Date.parse('2026-01-01T11:58:00Z'),
+};
+
+// Cell counts per row, header included. A table where one row has the extra cell
+// and another does not is visibly broken in a way no other assertion here catches.
+function cellCounts(tbody: HTMLTableSectionElement): number[] {
+    const table = tbody.closest('table')!;
+    return Array.from(table.querySelectorAll('tr')).map((tr) => tr.children.length);
+}
+
+describe('the “Last event” column', () => {
+    it('appends a header and one cell per row, and stays rectangular', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'live', runId: LIVE_RUN },
+            { workflowId: 'done', runId: DONE_RUN },
+        ]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+
+        applyToTable(tbody, lookupFor(MIXED), {
+            ...OPTIONS,
+            lastEventEnabled: true,
+            info: answers({
+                live: { lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: OPTIONS.nowMs - 180_000 } },
+            }),
+        });
+
+        // Appended, not inserted: a column pushed into the middle would have to
+        // agree with a header order the UI lets the user change.
+        const head = document.querySelector<HTMLTableCellElement>(`.${COLUMN_HEAD_CLASS}`)!;
+        expect(head.textContent).toBe('Last event');
+        expect(head.parentElement!.lastElementChild).toBe(head);
+        // Every row got one, including the closed one whose cell stays empty.
+        expect(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`)).toHaveLength(2);
+        expect(new Set(cellCounts(tbody))).toEqual(new Set([3]));
+
+        const [live, done] = Array.from(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`));
+        expect(live!.textContent).toBe('3m · ActivityTaskStarted');
+        expect(live!.getAttribute('title')).toContain('Last event #42');
+        // A closed workflow's last event cannot change, so it is never asked about
+        // and must not read as "asking…" forever.
+        expect(done!.textContent).toBe('');
+    });
+
+    it('tells the four empty-looking states apart', () => {
+        // "not asked yet", "it failed", "answered with nothing" and "answered" all
+        // render as an empty cell if they are allowed to, and the first three are
+        // the ones that get reported as the extension being broken.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor(MIXED);
+        const cell = () => tbody.querySelector<HTMLTableCellElement>(`.${LAST_EVENT_CLASS}`)!;
+        const render = (info: RowInfoLookup) =>
+            applyToTable(tbody, lookup, { ...OPTIONS, lastEventEnabled: true, info });
+
+        render(() => undefined);
+        expect(cell().textContent).toBe('…');
+        expect(cell().title).toContain('Asking Temporal');
+
+        render(answers({ live: { error: 'HTTP 403' } }));
+        expect(cell().textContent).toBe('!');
+        expect(cell().title).toBe('HTTP 403');
+
+        render(answers({ live: {} }));
+        expect(cell().textContent).toBe('—');
+
+        render(answers({ live: { lastEvent: { eventId: '7', eventType: 'TimerStarted', timeMs: OPTIONS.nowMs } } }));
+        expect(cell().textContent).toBe('now · TimerStarted');
+    });
+
+    it('writes nothing on a second pass with the same answer', async () => {
+        // Rule 2, on the newest write path. This one is the most exposed to it: the
+        // cell is re-rendered on every mutation and its text changes as the age
+        // ticks over, so the unchanged case really must touch nothing.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const options = {
+            ...OPTIONS,
+            lastEventEnabled: true,
+            retryEnabled: true,
+            info: answers({
+                live: {
+                    lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: OPTIONS.nowMs - 180_000 },
+                    retry: A_RETRY,
+                },
+            }),
+        };
+        const lookup = lookupFor(MIXED);
+
+        applyToTable(tbody, lookup, options);
+        const mutations = await mutationsDuring(() => {
+            applyToTable(tbody, lookup, options);
+        });
+
+        expect(mutations.map((m) => `${m.type} ${m.attributeName ?? ''}`.trim())).toEqual([]);
+    });
+
+    it('takes both halves away when the setting is switched off', () => {
+        // Both, together. A <th> left behind after the cells are gone shifts every
+        // header label one column left of its data.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor(MIXED);
+        applyToTable(tbody, lookup, { ...OPTIONS, lastEventEnabled: true });
+        expect(cellCounts(tbody)).toEqual([3, 3]);
+
+        applyToTable(tbody, lookup, { ...OPTIONS, lastEventEnabled: false });
+
+        expect(document.querySelectorAll(`.${COLUMN_HEAD_CLASS}, .${LAST_EVENT_CLASS}`)).toHaveLength(0);
+        expect(cellCounts(tbody)).toEqual([2, 2]);
+    });
+});
+
+describe('the retrying-activity badge', () => {
+    it('shows the attempt count, and says what it deliberately does not read', () => {
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+
+        const stats = applyToTable(tbody, lookupFor(MIXED), {
+            ...OPTIONS,
+            retryEnabled: true,
+            info: answers({ live: { retry: A_RETRY } }),
+        });
+
+        const badge = tbody.querySelector<HTMLSpanElement>(`.${RETRY_CLASS}`)!;
+        // The number is the whole point: it is what separates "failed once" from
+        // "stuck since yesterday", and the status column says "Running" either way.
+        expect(badge.textContent).toBe('↻ 1518');
+        expect(badge.title).toContain('ChargeCard is retrying');
+        expect(badge.title).toContain('attempt 1518 of unlimited'); // maximumAttempts 0 → unlimited
+        expect(badge.title).toContain('failure message is deliberately not read');
+        // Reported outward, because a feature whose effect cannot be seen from
+        // outside the page is hard to review — the popup shows this number.
+        expect(stats.retryBadges).toBe(1);
+    });
+
+    it('badges nothing when there is no retry to report', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'live', runId: LIVE_RUN },
+            { workflowId: 'done', runId: DONE_RUN },
+        ]);
+
+        const stats = applyToTable(tbody, lookupFor(MIXED), {
+            ...OPTIONS,
+            retryEnabled: true,
+            info: answers({ live: {} }),
+        });
+
+        expect(tbody.querySelectorAll(`.${RETRY_CLASS}`)).toHaveLength(0);
+        expect(stats.retryBadges).toBe(0);
+    });
+
+    it('takes the badge away when the activity stops retrying, and when the setting goes off', () => {
+        // The first half is the one that matters in use: an activity that finally
+        // succeeds leaves `pendingActivities` empty, and a badge that stayed behind
+        // would mark a healthy workflow as stuck indefinitely.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        const lookup = lookupFor(MIXED);
+        const withRetry = { ...OPTIONS, retryEnabled: true, info: answers({ live: { retry: A_RETRY } }) };
+
+        applyToTable(tbody, lookup, withRetry);
+        expect(tbody.querySelectorAll(`.${RETRY_CLASS}`)).toHaveLength(1);
+
+        applyToTable(tbody, lookup, { ...OPTIONS, retryEnabled: true, info: answers({ live: {} }) });
+        expect(tbody.querySelectorAll(`.${RETRY_CLASS}`)).toHaveLength(0);
+
+        applyToTable(tbody, lookup, withRetry);
+        applyToTable(tbody, lookup, { ...withRetry, retryEnabled: false });
+        expect(tbody.querySelectorAll(`.${RETRY_CLASS}`)).toHaveLength(0);
+    });
+});
+
+describe('visibleRows', () => {
+    it('reports the rows the table is showing, in table order', () => {
+        // This list is what becomes requests, one per running row, so it must be
+        // the rows on SCREEN and not the rows in the last list response — the page
+        // fetches more than it draws.
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'done', runId: DONE_RUN },
+            { workflowId: 'live', runId: LIVE_RUN },
+            { workflowId: 'not-in-the-api-response' },
+        ]);
+        const lookup = lookupFor(MIXED);
+
+        expect(visibleRows(tbody, lookup).map((row) => row.workflowId)).toEqual(['done', 'live']);
+
+        // …and in the order the tree put them, once the rows have been reordered.
+        applyToTable(tbody, lookup, OPTIONS);
+        expect(visibleRows(tbody, lookup).map((row) => row.workflowId)).toEqual(['live', 'done']);
+    });
+});
+
 describe('removeAllDecoration', () => {
     it('leaves the table as it found it', () => {
         const tbody = buildWorkflowTable(document, [
             { workflowId: 'parent', runId: PARENT_RUN },
             { workflowId: 'child-a', runId: CHILD_A_RUN },
         ]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
         applyToTable(tbody, lookupFor(FAMILY), {
             ...OPTIONS,
             linksEnabled: true,
+            lastEventEnabled: true,
             links: [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }],
         });
+        // The card is not in the table — it is on <body>, because a workflow's own
+        // page offers nothing to attach to — and the master switch has to take it
+        // away too, or "off" does not mean off.
+        const card = document.createElement('div');
+        card.className = CARD_CLASS;
+        document.body.appendChild(card);
 
         removeAllDecoration(document);
 
-        expect(document.querySelectorAll(`.${PREFIX_CLASS}, .${LINK_CLASS}`)).toHaveLength(0);
+        expect(
+            document.querySelectorAll(
+                `.${PREFIX_CLASS}, .${LINK_CLASS}, .${RETRY_CLASS}, .${CARD_CLASS}, .${LAST_EVENT_CLASS}, .${COLUMN_HEAD_CLASS}`,
+            ),
+        ).toHaveLength(0);
         expect(Array.from(tbody.querySelectorAll('a')).every((a) => a.style.marginLeft === '')).toBe(true);
     });
 });

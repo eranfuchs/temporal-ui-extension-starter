@@ -75,6 +75,18 @@
                 margin-bottom: 6px;
             }
 
+            /* Spans the whole link row, under the three inputs. */
+            .link-row .warning:not(:empty) {
+                grid-column: 1 / -1;
+                font-size: 11px;
+                padding-top: 2px;
+            }
+
+            input[type='text'].invalid {
+                border-style: dashed;
+                border-width: 2px;
+            }
+
             input[type='text'] {
                 min-width: 0;
                 padding: 3px 6px;
@@ -101,6 +113,13 @@
             code {
                 font-size: 11px;
                 opacity: 0.85;
+            }
+
+            /* Not merely a hint: it says a link template will not be opened, so it
+             * is allowed to be louder than the rest. */
+            .warning:not(:empty) {
+                font-size: 11px;
+                padding-top: 4px;
             }
 
             footer {
@@ -130,9 +149,26 @@
             <code>{startTimeIso-10m}</code>, <code>{endTimeSec+1h}</code>.
         </p>
 
+        <h2>Per-row questions <span class="hint">these make requests</span></h2>
+        <label class="row"><input type="checkbox" id="lastEventEnabled" /> "Last event" column</label>
+        <label class="row"><input type="checkbox" id="retryEnabled" /> Retrying-activity badge</label>
+        <p class="hint">
+            Everything above reads answers the page was already fetching. These two ask Temporal questions of their
+            own — one request per <em>running</em> row each, so a list of closed workflows costs nothing. Answers are
+            cached for 30s, four requests run at a time, and a rate limit backs off instead of retrying. Closed rows
+            are never asked about: their answers cannot change.
+        </p>
+        <p class="hint">
+            The badge shows the attempt count, the activity type and the next retry time. It deliberately does
+            <strong>not</strong> read the failure message: that is application data, and nothing in this extension reads
+            any. Everything on screen here comes from event <em>metadata</em> — no workflow input, result or failure is
+            decoded, which is why there is no codec-server box. That is
+            <code>03-goodies</code>, the next rung, which is not written yet.
+        </p>
+
         <footer>
-            A community sample. Not affiliated with or endorsed by Temporal Technologies. Reads only what the page
-            already fetched; requests no host permissions and stores no credentials.
+            A community sample. Not affiliated with or endorsed by Temporal Technologies. Reads no payload, requests no
+            host permissions, and stores no credentials.
         </footer>
 
         <script src="popup.js"></script>

@@ -22,9 +22,11 @@
 //      relaxed content_security_policy are present only where budgeted;
 //   4. content_script matches are on the repository-wide allowlist, and
 //      <all_urls> / *://*/* are refused outright;
-//   5. a project budgeted `chrome_api: false` contains no chrome.* call, no
-//      @types/chrome dependency, and no "chrome" in tsconfig's types;
-//   6. no source file uses a markup or code-execution sink (innerHTML, eval, …);
+//   5. a project budgeted `chrome_api: false` reaches the chrome namespace
+//      nowhere — by name, by alias or by destructure — and has no
+//      @types/chrome dependency and no "chrome" in tsconfig's types;
+//   6. no source file uses a markup or code-execution sink (innerHTML, eval, …),
+//      found by PARSING the file rather than by matching lines of it;
 //   7. no runtime dependency in any project — nothing enters a bundle but code
 //      in this repository;
 //   8. no binary file outside the generated-icon allowlist, because a gate
@@ -44,6 +46,8 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import ts from 'typescript';
+
 import { discoverProjects, ROOT } from './projects.mjs';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.vite', '.idea']);
@@ -51,7 +55,41 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.vite', '.idea']);
 // Sinks that turn a string into markup or into code. The workflow ids, types and
 // task-queue names this extension renders are authored by whoever started the
 // workflow — untrusted input, in a page we do not own.
-const SINKS = [
+//
+// WHY THESE ARE FOUND WITH A PARSER AND NOT A REGEX
+//
+// This check used to be eight regexes applied per line to text with comments
+// stripped by `/\/\/.*$/`. Four shapes of ORDINARY code — nobody hiding
+// anything — walked straight past it, and one shape of ordinary prose was
+// falsely accused:
+//
+//   const u = 'https://example.com/'; el.innerHTML = id;  // cut at `https:`
+//   el.                                                   // the property is
+//       innerHTML = id;                                   //   on its own line
+//   el['innerHTML'] = id;                                 // no `.innerHTML`
+//   const { storage } = chrome;                           // no `chrome.`
+//   const help = 'never .innerHTML = x';                  // FIRED, wrongly
+//
+// A parser has no opinion about lines and cannot mistake a string or a comment
+// for code, so all five stop being special cases. TypeScript is already a
+// devDependency here — this costs no new supply-chain surface.
+const HTML_PROPERTY_SINKS = new Set(['innerHTML', 'outerHTML']);
+const METHOD_SINKS = new Set(['insertAdjacentHTML', 'setHTMLUnsafe']);
+const STRING_CODE_SINKS = new Set(['setTimeout', 'setInterval']);
+const GLOBAL_OBJECTS = new Set(['window', 'globalThis', 'self']);
+
+const ASSIGNMENT_TOKENS = new Set([
+    ts.SyntaxKind.EqualsToken,
+    ts.SyntaxKind.PlusEqualsToken,
+    ts.SyntaxKind.QuestionQuestionEqualsToken,
+    ts.SyntaxKind.BarBarEqualsToken,
+    ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+]);
+
+// The two file types no TypeScript parser applies to keep a textual scan. Each
+// strips only its OWN comment syntax: stripping `//` from markup is what deleted
+// everything after `https://` in an href.
+const TEXTUAL_SINKS = [
     { id: 'innerHTML', re: /\.innerHTML\s*(=|\+=)/ },
     { id: 'outerHTML', re: /\.outerHTML\s*(=|\+=)/ },
     { id: 'insertAdjacentHTML', re: /\.insertAdjacentHTML\s*\(/ },
@@ -62,18 +100,211 @@ const SINKS = [
     { id: 'setInterval(string)', re: /\bsetInterval\s*\(\s*['"`]/ },
 ];
 
+const SCRIPT_EXT = /\.(ts|tsx|js|mjs|cjs)$/;
+const MARKUP_EXT = /\.html?$/;
+const SCANNED_EXT = /\.(ts|tsx|js|mjs|cjs|html?|css)$/;
+
 const BINARY_EXT = /\.(png|jpg|jpeg|gif|webp|ico|pdf|zip|gz|tgz|woff2?|ttf|eot|mp4|mov|wasm|so|dylib|dll)$/i;
 
-// Comments are not behaviour. 01's src/content.ts says, in a comment, that there
-// is no chrome.* call in the project — reading that as a chrome.* call would
-// make the gate impossible to satisfy honestly, and encouraging people to delete
-// the explanation is the opposite of the intent.
-function stripComments(text) {
+// For tsconfig.json only — JSON-with-comments, which no JSON parser accepts and
+// which has no `//` inside any value this gate reads.
+function stripJsonComments(text) {
     return text
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .split('\n')
         .map((line) => line.replace(/\/\/.*$/, ''))
         .join('\n');
+}
+
+function scriptKindOf(file) {
+    if (/\.tsx$/.test(file)) return ts.ScriptKind.TSX;
+    if (/\.ts$/.test(file)) return ts.ScriptKind.TS;
+    return ts.ScriptKind.JS;
+}
+
+// The property or method being accessed, whether it was written `a.b` or
+// `a['b']`. Returning the same name for both is the whole point: `a['innerHTML']`
+// is not a different sink, it is the same sink typed the one way a `\.innerHTML`
+// pattern cannot see.
+function accessedName(node) {
+    if (ts.isPropertyAccessExpression(node)) return node.name.text;
+    if (ts.isElementAccessExpression(node)) return staticString(node.argumentExpression);
+    return null;
+}
+
+// The value of a literal string, or null for anything computed. A sink reached
+// through a runtime-computed name is beyond a static gate, and pretending
+// otherwise would be the same false assurance the regexes gave.
+function staticString(node) {
+    if (!node) return null;
+    if (ts.isStringLiteralLike(node)) return node.text;
+    return null;
+}
+
+// Report the position of the NAME, not of the whole expression: for an
+// assignment split over two lines, the expression starts at the receiver and the
+// interesting token is on the next line.
+function anchorOf(node) {
+    if (ts.isPropertyAccessExpression(node)) return node.name;
+    if (ts.isElementAccessExpression(node)) return node.argumentExpression;
+    return node;
+}
+
+// Parses one script and returns every sink and every chrome.* reference in it.
+// `lineOffset` exists for scripts extracted out of an HTML file, so the reported
+// line is the line in the file the reader will open.
+function scanScript(text, fileName, lineOffset = 0) {
+    const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+    const sinks = [];
+    const chromeUses = [];
+    const unparseable = source.parseDiagnostics?.length > 0;
+
+    const lineOf = (node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1 + lineOffset;
+    const addSink = (node, id) => sinks.push({ line: lineOf(node), id });
+
+    const visit = (node) => {
+        // el.innerHTML = … / el['outerHTML'] += …
+        if (ts.isBinaryExpression(node) && ASSIGNMENT_TOKENS.has(node.operatorToken.kind)) {
+            const name = accessedName(node.left);
+            if (name && HTML_PROPERTY_SINKS.has(name)) addSink(anchorOf(node.left), name);
+        }
+
+        if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const called = accessedName(callee);
+
+            if (called && METHOD_SINKS.has(called)) addSink(anchorOf(callee), called);
+
+            if ((called === 'write' || called === 'writeln') && isGlobalMember(callee, 'document')) {
+                addSink(anchorOf(callee), 'document.write');
+            }
+
+            const bare = ts.isIdentifier(callee) ? callee.text : null;
+            if (bare === 'eval' || (called === 'eval' && isGlobalReceiver(callee))) addSink(callee, 'eval');
+
+            const timer = bare && STRING_CODE_SINKS.has(bare) ? bare : called && STRING_CODE_SINKS.has(called) ? called : null;
+            // Only with a string first argument: setTimeout(fn, 0) is not a sink,
+            // and a gate that said it was would be turned off within the day.
+            if (timer && staticString(node.arguments[0]) !== null) addSink(callee, `${timer}(string)`);
+        }
+
+        if (ts.isNewExpression(node) && (accessedName(node.expression) === 'Function' || isIdentifierNamed(node.expression, 'Function'))) {
+            addSink(node.expression, 'new Function');
+        }
+
+        if (isChromeReference(node)) chromeUses.push({ line: lineOf(node) });
+
+        ts.forEachChild(node, visit);
+    };
+    visit(source);
+
+    return { sinks, chromeUses, unparseable };
+}
+
+function isIdentifierNamed(node, name) {
+    return ts.isIdentifier(node) && node.text === name;
+}
+
+// `document.write(…)` and a bare `write(…)` on something called document.
+function isGlobalMember(callee, objectName) {
+    if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return false;
+    const receiver = callee.expression;
+    if (isIdentifierNamed(receiver, objectName)) return true;
+    return accessedName(receiver) === objectName && isGlobalReceiver(receiver);
+}
+
+function isGlobalReceiver(node) {
+    const receiver = ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ? node.expression : node;
+    return ts.isIdentifier(receiver) && GLOBAL_OBJECTS.has(receiver.text);
+}
+
+// Any way of getting hold of the chrome namespace, not just `chrome.` followed
+// by a dot. An alias or a destructure has to READ the identifier somewhere in
+// the file, so finding references catches every onward use for free:
+//
+//   const { storage } = chrome;      const api = chrome;
+//   window.chrome.runtime            globalThis['chrome']
+//
+// A property called chrome on something that is not a global — `config.chrome` —
+// is deliberately not a reference, or every options object would trip the gate.
+function isChromeReference(node) {
+    if (ts.isIdentifier(node) && node.text === 'chrome') {
+        const parent = node.parent;
+        // The name half of `x.chrome`: a reference only when x is a global.
+        if (parent && ts.isPropertyAccessExpression(parent) && parent.name === node) return isGlobalReceiver(parent);
+        // A declaration or a property key that happens to be spelled chrome
+        // declares a name, it does not read the API.
+        if (parent && 'name' in parent && parent.name === node) return false;
+        if (parent && ts.isPropertyAssignment(parent) && parent.name === node) return false;
+        return true;
+    }
+    // globalThis['chrome'] — and any other computed access by that name.
+    if (ts.isElementAccessExpression(node) && staticString(node.argumentExpression) === 'chrome') return true;
+    return false;
+}
+
+// Every non-empty inline <script> body, with the line it starts on. MV3's
+// default policy blocks these on an extension page, but a content script's
+// injected markup is a different story, and an empty result must not be
+// mistaken for "checked".
+function inlineScripts(text) {
+    const found = [];
+    const re = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+    for (let match = re.exec(text); match !== null; match = re.exec(text)) {
+        const body = match[2];
+        if (body.trim() === '') continue;
+        const bodyStart = match.index + match[0].indexOf('>') + 1;
+        found.push({ body, lineOffset: text.slice(0, bodyStart).split('\n').length - 1 });
+    }
+    return found;
+}
+
+// Blanks a comment out in place — every character except the newlines becomes a
+// space — so every line number after it is still the line number in the file.
+function blankComments(text, re) {
+    return text.replace(re, (block) => block.replace(/[^\n]/g, ' '));
+}
+
+// Markup and stylesheets: their own comment syntax stripped, then the patterns.
+function scanTextual(stripped) {
+    const sinks = [];
+    const chromeUses = [];
+    stripped.split('\n').forEach((line, index) => {
+        for (const sink of TEXTUAL_SINKS) if (sink.re.test(line)) sinks.push({ line: index + 1, id: sink.id });
+        if (/\bchrome\s*\./.test(line)) chromeUses.push({ line: index + 1 });
+    });
+    return { sinks, chromeUses, unparseable: false };
+}
+
+function scanFile(file, text) {
+    if (SCRIPT_EXT.test(file)) return scanScript(text, file);
+    if (!MARKUP_EXT.test(file)) return scanTextual(blankComments(text, /\/\*[\s\S]*?\*\//g));
+
+    // Comments out first, and the extraction runs on the stripped copy: 02's own
+    // popup.html carries a comment saying there is no inline <script> in it, and
+    // a scan that read that would run from the word in the comment to the real
+    // closing tag and try to parse the stylesheet in between as JavaScript.
+    const stripped = blankComments(text, /<!--[\s\S]*?-->/g);
+    const result = scanTextual(stripped);
+    for (const { body, lineOffset } of inlineScripts(stripped)) {
+        const inner = scanScript(body, `${file}.inline.js`, lineOffset);
+        result.sinks.push(...inner.sinks);
+        result.chromeUses.push(...inner.chromeUses);
+        result.unparseable = result.unparseable || inner.unparseable;
+    }
+    return result;
+}
+
+// One finding per line per id. `chrome.a; chrome.b` on one line is one fact
+// about that line, and the old per-line scan reported it once.
+function dedupe(hits) {
+    const seen = new Set();
+    return hits.filter((hit) => {
+        const key = `${hit.line}:${hit.id ?? ''}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }
 
 function filesUnder(dir) {
@@ -129,7 +360,7 @@ function main(argv) {
 
     const findings = [];
     const allowedMatches = new Set(budget.matches?.allowed ?? []);
-    const checked = { manifests: 0, sourceFiles: 0, binaries: 0 };
+    const checked = { manifests: 0, sourceFiles: 0, parsed: 0, binaries: 0 };
 
     for (const project of projects) {
         const declared = budget.projects?.[project.id];
@@ -209,7 +440,7 @@ function main(argv) {
             const tsconfigPath = join(project.dir, 'tsconfig.json');
             if (existsSync(tsconfigPath)) {
                 // Not JSON.parse: tsconfig.json legitimately carries comments.
-                const raw = stripComments(readFileSync(tsconfigPath, 'utf8'));
+                const raw = stripJsonComments(readFileSync(tsconfigPath, 'utf8'));
                 const types = /"types"\s*:\s*\[([^\]]*)\]/.exec(raw);
                 if (types && /chrome/.test(types[1])) {
                     findings.push(`${project.id}: budgeted chrome_api: false but tsconfig.json includes "chrome" in types`);
@@ -222,22 +453,32 @@ function main(argv) {
         for (const dir of sourceDirs) {
             for (const file of filesUnder(dir)) {
                 if (BINARY_EXT.test(file)) continue;
-                if (!/\.(ts|tsx|js|mjs|cjs|html|css)$/.test(file)) continue;
+                if (!SCANNED_EXT.test(file)) continue;
                 checked.sourceFiles++;
+                if (SCRIPT_EXT.test(file)) checked.parsed++;
                 const where = relative(root, file);
-                const code = stripComments(readFileSync(file, 'utf8'));
-                code.split('\n').forEach((line, index) => {
-                    for (const sink of SINKS) {
-                        if (sink.re.test(line)) {
-                            findings.push(`${where}:${index + 1}: uses ${sink.id} — render text with textContent instead`);
-                        }
-                    }
-                    if (declared.chrome_api !== true && /\bchrome\s*\./.test(line)) {
+                const scan = scanFile(file, readFileSync(file, 'utf8'));
+
+                // A file the parser could not read is a file this rule did not
+                // check. Saying so is the only honest option — see the same
+                // argument for a tree with no projects, below.
+                if (scan.unparseable) {
+                    findings.push(
+                        `${where}: could not be parsed, so the sink check did not run on it. ` +
+                            'Fix the syntax error — an unreadable file is not a clean file.',
+                    );
+                }
+
+                for (const hit of dedupe(scan.sinks)) {
+                    findings.push(`${where}:${hit.line}: uses ${hit.id} — render text with textContent instead`);
+                }
+                if (declared.chrome_api !== true) {
+                    for (const hit of dedupe(scan.chromeUses)) {
                         findings.push(
-                            `${where}:${index + 1}: uses a chrome.* API, but ${project.id} is budgeted chrome_api: false`,
+                            `${where}:${hit.line}: uses a chrome.* API, but ${project.id} is budgeted chrome_api: false`,
                         );
                     }
-                });
+                }
             }
         }
     }
@@ -259,7 +500,7 @@ function main(argv) {
     if (!quiet) {
         console.log(`surface: checked ${projects.map((p) => p.id).join(', ')}`);
         console.log(`  manifests: ${checked.manifests}`);
-        console.log(`  source files scanned for sinks: ${checked.sourceFiles}`);
+        console.log(`  source files scanned for sinks: ${checked.sourceFiles} (${checked.parsed} parsed as code)`);
         console.log(`  binary files found: ${checked.binaries}`);
         const budgeted = Object.keys(budget.projects ?? {});
         console.log(`  budgets declared: ${budgeted.length} (${budgeted.join(', ')})`);
@@ -416,6 +657,113 @@ function selftest() {
             'does not fire on a comment that names a sink',
             prose.status === 0,
             `exit ${prose.status}: ${prose.output.trim()}`,
+        );
+
+        // ── The four shapes the regex version could not see ──────────────────
+        // Every one of these is how a person would ordinarily write the line.
+        // None of them is an attempt to evade the gate, which is exactly why a
+        // gate that missed them was worth nothing.
+
+        // A `//` inside a string used to delete the rest of the line, sink and
+        // all. One line, because that is what it takes: with the sink on the
+        // NEXT line the old scan still saw it, which is why this fixture has to
+        // be written the way the bypass actually happens.
+        const stringSlash = drive(
+            makeTree('stringslash', {
+                files: {
+                    'src/content.ts': "const docs = 'https://example.com/help'; cell.innerHTML = row.workflowId;\n",
+                },
+            }),
+        );
+        check(
+            'rejects a sink on the same line as a URL in a string',
+            stringSlash.status === 1 && stringSlash.output.includes('innerHTML'),
+            `exit ${stringSlash.status}: ${stringSlash.output.trim()}`,
+        );
+
+        // Both ways a chained assignment gets wrapped. Only the second defeated
+        // a per-line pattern — the first leaves `.innerHTML =` intact on line 2 —
+        // and both are here so the pair reads as one fact about line breaks.
+        const multiline = drive(
+            makeTree('multiline', {
+                files: { 'src/content.ts': 'cell\n    .innerHTML = row.workflowId;\nother.\n    outerHTML = row.workflowType;\n' },
+            }),
+        );
+        check(
+            'rejects an assignment split across lines, either side of the dot',
+            multiline.status === 1 && multiline.output.includes('innerHTML') && multiline.output.includes('outerHTML'),
+            `exit ${multiline.status}: ${multiline.output.trim()}`,
+        );
+
+        const computed = drive(
+            makeTree('computed', { files: { 'src/content.ts': "cell['innerHTML'] = row.workflowId;\n" } }),
+        );
+        check(
+            'rejects a sink reached by a computed property',
+            computed.status === 1 && computed.output.includes('innerHTML'),
+            `exit ${computed.status}: ${computed.output.trim()}`,
+        );
+
+        const destructured = drive(
+            makeTree('destructured', { files: { 'src/content.ts': 'const { storage } = chrome;\nvoid storage;\n' } }),
+        );
+        check(
+            'rejects a destructured chrome namespace',
+            destructured.status === 1 && destructured.output.includes('chrome.*'),
+            `exit ${destructured.status}: ${destructured.output.trim()}`,
+        );
+
+        const aliased = drive(
+            makeTree('aliased', { files: { 'src/content.ts': 'const api = globalThis["chrome"];\nvoid api;\n' } }),
+        );
+        check(
+            'rejects the chrome namespace taken off a global by string',
+            aliased.status === 1 && aliased.output.includes('chrome.*'),
+            `exit ${aliased.status}: ${aliased.output.trim()}`,
+        );
+
+        // The false accusation the regexes made. A gate that reports a sink in a
+        // sentence about sinks teaches people to stop reading its output.
+        const sinkInString = drive(
+            makeTree('sinkinstring', {
+                files: {
+                    'src/content.ts':
+                        "const help = 'never write .innerHTML = value';\nconst warn = 'chrome.storage is not used here';\ncell.textContent = help + warn;\n",
+                },
+            }),
+        );
+        check(
+            'does not fire on a sink or chrome.* named inside a string',
+            sinkInString.status === 0,
+            `exit ${sinkInString.status}: ${sinkInString.output.trim()}`,
+        );
+
+        // Unparseable is not clean.
+        const broken = drive(
+            makeTree('broken', { files: { 'src/content.ts': 'const rows = [;\nfunction (\n' } }),
+        );
+        check(
+            'reports a file it could not parse instead of passing it',
+            broken.status === 1 && broken.output.includes('could not be parsed'),
+            `exit ${broken.status}: ${broken.output.trim()}`,
+        );
+
+        // An HTML file gets its inline scripts PARSED, at the line they occupy in
+        // the file. The sink here is written the one way the textual pass cannot
+        // see, so the case fails if the extraction stops happening; an
+        // `el.innerHTML =` fixture would pass either way and prove nothing.
+        const inlineHtml = drive(
+            makeTree('inlinehtml', {
+                files: {
+                    'public/popup.html':
+                        '<!doctype html>\n<a href="https://example.com/x">x</a>\n<script>\n    const el = document.body;\n    el["innerHTML"] = location.hash;\n</script>\n',
+                },
+            }),
+        );
+        check(
+            'rejects a sink inside an inline <script>, at its line in the file',
+            inlineHtml.status === 1 && inlineHtml.output.includes('popup.html:5'),
+            `exit ${inlineHtml.status}: ${inlineHtml.output.trim()}`,
         );
 
         const chromeUse = drive(

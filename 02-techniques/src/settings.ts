@@ -13,7 +13,20 @@ export interface Settings {
     // Per-row buttons that open this workflow in your own tools.
     linksEnabled: boolean;
     links: DeepLinkTemplate[];
+    // The two features that make requests of their OWN — one per running row each,
+    // paced and cached in rowInfoServe.ts. Separate switches so the cost is
+    // separately refusable; on by default, because they read no user data at all
+    // (the retry badge deliberately does not read the failure message) and a
+    // feature nobody turns on teaches nobody anything.
+    lastEventEnabled: boolean;
+    retryEnabled: boolean;
 }
+
+// There is deliberately no codec-server setting in this build. Reading a payload
+// means decoding it, and decoding one Temporal cannot decode for you means sending
+// it to a server — the first thing here that would move workflow data off the
+// machine. That is 03-goodies, where the egress has a section of its own; this
+// project's whole claim is that it learns what it knows from event METADATA.
 
 // The default link points at example.com on purpose: it is a reserved
 // documentation domain, so it cannot accidentally send a workflow id to someone
@@ -30,6 +43,8 @@ export const DEFAULT_SETTINGS: Settings = {
                 'https://example.com/search?q={workflowId}&from={startTimeIso-10m}&to={endTimeIso+10m}',
         },
     ],
+    lastEventEnabled: true,
+    retryEnabled: true,
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -46,6 +61,8 @@ export async function loadSettings(): Promise<Settings> {
         treeEnabled: stored.treeEnabled !== false,
         linksEnabled: stored.linksEnabled !== false,
         links: links.filter((l) => l && typeof l.label === 'string' && typeof l.urlTemplate === 'string'),
+        lastEventEnabled: stored.lastEventEnabled !== false,
+        retryEnabled: stored.retryEnabled !== false,
     };
 }
 

@@ -6,7 +6,7 @@
 // does nothing". Showing rows-seen, rows-matched and families-found separates
 // those three cases in one glance.
 
-import { KNOWN_TOKENS, type DeepLinkTemplate } from './deepLink';
+import { KNOWN_TOKENS, templateIsSafe, type DeepLinkTemplate } from './deepLink';
 import { loadSettings, saveSettings, type Settings } from './settings';
 
 interface PageStats {
@@ -17,6 +17,11 @@ interface PageStats {
     rowsIndented: number;
     rowsKnown: number;
     families: number;
+    retryBadges: number;
+    // How many runs the page has asked Temporal about since it loaded. The only
+    // number in this extension that represents requests WE made rather than
+    // requests we watched, which is exactly why it is on screen.
+    runsAsked: number;
 }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -31,6 +36,8 @@ async function main(): Promise<void> {
     bindToggle('enabled');
     bindToggle('treeEnabled');
     bindToggle('linksEnabled');
+    bindToggle('lastEventEnabled');
+    bindToggle('retryEnabled');
     renderLinks();
 
     $('add-link').addEventListener('click', () => {
@@ -42,7 +49,11 @@ async function main(): Promise<void> {
     void showStatus();
 }
 
-function bindToggle(key: 'enabled' | 'treeEnabled' | 'linksEnabled'): void {
+type BooleanSetting = {
+    [K in keyof Settings]: Settings[K] extends boolean ? K : never;
+}[keyof Settings];
+
+function bindToggle(key: BooleanSetting): void {
     const input = $<HTMLInputElement>(key);
     input.checked = settings[key];
     input.addEventListener('change', () => {
@@ -63,6 +74,9 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
     const row = document.createElement('div');
     row.className = 'link-row';
 
+    const warning = document.createElement('div');
+    warning.className = 'warning';
+
     const label = textInput(link.label, 'Button label', (value) => {
         settings.links[index]!.label = value;
         void saveSettings({ links: settings.links });
@@ -72,6 +86,7 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
     // a real internal address — by a person or by the leak gate.
     const template = textInput(link.urlTemplate, 'https://logs.example.com/?q={workflowId}', (value) => {
         settings.links[index]!.urlTemplate = value;
+        showTemplateVerdict(template, warning);
         void saveSettings({ links: settings.links });
     });
 
@@ -85,8 +100,26 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
         void saveSettings({ links: settings.links });
     });
 
-    row.append(label, template, remove);
+    row.append(label, template, remove, warning);
+    showTemplateVerdict(template, warning);
     return row;
+}
+
+// Says out loud, where the template was typed, that it cannot produce a link the
+// extension will open. It is NOT the protection — the render path re-checks the
+// EXPANDED url on every pass, which is the check that matters, because a
+// template can take its scheme from the workflow data (see safeHref). This one
+// exists so a bad template is not discovered as a dead button on the page.
+function showTemplateVerdict(input: HTMLInputElement, warning: HTMLElement): void {
+    const safe = templateIsSafe(input.value);
+    input.classList.toggle('invalid', !safe);
+    // aria-invalid too: "the border went dashed" is not available to a screen
+    // reader, and this is the only signal the field is not going to work.
+    if (safe) input.removeAttribute('aria-invalid');
+    else input.setAttribute('aria-invalid', 'true');
+    warning.textContent = safe
+        ? ''
+        : '⚠ Not a link this extension will open. Use an absolute http:// or https:// URL.';
 }
 
 function textInput(value: string, placeholder: string, onCommit: (value: string) => void): HTMLInputElement {
@@ -122,6 +155,10 @@ async function showStatus(): Promise<void> {
     const lines = [
         `${stats.rowsSeen} rows in the table, ${stats.rowsMatched} matched to API data.`,
         `${stats.families} famil${stats.families === 1 ? 'y' : 'ies'} with children, ${stats.rowsIndented} indented rows.`,
+        // Stated even when both are zero: "this extension asked Temporal about N
+        // runs" is the one line here that describes traffic, and a cost that only
+        // appears once it is non-zero is a cost nobody looks for.
+        `${stats.runsAsked} run${stats.runsAsked === 1 ? '' : 's'} asked about (last event / retries), ${stats.retryBadges} retrying now.`,
     ];
     // Each of these is a different problem wearing the same face.
     if (stats.rowsKnown === 0) {

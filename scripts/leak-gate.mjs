@@ -25,7 +25,9 @@
 //     a public repo that ships the list of your internal names has leaked it.
 //
 // Usage
-//   node scripts/leak-gate.mjs              scan tracked + staged files
+//   node scripts/leak-gate.mjs              scan tracked + staged + untracked
+//                                           files (everything `git add -A`
+//                                           would commit)
 //   node scripts/leak-gate.mjs --history    also scan every blob and commit
 //                                           message in the whole history
 //   node scripts/leak-gate.mjs --dir <path> scan a plain directory
@@ -155,6 +157,41 @@ const RULES = [
         why: 'a Slack token',
         re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
     },
+    {
+        // Not a leak of a name — a leak of REVIEWABILITY, which is what every
+        // other rule here depends on. A character nobody can see is a character
+        // nobody reviews: it does not show in an editor, a `git diff` renders it as
+        // nothing, and a grep for the line it sits on fails.
+        //
+        // This repository had eight of them, all deliberate and all written as raw
+        // characters instead of escapes: ASCII separators in a cache signature
+        // (src/detailCard.ts), a control byte smuggled before `javascript:` in a
+        // safeHref spec, a binary protobuf prefix in a payload spec. They were found
+        // only because the U+0004 in the signature made a mutation audit's own
+        // string search miss the line it was aiming at.
+        //
+        // The fix never changes behaviour: write the escape sequence, not the byte.
+        id: 'invisible-char',
+        why: 'an invisible character — write it as a \\uXXXX escape so a reviewer can see it',
+        // C0 controls except tab and LF, DEL, the C1 block, NBSP, the zero-width and
+        // bidi ranges, and the BOM.
+        //
+        // CR (U+000D) is deliberately absent. A CRLF file would report on every
+        // line, which is a line-endings problem with its own fix, and burying a real
+        // finding under six hundred false ones is how a gate gets switched off.
+        //
+        // U+0000 is in the class for completeness only. A file containing one is
+        // classified binary by looksBinary() and skipped before any rule reads it,
+        // so this rule cannot be the thing that reports it.
+        re: new RegExp('[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00A0\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\u2066-\u2069\uFEFF]', 'g'),
+        // Without this the gate would report by echoing the character that cannot
+        // be seen — a finding whose body prints as nothing, which reads as a bug in
+        // the gate rather than a bug in the file. The column is part of the answer
+        // for the same reason: a line number alone does not locate something
+        // invisible on a 120-character line.
+        show: (match, column) =>
+            `U+${match.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')} at column ${column}`,
+    },
 ];
 
 function isAllowedHost(host) {
@@ -205,7 +242,11 @@ function scanText(text, where, localTerms) {
             while ((m = rule.re.exec(line)) !== null) {
                 if (!seen.has(m[0])) {
                     seen.add(m[0]);
-                    push(rule.id, rule.why, lineNo, m[0]);
+                    // A rule may decide how its own match is PRINTED. Only
+                    // invisible-char does, and it is the rule that has to: the
+                    // default report quotes the matched text back, which for a
+                    // character nobody can see is a blank line.
+                    push(rule.id, rule.why, lineNo, rule.show ? rule.show(m[0], m.index + 1) : m[0]);
                 }
                 if (m.index === rule.re.lastIndex) rule.re.lastIndex++;
             }
@@ -222,7 +263,16 @@ function scanText(text, where, localTerms) {
         // chrome://extensions" is the first instruction in this repository.
         // Reading that as a host named "extensions" was the gate's own first
         // false positive.
-        const urlRe = /\b([a-z][a-z0-9+.-]*):\/\/([^\s/?#'"`<>)\]}\\]+)/gi;
+        //
+        // `;` and `,` end the authority for the same reason `/` does: neither is
+        // legal in a host, and both are what a URL is followed by in the strings
+        // this repository actually contains — a cookie jar
+        // (`ns_endpoint=https://codec.example.com; other=1`) above all. Without
+        // them the gate reported `codec.example.com;` as an unknown host, an
+        // allowlisted name failed by one character of punctuation, which is a
+        // false positive of the worst kind: it teaches the reader to widen the
+        // allowlist to make a real gate quiet.
+        const urlRe = /\b([a-z][a-z0-9+.-]*):\/\/([^\s/?#'"`<>)\]};,\\]+)/gi;
         let u;
         while ((u = urlRe.exec(line)) !== null) {
             if (NON_NETWORK_SCHEMES.has(u[1].toLowerCase())) continue;
@@ -265,9 +315,21 @@ function git(args, opts = {}) {
     return execFileSync('git', ['-C', REPO, ...args], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts });
 }
 
-function trackedFiles() {
+// Tracked, staged AND untracked-but-not-ignored.
+//
+// `git ls-files` alone reads the index, so it sees tracked and newly-staged
+// files and is blind to everything not yet added. That is the wrong blind spot
+// for this gate: a file sitting in the working tree unstaged is one `git add -A`
+// away from a commit, and the gate that is supposed to run BEFORE that commit
+// would have reported clean over it. `--others --exclude-standard` adds exactly
+// the files that `add -A` would pick up — untracked, minus anything .gitignore
+// already excludes (which is why `leakgate.local.txt` and `node_modules` do not
+// flood the scan).
+function scannableFiles() {
     try {
-        return git(['ls-files', '-z']).split('\0').filter(Boolean);
+        const tracked = git(['ls-files', '-z']).split('\0').filter(Boolean);
+        const untracked = git(['ls-files', '-z', '--others', '--exclude-standard']).split('\0').filter(Boolean);
+        return [...new Set([...tracked, ...untracked])];
     } catch {
         return null; // not a git repo
     }
@@ -296,7 +358,7 @@ function main(argv) {
 
     const files = scanDir
         ? walk(scanDir).map((f) => relative(scanDir, f))
-        : trackedFiles();
+        : scannableFiles();
 
     if (files === null) {
         console.error('leak-gate: not a git repository and no --dir given');
@@ -371,8 +433,8 @@ function main(argv) {
         const scope = scanDir
             ? `directory ${scanDir}`
             : wantHistory
-              ? 'tracked files + full history'
-              : 'tracked + staged files';
+              ? 'tracked + staged + untracked files, plus full history'
+              : 'tracked + staged + untracked files';
         console.log(`leak-gate: scanned ${scope}`);
         console.log(`  text files: ${filesScanned}`);
         if (wantHistory && !scanDir) {
@@ -475,6 +537,65 @@ function selftest() {
         const goodRun = run(['--dir', good, '--quiet']);
         check('accepts a known-good file', goodRun.status === 0, `exit ${goodRun.status}: ${goodRun.output.trim()}`);
 
+        // INVISIBLE CHARACTERS — three directions, because all three failed at
+        // least once while this rule was being written.
+        //
+        // The fixtures assemble their characters with String.fromCharCode rather
+        // than containing them, for the same reason the secret-shaped fixtures
+        // above are split: a literal control byte here would be a finding in the
+        // gate's own source, and the gate scans itself (see the case further
+        // down). A backslash is built the same way so this file contains no
+        // escape sequence that an editor or a tool can helpfully "fix".
+        const BACKSLASH = String.fromCharCode(92);
+        const LF = String.fromCharCode(10);
+        const invisible = join(dir, 'invisible');
+        mkdirSync(invisible, { recursive: true });
+        writeFileSync(join(invisible, 'sig.ts'), `const SEP = "a${String.fromCharCode(7)}b";${LF}`);
+        const invisibleRun = run(['--dir', invisible, '--quiet']);
+        check(
+            'rejects a raw control character',
+            invisibleRun.status === 1 && invisibleRun.output.includes('[invisible-char]'),
+            `exit ${invisibleRun.status}: ${invisibleRun.output.trim()}`,
+        );
+        // The rule's whole value is that its findings can be READ. Reporting by
+        // echoing the match would print a blank line — indistinguishable from the
+        // gate being broken — so the code point and the column are pinned, and so
+        // is the absence of the character itself from the report.
+        check(
+            '  and names the code point and column instead of echoing it',
+            invisibleRun.output.includes('U+0007 at column')
+                && !invisibleRun.output.includes(String.fromCharCode(7)),
+            'the report echoed the character, which shows as nothing on a terminal',
+        );
+
+        // KNOWN-GOOD for the same rule: an escape sequence is what the fix looks
+        // like, so a file full of them must stay clean — a gate that flags its own
+        // remedy gets switched off. Tab and LF are exempt for the plainer reason
+        // that indented source is made of them.
+        writeFileSync(
+            join(invisible, 'sig.ts'),
+            `const SEP = "${BACKSLASH}u0007";${LF}${String.fromCharCode(9)}const TABBED = 1;${LF}`,
+        );
+        const escapedRun = run(['--dir', invisible, '--quiet']);
+        check(
+            '  accepts the escape sequence that replaces it, and a tab',
+            escapedRun.status === 0,
+            `exit ${escapedRun.status}: ${escapedRun.output.trim()}`,
+        );
+
+        // CR is out of scope on purpose (see the rule). A CRLF file must come back
+        // clean, not with one finding per line.
+        writeFileSync(
+            join(invisible, 'sig.ts'),
+            `const A = 1;${String.fromCharCode(13)}${LF}const B = 2;${String.fromCharCode(13)}${LF}`,
+        );
+        const crlfRun = run(['--dir', invisible, '--quiet']);
+        check(
+            '  does not flag CRLF line endings',
+            crlfRun.status === 0,
+            `exit ${crlfRun.status}: ${crlfRun.output.trim()}`,
+        );
+
         // The URL rule subtracts browser-internal schemes (above) but MUST keep
         // every scheme that names a real machine. Checked as its own case
         // because the two directions fail independently: widening the scheme
@@ -490,6 +611,33 @@ function selftest() {
             'still reads the host of a non-http scheme',
             schemeRun.status === 1 && schemeRun.output.includes('reporting.a-real-internal-hostname'),
             `exit ${schemeRun.status}: ${schemeRun.output.trim()}`,
+        );
+
+        // A URL inside a cookie jar, both ways. The gate reported
+        // `codec.example.com;` — an allowlisted host failed on the semicolon that
+        // follows it in every cookie string — while an internal host in the same
+        // position must still be caught, so both directions are pinned.
+        const jar = join(dir, 'jar');
+        mkdirSync(jar, { recursive: true });
+        writeFileSync(
+            join(jar, 'cookie.ts'),
+            'const OK = "ns_endpoint=https://codec.example.com; other=1";\n',
+        );
+        const jarRun = run(['--dir', jar, '--quiet']);
+        check(
+            'a URL followed by a cookie separator keeps its host',
+            jarRun.status === 0,
+            `exit ${jarRun.status}: ${jarRun.output.trim()}`,
+        );
+        writeFileSync(
+            join(jar, 'cookie.ts'),
+            `const NO = "ns_endpoint=${'https'}://codec.an-internal-hostname; other=1";\n`,
+        );
+        const jarBadRun = run(['--dir', jar, '--quiet']);
+        check(
+            '  and still flags an internal one there',
+            jarBadRun.status === 1 && jarBadRun.output.includes('codec.an-internal-hostname'),
+            `exit ${jarBadRun.status}: ${jarBadRun.output.trim()}`,
         );
 
         // The local denylist must actually be read when present. Written into
@@ -548,6 +696,46 @@ function selftest() {
         // The gate must scan its own source: no self-exclusion blind spot.
         const selfRun = run(['--dir', join(REPO, 'scripts'), '--quiet']);
         check('scans its own source without matching itself', selfRun.status === 0, selfRun.output.trim());
+
+        // THE GIT PATH, against a throwaway repository.
+        //
+        // Every case above uses --dir, which walks a directory and therefore
+        // reads untracked files whether or not the git path does. That is the
+        // hole this case exists to close: the default path (no --dir) asked git
+        // for the file list, and `git ls-files` reads the INDEX, so a known-bad
+        // file sitting unstaged in the working tree was invisible to it while
+        // every --dir case stayed green. A file one `git add -A` away from a
+        // commit is exactly what a pre-commit gate must see.
+        //
+        // The gate resolves the repository from its own location, so the only
+        // way to point it at a scratch repo is to copy it in.
+        const repoCase = join(dir, 'gitrepo');
+        mkdirSync(join(repoCase, 'scripts'), { recursive: true });
+        const copiedGate = join(repoCase, 'scripts', 'leak-gate.mjs');
+        writeFileSync(copiedGate, readFileSync(fileURLToPath(import.meta.url)));
+        execFileSync('git', ['-C', repoCase, 'init', '-q'], { stdio: 'ignore' });
+        writeFileSync(join(repoCase, 'tracked.md'), 'The extension reads http://localhost:8233 only.\n');
+        execFileSync('git', ['-C', repoCase, 'add', 'tracked.md'], { stdio: 'ignore' });
+        writeFileSync(join(repoCase, '.gitignore'), 'ignored.md\n');
+        writeFileSync(join(repoCase, 'untracked.md'), `notes: the box is at ${'10.42.'}7.9\n`);
+        writeFileSync(join(repoCase, 'ignored.md'), `notes: the box is at ${'10.13.'}1.2\n`);
+        const gitRun = (() => {
+            try {
+                return { status: 0, output: execFileSync(process.execPath, [copiedGate, '--quiet'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+            } catch (err) {
+                return { status: err.status ?? 2, output: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+            }
+        })();
+        check(
+            'scans an UNTRACKED working-tree file on the git path',
+            gitRun.status === 1 && gitRun.output.includes('untracked.md'),
+            `exit ${gitRun.status}: ${gitRun.output.trim()}`,
+        );
+        check(
+            '  and still honours .gitignore (an ignored file is not scanned)',
+            !gitRun.output.includes('ignored.md'),
+            'a gitignored file was scanned — node_modules would flood the scan',
+        );
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }

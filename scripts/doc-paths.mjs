@@ -64,10 +64,31 @@ function markdownFiles(root) {
     return found;
 }
 
+// Temporal payload encodings. They live in a payload's `metadata.encoding` as
+// `type/subtype`, and a doc about a codec server cannot discuss them without
+// naming them — `binary/encrypted` above all.
+//
+// Listed one by one rather than matched by shape. "Two words separated by a
+// slash" also describes `01-family-tree/dist` and `docs/features`, so exempting
+// the shape would blind the gate to every citation of a directory or of a file
+// written without its extension — which is most of what it is here to check.
+// An encoding not on this list is still checked, and adding one is a deliberate
+// edit to this file.
+const PAYLOAD_ENCODINGS = new Set([
+    'json/plain',
+    'json/protobuf',
+    'text/plain',
+    'binary/plain',
+    'binary/null',
+    'binary/encrypted',
+    'binary/protobuf',
+]);
+
 // A backticked string worth checking: it looks like a relative path, and it is
-// not a command, a URL, a glob or a template.
+// not a command, a URL, a glob, a template or a payload encoding.
 function looksLikePath(text) {
     if (!text.includes('/')) return false;
+    if (PAYLOAD_ENCODINGS.has(text)) return false;
     if (/\s/.test(text)) return false; // a command line, not a path
     if (text.includes('://')) return false; // a URL
     if (/[{}<>*?"'`|$]/.test(text)) return false; // a template or a glob
@@ -262,6 +283,25 @@ function selftest() {
             'resolves a path written relative to a project directory',
             projectRelative.status === 0,
             `exit ${projectRelative.status}: ${projectRelative.output.trim()}`,
+        );
+
+        // The codec docs name payload encodings, which are metadata values, not
+        // files. Both halves matter: the listed ones pass, and one that is not
+        // listed is still checked — the exemption is a list, not a shape.
+        const encodings = drive(
+            makeTree('encodings', 'Readable: `json/plain`, `text/plain`, `binary/null`. Not: `binary/encrypted`.\n'),
+        );
+        check(
+            'accepts Temporal payload encodings, which are not paths',
+            encodings.status === 0,
+            `exit ${encodings.status}: ${encodings.output.trim()}`,
+        );
+
+        const unlistedEncoding = drive(makeTree('unlisted', 'Also handles `binary/invented`.\n'));
+        check(
+            'still checks a type/subtype token that is not a known encoding',
+            unlistedEncoding.status === 1 && unlistedEncoding.output.includes('binary/invented'),
+            `exit ${unlistedEncoding.status}: ${unlistedEncoding.output.trim()}`,
         );
 
         const renamedScript = drive(makeTree('script', 'Run `npm run bulid` first.\n'));

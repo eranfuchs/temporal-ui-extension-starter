@@ -9,16 +9,26 @@
 // no permissions at all — see 01-family-tree/README.md.
 
 import { buildTree, countFamilies } from './tree';
-import { normalizeExecutions, runKey } from './rows';
-import { applyToTable, findWorkflowTbody, type Placement } from './render';
+import {
+    emptyPlacementIndex,
+    findPlacement,
+    indexPlacements,
+    judgeListResponse,
+    normalizeExecutions,
+    type PlacementIndex,
+} from './rows';
+import { applyToTable, findWorkflowTbody, namespaceFromLocation, type Placement } from './render';
 import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
 
 const TAG = '[temporal-family-tree]';
 
-// What we know about the workflows the page has fetched: one entry per RUN, plus
-// a workflow-id index for hrefs that carry no run id.
-const placementByRun = new Map<string, Placement>();
-const placementByWorkflowId = new Map<string, Placement>();
+// What we know about the workflows the page has fetched, indexed by run and by
+// workflow id. Both the indexing and the lookup rules live in rows.ts, where
+// they are pure and unit-tested; this file only decides WHEN to rebuild them.
+let placements: PlacementIndex<Placement> = emptyPlacementIndex();
+
+// The generation of the newest list response applied — see judgeListResponse().
+let appliedGeneration = -1;
 
 // ── Receiving rows ───────────────────────────────────────────────────────────
 
@@ -30,31 +40,36 @@ window.addEventListener('message', (event: MessageEvent) => {
     const data = event.data as WorkflowsMessage | undefined;
     if (data?.source !== MESSAGE_SOURCE || data.type !== 'workflows') return;
 
+    // Is this answer the newest one, and is it even about this table? Neither
+    // question is answerable from the DOM, and getting either wrong looks like a
+    // rendering glitch rather than a bug.
+    const verdict = judgeListResponse({
+        generation: data.generation,
+        url: data.url,
+        appliedGeneration,
+        pageNamespace: namespaceFromLocation(location.pathname),
+    });
+    if (verdict !== 'accept') {
+        console.log(TAG, `ignored a workflow list (${verdict})`, data.url);
+        return;
+    }
+    appliedGeneration = data.generation;
+
     const ordered = buildTree(normalizeExecutions(data.executions));
 
-    placementByRun.clear();
-    placementByWorkflowId.clear();
-    ordered.forEach((row, index) => {
-        const placement: Placement = {
-            sequence: index,
-            depth: row.depth,
-            segments: row.segments,
-            row,
-        };
-        placementByRun.set(runKey(row.workflowId, row.runId), placement);
-        placementByWorkflowId.set(row.workflowId, placement);
-    });
+    placements = indexPlacements(ordered, (row, index) => ({
+        sequence: index,
+        depth: row.depth,
+        segments: row.segments,
+        row,
+    }));
 
     console.log(TAG, `${ordered.length} rows, ${countFamilies(ordered)} with children`);
     scheduleApply();
 });
 
 function lookup(workflowId: string, runId: string | null): Placement | undefined {
-    if (runId) {
-        const exact = placementByRun.get(runKey(workflowId, runId));
-        if (exact) return exact;
-    }
-    return placementByWorkflowId.get(workflowId);
+    return findPlacement(placements, workflowId, runId);
 }
 
 // ── When to re-apply ─────────────────────────────────────────────────────────

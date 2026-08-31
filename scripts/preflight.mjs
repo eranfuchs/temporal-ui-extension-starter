@@ -20,6 +20,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+// Namespace import on purpose: a named import of markAsUncloneable would fail to
+// LINK on a Node that does not have it, so this file would crash before it could
+// explain why. The check below is the whole reason it is imported at all.
+import * as workerThreads from 'node:worker_threads';
 
 import { discoverProjects, ROOT } from './projects.mjs';
 
@@ -64,18 +68,36 @@ function runCheck(name, command, args, { needs, unverifiedExit, cwd, project } =
 
 const indent = (text) => text.split('\n').map((l) => `         ${l}`).join('\n');
 const truncate = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+// vitest colours its summary, and an escape sequence sitting between "Test Files"
+// and the count is enough to make the regex below miss the line it looks for.
+const stripAnsi = (text) => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 const NODE = process.execPath;
 const LOCAL_BIN = join(ROOT, 'node_modules', '.bin');
+
+// The lowest Node major on which the DOM specs have been OBSERVED to run here,
+// not a number read off a changelog: on 20.19.3 they do not run, on 22.22.3 they
+// do. The exact patch release inside 22.x where that changed was not measured,
+// which is precisely why checkNodeRuntime() probes for the capability instead of
+// comparing version strings — the declared range is a promise to whoever clones
+// this, and the probe is what actually knows.
+//
+// Declared up here rather than beside the check: the first thing this file does
+// is run the checks, so anything they read has to already exist.
+const VERIFIED_NODE_MAJOR = 22;
+const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
 // ── Repository-wide ──────────────────────────────────────────────────────────
 
 console.log('repository');
 
+// Before anything that depends on the toolchain being able to run at all.
+checkNodeRuntime();
+
 // First, because it is the one whose failure cannot be undone by a later commit.
 // Run without --quiet on purpose: its last line names how many files it read, and
 // that number is what distinguishes a clean scan from an empty one.
-runCheck('leak gate (tracked + staged files)', NODE, ['scripts/leak-gate.mjs'], { unverifiedExit: 2 });
+runCheck('leak gate (tracked + staged + untracked files)', NODE, ['scripts/leak-gate.mjs'], { unverifiedExit: 2 });
 runCheck('leak gate self-test', NODE, ['scripts/leak-gate.mjs', '--selftest', '--quiet']);
 
 runCheck('lineage (shared files identical across projects)', NODE, ['scripts/lineage.mjs'], { unverifiedExit: 2 });
@@ -112,16 +134,13 @@ for (const project of projects) {
     }
 
     checkVersionParity(project);
+    checkEnginesParity(project);
     runCheck(`${project.id}: typecheck (src + tests)`, join(LOCAL_BIN, 'tsc'), ['--noEmit'], {
         needs: ['node_modules/.bin/tsc'],
         cwd: project.dir,
         project: project.id,
     });
-    runCheck(`${project.id}: unit tests`, join(LOCAL_BIN, 'vitest'), ['run', '--reporter=dot'], {
-        needs: ['node_modules/.bin/vitest'],
-        cwd: project.dir,
-        project: project.id,
-    });
+    checkUnitTests(project);
     runCheck(`${project.id}: build`, NODE, ['esbuild.mjs'], {
         needs: ['node_modules/esbuild'],
         cwd: project.dir,
@@ -134,7 +153,159 @@ for (const project of projects) {
     checkDist(project);
 }
 
+// ── The repository-wide checks ───────────────────────────────────────────────
+
+function declaredNodeMajor(range) {
+    const match = /(\d+)/.exec(range ?? '');
+    return match ? Number(match[1]) : null;
+}
+
+// Why a whole check for one function existing:
+//
+// The DOM specs run under jsdom, jsdom pulls in undici, and undici's webidl
+// layer requires `markAsUncloneable` from node:worker_threads at import time. On
+// a Node without it the jsdom environment cannot start — and the failure does not
+// read as "your Node is too old". It reads as
+// `TypeError: webidl.util.markAsUncloneable is not a function`, followed by a
+// vitest summary that says every test PASSED, because the files that could not be
+// collected are simply absent from the total. That is the repository's signature
+// failure shape: a green tally over a suite that never ran.
+//
+// So this fails loudly, up front, and names the cause — and `checkUnitTests`
+// below independently refuses to accept a run that collected fewer spec files
+// than exist on disk, so even an unforeseen variant of this cannot pass.
+function checkNodeRuntime() {
+    const name = 'node can host the DOM tests (jsdom → undici)';
+    const declared = ROOT_PKG.engines?.node ?? null;
+    const declaredMajor = declaredNodeMajor(declared);
+
+    if (typeof workerThreads.markAsUncloneable !== 'function') {
+        record(name, 'failed', `${process.version} lacks worker_threads.markAsUncloneable`);
+        console.log(
+            indent(
+                [
+                    'jsdom cannot start on this Node: undici (via jsdom, via vitest) requires',
+                    'node:worker_threads.markAsUncloneable at import time.',
+                    '',
+                    'The symptom if you run vitest directly is NOT an obvious version error — it is',
+                    '  TypeError: webidl.util.markAsUncloneable is not a function',
+                    'and a summary reporting that every collected test passed, with the DOM specs',
+                    'silently missing from the total.',
+                    '',
+                    `Use Node >=${VERIFIED_NODE_MAJOR} (this repository declares "${declared}").`,
+                ].join('\n'),
+            ),
+        );
+        return;
+    }
+    if (declaredMajor === null) {
+        record(name, 'unverified', `cannot read a minimum major out of engines.node "${declared}"`);
+        return;
+    }
+    if (declaredMajor < VERIFIED_NODE_MAJOR) {
+        record(
+            name,
+            'failed',
+            `package.json declares node "${declared}", but the DOM specs need >=${VERIFIED_NODE_MAJOR}`,
+        );
+        return;
+    }
+    record(name, 'ok', `${process.version}, engines.node "${declared}"`);
+}
+
 // ── The per-project checks ───────────────────────────────────────────────────
+
+// A cloner reads the package.json of the project they cloned, not the one at the
+// root, so the two must not drift. This is the same reasoning as the manifest /
+// package.json version parity check above it: a promise made in two places is a
+// promise that will eventually be made twice, differently.
+function checkEnginesParity(project) {
+    const name = `${project.id}: engines.node matches the repository root`;
+    const projectRange = project.pkg.engines?.node ?? null;
+    const rootRange = ROOT_PKG.engines?.node ?? null;
+    if (projectRange === rootRange) {
+        record(name, 'ok', `"${projectRange}"`, { project: project.id });
+        return;
+    }
+    record(name, 'failed', `project declares "${projectRange}", root declares "${rootRange}"`, {
+        project: project.id,
+    });
+}
+
+function specFiles(dir) {
+    const found = [];
+    const walk = (path) => {
+        if (!existsSync(path)) return;
+        for (const entry of readdirSync(path, { withFileTypes: true })) {
+            const full = join(path, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (entry.name.endsWith('.spec.ts')) found.push(full);
+        }
+    };
+    walk(join(dir, 'tests'));
+    return found;
+}
+
+
+// Runs the unit tests AND checks that the run covered every spec file on disk.
+//
+// "vitest exited 0" is a weaker statement than it looks. A spec file that fails
+// to be COLLECTED — a broken test environment, a syntax error in an import, a
+// renamed glob that no longer matches — does not appear in the totals at all, so
+// the summary reads `Test Files 2 passed (2)` and the exit status is 0 while a
+// third of the suite has silently not run. Counting the files on disk is the only
+// side of that comparison the test runner cannot get wrong.
+function checkUnitTests(project) {
+    const name = `${project.id}: unit tests (every spec file collected)`;
+    const bin = join(LOCAL_BIN, 'vitest');
+    if (!existsSync(bin)) {
+        record(name, 'unverified', 'node_modules/.bin/vitest is missing — run: npm install', { project: project.id });
+        return;
+    }
+    const onDisk = specFiles(project.dir);
+    if (onDisk.length === 0) {
+        record(name, 'unverified', 'no tests/**/*.spec.ts files exist', { project: project.id });
+        return;
+    }
+
+    const proc = spawnSync(bin, ['run', '--reporter=dot'], { cwd: project.dir, encoding: 'utf8', shell: false });
+    if (proc.error) {
+        record(name, 'unverified', `could not run vitest: ${proc.error.message}`, { project: project.id });
+        return;
+    }
+    const output = stripAnsi(`${proc.stdout ?? ''}${proc.stderr ?? ''}`);
+    if (proc.status !== 0) {
+        record(name, 'failed', `vitest exited ${proc.status}`, { project: project.id });
+        console.log(indent(output.trim()));
+        return;
+    }
+
+    const filesLine = /Test Files\s+(.*)$/m.exec(output);
+    const total = filesLine ? Number(/\((\d+)\)\s*$/.exec(filesLine[1])?.[1] ?? NaN) : NaN;
+    const passed = filesLine ? Number(/(\d+) passed/.exec(filesLine[1])?.[1] ?? NaN) : NaN;
+    const testsLine = /Tests\s+(.*)$/m.exec(output);
+
+    if (!Number.isFinite(total) || !Number.isFinite(passed)) {
+        // Vitest changed its summary format, or printed none. Either way this
+        // check no longer knows what it read, and saying so beats guessing.
+        record(name, 'unverified', 'could not parse vitest\'s "Test Files" summary line', { project: project.id });
+        return;
+    }
+    if (total !== onDisk.length || passed !== onDisk.length) {
+        record(
+            name,
+            'failed',
+            `${onDisk.length} spec file(s) on disk, vitest reported ${passed} passed of ${total}`,
+            { project: project.id },
+        );
+        console.log(indent(`on disk: ${onDisk.map((f) => relative(project.dir, f)).join(', ')}`));
+        console.log(indent(output.trim()));
+        return;
+    }
+    record(name, 'ok', `${passed}/${onDisk.length} spec file(s), ${testsLine?.[1]?.trim() ?? 'tests ?'}`, {
+        project: project.id,
+    });
+}
 
 function checkVersionParity(project) {
     const name = `${project.id}: manifest and package.json agree on the version`;
@@ -245,7 +416,7 @@ function checkDist(project) {
 // before the tally, so it counts.
 //
 // An UNVERIFIED result counts as a result: a numbered directory that is not yet
-// a project (03-goodies, until it is written) already says so above, and that is
+// a project (a new rung, before it has a package.json) already says so above, and that is
 // the honest status — it makes the whole run inconclusive rather than FAILED. The
 // case this catches is a project the loop never reached at all.
 for (const project of projects) {

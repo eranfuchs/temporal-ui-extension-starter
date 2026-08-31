@@ -1,0 +1,200 @@
+// @vitest-environment jsdom
+//
+// The ISOLATED-world half of the two per-row questions: WHICH rows get asked
+// about. This is the file that decides what the feature costs, so every spec here
+// is a spec about a request that does NOT happen.
+//
+// The saving is not incidental. On a list of closed workflows this feature makes
+// no requests at all, and on a settled table showing running ones it makes one
+// round per TTL rather than one per render pass — and there are dozens of render
+// passes a second while the Temporal UI re-renders.
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { isRowInfoRequest, MAX_RUNS_PER_REQUEST, type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo';
+import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from '../../src/rowInfoClient';
+import { normalizeExecutions } from '../../src/rows';
+import { apiWorkflow, fakeRunId } from '../helpers';
+import { MESSAGE_SOURCE, type WorkflowRow } from '../../src/types';
+
+const NAMESPACE = 'sample-namespace';
+const NOW = Date.parse('2026-01-01T12:00:00Z');
+
+const LIVE_RUN = fakeRunId(301);
+const DONE_RUN = fakeRunId(302);
+
+function rows(specs: Array<{ workflowId: string; runId: string; running: boolean }>): WorkflowRow[] {
+    return normalizeExecutions(
+        specs.map((spec) =>
+            apiWorkflow({
+                workflowId: spec.workflowId,
+                runId: spec.runId,
+                status: spec.running ? 'RUNNING' : 'COMPLETED',
+                closeTime: spec.running ? null : '2026-01-01T00:01:00Z',
+            }),
+        ),
+    );
+}
+
+const LIVE_AND_DONE = rows([
+    { workflowId: 'live', runId: LIVE_RUN, running: true },
+    { workflowId: 'done', runId: DONE_RUN, running: false },
+]);
+
+// Every row-info request that was posted, and where it was addressed.
+let posted: Array<{ request: RowInfoRequest; targetOrigin: string }> = [];
+
+beforeEach(() => {
+    posted = [];
+    clearRowInfo();
+    vi.spyOn(window, 'postMessage').mockImplementation(((message: unknown, targetOrigin?: string) => {
+        // The type guard, not a cast: a message the receiver would refuse is a
+        // message that was never sent, and this spec should fail in that case.
+        if (isRowInfoRequest(message)) posted.push({ request: message, targetOrigin: String(targetOrigin) });
+    }) as typeof window.postMessage);
+});
+
+describe('choosing what to ask about', () => {
+    it('asks about running rows and leaves the closed ones alone', () => {
+        // The single filter that does most of the saving: every non-Running status
+        // is final, so the answer could never change and the request could never
+        // tell anyone anything.
+        const asked = requestRowInfo(NAMESPACE, ['lastEvent', 'retry'], LIVE_AND_DONE, NOW);
+
+        expect(asked).toBe(1);
+        expect(posted).toHaveLength(1);
+        expect(posted[0]!.request.runs).toEqual([{ workflowId: 'live', runId: LIVE_RUN }]);
+        expect(posted[0]!.request.want).toEqual(['lastEvent', 'retry']);
+    });
+
+    it('sends nothing at all when nothing on screen is running', () => {
+        // A list filtered to "Completed" — the common case for someone reading
+        // yesterday's failures — costs zero requests and zero messages.
+        const closed = rows([{ workflowId: 'done', runId: DONE_RUN, running: false }]);
+
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], closed, NOW)).toBe(0);
+        expect(posted).toHaveLength(0);
+    });
+
+    it('sends nothing when both features are off, or the namespace is unknown', () => {
+        expect(requestRowInfo(NAMESPACE, [], LIVE_AND_DONE, NOW)).toBe(0);
+        // No namespace means this is not a workflow-list page, and a request would
+        // have nowhere to go.
+        expect(requestRowInfo('', ['lastEvent'], LIVE_AND_DONE, NOW)).toBe(0);
+        expect(posted).toHaveLength(0);
+    });
+
+    it('does not ask again about a run it asked about a moment ago', () => {
+        // THE assertion about cost. A render pass happens on every DOM mutation;
+        // without this, a settled table would post a message per row per pass, and
+        // the MAIN world answering them all from cache would still be doing work.
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 1_000)).toBe(0);
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 29_000)).toBe(0);
+        expect(posted).toHaveLength(1);
+
+        // …and does ask again once the answer could have changed. The interval is
+        // deliberately longer than the MAIN world's cache TTL, so this is the ask
+        // that actually becomes a request.
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 40_000)).toBe(1);
+        expect(posted).toHaveLength(2);
+    });
+
+    it('asks about a row that appears later, without re-asking about the others', () => {
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+        const scrolledIn = [
+            ...LIVE_AND_DONE,
+            ...rows([{ workflowId: 'live-2', runId: fakeRunId(303), running: true }]),
+        ];
+
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], scrolledIn, NOW + 1_000)).toBe(1);
+        expect(posted[1]!.request.runs.map((run) => run.workflowId)).toEqual(['live-2']);
+    });
+
+    it('addresses the message to this origin and not to every frame', () => {
+        // '*' would hand an iframe on the page a list of the runs the user is
+        // looking at, for nothing in return.
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+        expect(posted[0]!.targetOrigin).toBe(location.origin);
+    });
+
+    it('splits a table larger than the receiver’s cap instead of being dropped', () => {
+        // The cap exists because anyone in the page can send this message. It is
+        // enforced by refusing the WHOLE message, so an over-long one produces no
+        // answers and no error — the exact silent failure this repository keeps a
+        // list of. Chunking here keeps the cap meaningful.
+        const many = rows(
+            Array.from({ length: MAX_RUNS_PER_REQUEST + 3 }, (_, index) => ({
+                workflowId: `live-${index}`,
+                runId: fakeRunId(1_000 + index),
+                running: true,
+            })),
+        );
+
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], many, NOW)).toBe(MAX_RUNS_PER_REQUEST + 3);
+        expect(posted).toHaveLength(2);
+        expect(posted[0]!.request.runs).toHaveLength(MAX_RUNS_PER_REQUEST);
+        expect(posted[1]!.request.runs).toHaveLength(3);
+        // Every run appears exactly once across the chunks.
+        const sent = new Set(posted.flatMap((entry) => entry.request.runs.map((run) => run.runId)));
+        expect(sent.size).toBe(MAX_RUNS_PER_REQUEST + 3);
+    });
+});
+
+describe('receiving answers', () => {
+    function answer(overrides: Partial<RowInfoResult> = {}): RowInfoResult {
+        return {
+            source: MESSAGE_SOURCE,
+            type: 'row-info-result',
+            workflowId: 'live',
+            runId: LIVE_RUN,
+            lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW },
+            retry: null,
+            error: null,
+            ...overrides,
+        };
+    }
+
+    function deliver(data: unknown, source: Window | null = window): void {
+        window.dispatchEvent(new MessageEvent('message', { data, source }));
+    }
+
+    it('stores an answer per run and re-renders once per answer', () => {
+        const onUpdate = vi.fn();
+        installRowInfo(onUpdate);
+
+        deliver(answer());
+
+        expect(onUpdate).toHaveBeenCalledTimes(1);
+        expect(rowInfoFor('live', LIVE_RUN)?.lastEvent?.eventType).toBe('ActivityTaskStarted');
+        // Keyed by RUN, not by workflow id: a retried or continued-as-new workflow
+        // keeps its id and gets a new run, and both appear in the same list.
+        expect(rowInfoFor('live', DONE_RUN)).toBeUndefined();
+    });
+
+    it('ignores the page’s own traffic and anything from an iframe', () => {
+        const onUpdate = vi.fn();
+        installRowInfo(onUpdate);
+
+        deliver({ source: MESSAGE_SOURCE, type: 'workflows', executions: [] });
+        deliver('hello');
+        deliver(answer(), null); // event.source !== window
+
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(rowInfoFor('live', LIVE_RUN)).toBeUndefined();
+    });
+
+    it('forgets everything when a setting changes what an answer would have been', () => {
+        // Turning a feature back on has to ask again immediately, or the ask
+        // interval keeps the column empty for half a minute and the toggle looks
+        // like it did nothing.
+        installRowInfo(() => {});
+        deliver(answer());
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+
+        clearRowInfo();
+
+        expect(rowInfoFor('live', LIVE_RUN)).toBeUndefined();
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW)).toBe(1);
+    });
+});

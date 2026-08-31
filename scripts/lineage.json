@@ -38,12 +38,22 @@
             "why": "Pins the shared src/rows.ts."
         },
         {
+            "path": "tests/unit/inject.spec.ts",
+            "why": "Pins the shared src/inject.ts: generation stamping, the getter that survives reassignment, and adopting a later wrapper without cycling. Every property in it fails silently in a browser, so it has to be the same spec wherever the file is."
+        },
+        {
             "path": "vitest.config.ts",
             "why": "Same test policy everywhere, including allowOnly: false."
+        }
+    ],
+    "forks": [
+        {
+            "path": "README.md",
+            "why": "Each project's README opens with its own security card, in a fixed shape so the projects can be compared line by line. A shared README could not say '01 asks for no permissions and originates no request' and '02 asks for storage and DOES originate requests' at the same time, and that contrast is the repository's argument."
         },
         {
             "path": "public/icons/icon-16.png",
-            "why": "One glyph, written into every project by scripts/make-icons.mjs."
+            "why": "Each project's icon carries its own number and hue, both derived from its directory name by scripts/make-icons.mjs — three extensions loaded at once in a 16px toolbar have to be distinguishable, and one shared glyph makes hovering each in turn the only way to tell them apart. The reviewable artefact is still the script, not the PNG."
         },
         {
             "path": "public/icons/icon-32.png",
@@ -56,9 +66,7 @@
         {
             "path": "public/icons/icon-128.png",
             "why": "See icon-16.png."
-        }
-    ],
-    "forks": [
+        },
         {
             "path": "src/render.ts",
             "why": "01 has no deep links and no on/off switch, so its applyToTable takes no options object at all: applyToTable(tbody, lookup). 02 and 03 pass RenderOptions and own LINK_CLASS, OFF_CLASS, syncDeepLinks, restoreOriginalOrder and removeAllDecoration. Parameterising one file to cover both would put the settings vocabulary back into the project whose whole claim is that it has none."
@@ -69,11 +77,11 @@
         },
         {
             "path": "tests/unit/render.spec.ts",
-            "why": "Follows src/render.ts. 01's copy drops the deep-link, off-switch and removeAllDecoration blocks; the shared assertions (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each project proves them on its own code."
+            "why": "Follows src/render.ts. 01's copy drops the deep-link, last-event-column, retry-badge, off-switch and removeAllDecoration blocks; the shared assertions (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each project proves them on its own code."
         },
         {
             "path": "public/content.css",
-            "why": "01 has no .tuis-link buttons and no html.tuis-off master switch, so it ships neither rule. The connector rules are the same in both."
+            "why": "01 has no .tuis-link buttons, no .tuis-last-event / .tuis-col-head column, no .tuis-retry badge, no .tuis-card floating panel and no html.tuis-off master switch, so it ships none of those rules. The .tuis-prefix and .tuis-seg-* connector rules are the same in both."
         },
         {
             "path": "public/manifest.json",
@@ -89,7 +97,7 @@
         },
         {
             "path": "esbuild.mjs",
-            "why": "Entry points differ: 01 builds inject + content, 02 and 03 also build the popup."
+            "why": "Entry points differ: 01 builds inject + content; 02 and 03 also build the popup and src/apiInject.ts — a second MAIN-world bundle, which 01 has no use for because it never issues a request."
         }
     ]
 }
