@@ -1,7 +1,7 @@
 # How it works
 
-No backend, no credentials, and — in [`01-family-tree/`](../01-family-tree/) — no
-permissions at all. This document is the map: what runs where, why the design is
+No backend, no credentials to configure or store, and — in
+[`01-family-tree/`](../01-family-tree/) — no permissions at all. This document is the map: what runs where, why the design is
 shaped like this, and which parts are the traps that cost real time to find.
 
 Paths below are relative to a project directory. The mechanism is identical in
@@ -66,7 +66,7 @@ worth nothing if the rungs are not distinguished:
 | Backend needed | none | none. `02` talks to exactly one server — the one the page is already talking to |
 | Payloads decoded | none | **none.** Everything it draws comes from event metadata: types, ids, timestamps, attempt counts, activity type names. No input, result or failure message is read |
 | The page's `Authorization` header | never touched | held in one closure in `pageApi.ts`, attached to Temporal's own API and to nothing else. Never stored, never in a `postMessage`, never logged |
-| Instructions taken from the page | none — the MAIN-world half only ever *tells* the extension things | it **serves** `row-info-request` messages, which is a trust boundary. `postMessage` has no unforgeable sender, so the request cannot be the authority for what gets fetched; a per-namespace ledger of runs the page was actually handed is. Read [`../02-techniques/README.md`](../02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) before copying that half |
+| Instructions taken from the page | none — the MAIN-world half only ever *tells* the extension things | it **serves** `row-info-request` messages, which is a trust boundary in both directions. `postMessage` has no unforgeable sender, so the request cannot be the authority for what gets fetched (a per-namespace ledger of runs the page was actually handed is), and the `row-info-result` coming back cannot be trusted either — it is validated to the leaves and kept only if this side asked that exact question. Read [`../02-techniques/README.md`](../02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) before copying that half |
 
 What it costs, stated plainly:
 
@@ -290,7 +290,7 @@ middle one.
 **Traps 9 and 10 belong to a feature that is not in this tree yet.** They were met
 while building the hover panel that shows a workflow's input and result — which left
 this tree when the ladder was drawn at "02 decodes no payload", and which belongs to
-`03-goodies`, not yet written. They are
+stage 03, the payload stage, not yet written. They are
 recorded here anyway, because neither is a fact about that feature: they are facts
 about the pointer and scroll models, and they will bite the first floating panel you
 build over a page you do not own.
@@ -430,9 +430,9 @@ From `02-techniques`, three things, each of which you asked for:
   type, an event id, a timestamp, an attempt count, an activity type name. In
   particular the retry badge does **not** read `lastFailure.message`, which sits
   directly beside the attempt count it does read: a failure message is application
-  data, and this project's claim is that it never reads any. `03-goodies`, when it is
-  written, is where that boundary is deliberately crossed — with a codec server, and a
-  section of this document to itself.
+  data, and this project's claim is that it never reads any. Stage 03 — the payload
+  stage — is where that boundary is deliberately crossed, with a codec server, and it
+  gets a section of this document to itself when it is written.
 
 There is no analytics and no telemetry in any project. To check rather than
 believe:

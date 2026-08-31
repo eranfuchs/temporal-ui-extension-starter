@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Runs one npm script in every project: `node scripts/run-in-projects.mjs build`.
 //
-// The root package.json has no source of its own — the three projects do — so its
+// The root package.json has no source of its own — the projects do — so its
 // `build` / `test` / `typecheck` scripts are this, once per project. Deliberately
 // NOT npm workspaces: each project must stay clonable and buildable on its own,
 // which is the whole reason they are separate directories, and a workspace root

@@ -330,7 +330,7 @@ function checkVersionParity(project) {
 }
 
 // Every path the manifest promises the browser it will find. Derived from the
-// manifest rather than hardcoded, because the three projects ship different sets
+// manifest rather than hardcoded, because the projects ship different sets
 // of files — 01 has no popup at all — and a hardcoded list would either fail on
 // 01 or stop noticing a missing popup in 02.
 function manifestReferences(manifest) {

@@ -141,7 +141,11 @@ function apply(): void {
         links: settings.links,
         namespace,
         nowMs,
-        info: rowInfoFor,
+        // Bound to the namespace of the page being rendered. render.ts asks about a
+        // row, which is a (workflowId, runId); the store is keyed per namespace too,
+        // and this is where the third part comes from — the renderer never has to
+        // learn about it, and cannot look a row up in the wrong namespace.
+        info: (workflowId, runId) => rowInfoFor(namespace, workflowId, runId),
     });
 
     // AFTER rendering, never before: what is on the table decides what to ask

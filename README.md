@@ -1,10 +1,12 @@
 # Temporal UI extension starter
 
-Three small Chrome extensions that add a **parent/child family tree** to the
-Temporal Web UI — and, more to the point, a worked example of how to add your own
-view to a UI you do not own.
+Small Chrome extensions that add a **parent/child family tree** to the Temporal Web
+UI — and, more to the point, a worked example of how to add your own view to a UI
+you do not own. **Two of them are in this repository**, as the first two rungs of a
+ladder; the table below says what the later stages are planned to add and what each
+of them costs.
 
-No backend. No credentials. No changes to Temporal. They work on Temporal Cloud
+No backend. No credentials to configure or store. No changes to Temporal. They work on Temporal Cloud
 and on a local `temporal server start-dev` without a line of configuration,
 because they read the API responses the page is already fetching. 01 never talks
 to Temporal at all; 02 asks the page's own API two small questions per *running*
@@ -29,7 +31,7 @@ that is still worth installing, and **it asks for no permissions at all** — no
 
 ```bash
 git clone <this repo> && cd temporal-ui-extension-starter
-npm install                    # once, at the root: all three projects share it
+npm install                    # once, at the root: every project shares it
 cd 01-family-tree && npm run build
 ```
 
@@ -47,17 +49,18 @@ the same time are still distinguishable in a 16px toolbar.
 No Temporal to point it at? [`sample/`](sample/README.md) starts workflows that
 produce real parent/child families in about a minute.
 
-## The three projects
+## The projects
 
 They are separate extensions, not one extension with feature flags. Each is
 clonable and buildable on its own, and each rung of the ladder costs something
-visible:
+visible. Two rungs are here; the rest are planned:
 
 | Project | Adds | Permissions | Requests it makes | Worker |
 |---|---|---|---|---|
 | [`01-family-tree/`](01-family-tree/) | the family tree, and nothing else | **none** | **none** | none |
 | [`02-techniques/`](02-techniques/) | deep links to your own log tool (per row, and per activity on a workflow's own page), a settings pane, a "last event" column, a retrying-activity badge | `storage` | up to two per **running** row, to the page's own Temporal API, paced and cached. Nowhere else | none |
-| `03-goodies` — **planned, not here yet** | each workflow's input and result on hover, decoded through your codec server; column reorder; a larger page size; an activity finder; expand-to-families | `storage` | the above, plus a codec server you typed into the popup | none |
+| stage 03, the **payload stage** — planned, not here yet | each workflow's input and result on hover, decoded through your own codec server | `storage` | the above, plus the codec server you typed into the popup | none |
+| stage 04, conveniences — sketched only | column reorder, a larger page size, an activity finder, expand-to-families | `storage` | no new destination | none |
 
 The "requests" column is there because it is the one cost the manifest does
 **not** show. 02 declares no `host_permissions` and still originates requests: it
@@ -74,9 +77,14 @@ purpose, which is why the codec server, the first external dependency and the wh
 personal-data question arrive together, in one project, rather than being spread
 across the ladder.
 
-**03 is not written yet**, and there is no empty directory standing in for it. The
-row above says what it is planned to carry; every claim in the two rows above it is
-about code that is in this tree.
+03 is the rung that carries what most teams actually came for — seeing a workflow's
+input and result without leaving the list — which is why it is a stage of its own
+and not a bag of extras. The conveniences that were once bundled with it are stage
+04's problem; none of them changes what the extension can reach.
+
+**Neither 03 nor 04 is written yet**, and there is no empty directory standing in for
+either. The two rows above them say what they are planned to carry; every claim in
+the two rows above *those* is about code that is in this tree.
 
 That ladder is the argument this repository is making: a genuinely useful view
 costs zero permissions, and every permission after that should be traceable to a
@@ -119,7 +127,7 @@ The full walkthrough — including the traps that cost hours to find, from the
 Each project's README opens with a **security card** in a fixed shape:
 permissions, hosts, what it reads, what it writes, what it requests, what leaves
 the machine, and what third-party code is in the bundle. The cards are meant to
-be compared across the three projects.
+be compared across the projects, line by line.
 
 The cards are not maintained by good intentions:
 
@@ -219,7 +227,7 @@ Specific about which parts are proven:
 - **Not verified here** — either project against a self-hosted UI holding real
   workflows; the rate-limit backoff against a real Temporal rate limiter;
   `sample/` end-to-end, whose dependencies have not been installed on the machine it
-  was written on; and everything about `03-goodies`, which does not exist yet.
+  was written on; and everything about stages 03 and 04, which do not exist yet.
 
 Expect a self-hosted UI on another hostname to need that hostname adding to the
 project's `public/manifest.json` — and to `scripts/surface.json`, deliberately,

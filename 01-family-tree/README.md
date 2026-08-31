@@ -54,8 +54,8 @@ each file.
 ## Security card
 
 Every project in this repository carries one of these. It is the answer to "what
-does this thing actually do to my browser", in a fixed shape so the three
-projects can be compared line by line.
+does this thing actually do to my browser", in a fixed shape so the projects
+can be compared line by line.
 
 | | 01 — family tree |
 |---|---|
@@ -158,9 +158,10 @@ typechecker is where that claim is enforced rather than asserted.
 
 Deep links to your log tool, a settings pane, a last-event column and a
 retrying-activity badge are [`../02-techniques/`](../02-techniques/). Workflow
-input and result on hover — decoded through your codec server — plus column
-reorder, a bigger page size and a cross-workflow activity finder are the rung
-above that, `03-goodies`, which is not in this repository yet.
+input and result on hover, decoded through your codec server, are the rung above
+that — stage 03, the payload stage — and conveniences like column reorder, a bigger
+page size and a cross-workflow activity finder are the one above *that*. Neither is
+in this repository yet.
 
 Each step up the ladder costs something: 02 asks for `storage`, and — the part no
 manifest key shows — it **originates requests**, because two of the facts it puts

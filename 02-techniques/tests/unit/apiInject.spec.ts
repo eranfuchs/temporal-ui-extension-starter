@@ -71,13 +71,35 @@ const LIST_BODY = { executions: [{ execution: { workflowId: WORKFLOW_ID, runId: 
 // different set of runs on the page.
 let listBody: unknown = LIST_BODY;
 
-function fakeResponse(body: unknown): Response {
+// `bodyGate`, when a test passes one, delays `clone().text()` — the step the ledger
+// is filled from. It is deliberately separate from holding the response itself: the
+// interesting race is between two responses that have both ARRIVED and are being
+// parsed, and it cannot be produced by delaying arrival.
+function fakeResponse(body: unknown, bodyGate?: Promise<void>): Response {
     const text = JSON.stringify(body);
     return {
         ok: true,
         status: 200,
-        clone: () => ({ text: async () => text }),
+        clone: () => ({
+            text: async () => {
+                if (bodyGate) await bodyGate;
+                return text;
+            },
+        }),
         json: async () => JSON.parse(text),
+    } as unknown as Response;
+}
+
+// A response the server refused. Separate from fakeResponse because the two are
+// read by different code: `ok` decides which branch runs, and `headers` is reached
+// ONLY on the failing branch — refuse() in rowInfoServe.ts asks it for Retry-After.
+// A fake without headers turns "the 429 path" into a TypeError that passes as a
+// failure for the wrong reason.
+function failedResponse(status: number, retryAfter: string | null): Response {
+    return {
+        ok: false,
+        status,
+        headers: { get: (name: string) => (name.toLowerCase() === 'retry-after' ? retryAfter : null) },
     } as unknown as Response;
 }
 
@@ -99,17 +121,56 @@ const capture = (event: MessageEvent) => {
 const reverseCalls = () => reachedNetwork.filter((seen) => seen.url.includes('/history-reverse'));
 const describeCalls = () => reachedNetwork.filter((seen) => /\/workflows\/[^/?]+\?/.test(seen.url));
 
+// Which requests the fake network HOLDS OPEN until a test lets them go.
+//
+// Without this, a test that claims something about slowness proves nothing: if
+// every fake response resolves immediately, "the fast row answered first" is true
+// of a batched implementation too. Timing claims need a network the test controls.
+let holdWhen: ((url: string) => boolean) | null = null;
+
+// Which responses have their BODY PARSE held. The ledger is filled off
+// `clone.text()` a moment after a list response arrives, so this is the only way to
+// make two overlapping list responses finish parsing in the opposite order to their
+// arrival — the case a single "the parse in flight" promise cannot cover.
+let holdBodyWhen: ((url: string) => boolean) | null = null;
+
+// Which requests the fake network REFUSES, and with what — the status, and a
+// Retry-After when the test is about backoff. Per-url rather than global, because
+// the interesting assertions are about what a refusal does to the OTHER rows.
+let failWhen: ((url: string) => { status: number; retryAfter?: string } | null) | null = null;
+
+// Both kinds of hold release from here, so one call in afterEach cannot miss one.
+let held: (() => void)[] = [];
+
+function releaseHeld(): void {
+    const waiting = held;
+    held = [];
+    for (const release of waiting) release();
+}
+
 // The stand-in at the bottom of every chain: answers each of the two per-row
 // routes with its own body, and anything else with a workflow list.
 function bottomFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = String(typeof input === 'object' && 'url' in input ? input.url : input);
     const headers = new Headers(init?.headers ?? {});
     reachedNetwork.push({ url, authorization: headers.get('authorization') });
-    if (url.includes('/history-reverse')) return Promise.resolve(fakeResponse(reverseHistoryBody));
-    // A describe URL names a workflow AND carries a query; the list URL carries a
-    // query but names no workflow.
-    if (/\/workflows\/[^/?]+\?/.test(url)) return Promise.resolve(fakeResponse(describeBody));
-    return Promise.resolve(fakeResponse(listBody));
+    const body = url.includes('/history-reverse')
+        ? reverseHistoryBody
+        : // A describe URL names a workflow AND carries a query; the list URL
+          // carries a query but names no workflow.
+          /\/workflows\/[^/?]+\?/.test(url)
+          ? describeBody
+          : listBody;
+    const bodyGate = holdBodyWhen?.(url) ? new Promise<void>((resolve) => held.push(resolve)) : undefined;
+    const refusal = failWhen?.(url) ?? null;
+    // Built when the hold is let go rather than now, so a refusal and a hold can be
+    // combined in one test.
+    const answer = () =>
+        refusal ? failedResponse(refusal.status, refusal.retryAfter ?? null) : fakeResponse(body, bodyGate);
+    if (holdWhen?.(url)) {
+        return new Promise<Response>((resolve) => held.push(() => resolve(answer())));
+    }
+    return Promise.resolve(answer());
 }
 
 function rowInfoRequest(overrides: Partial<RowInfoRequest> = {}): RowInfoRequest {
@@ -189,6 +250,10 @@ beforeEach(async () => {
     reverseHistoryBody = LAST_EVENT_BODY;
     describeBody = STUCK_DESCRIBE_BODY;
     listBody = LIST_BODY;
+    holdWhen = null;
+    holdBodyWhen = null;
+    failWhen = null;
+    held = [];
     // writable + configurable, because the previous test left a getter here.
     Object.defineProperty(window, 'fetch', { configurable: true, writable: true, value: bottomFetch });
     await loadMainWorldScripts();
@@ -196,6 +261,12 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+    // Let go of anything a test held, so a failed assertion cannot leave a
+    // never-settling promise behind for the next one.
+    holdWhen = null;
+    holdBodyWhen = null;
+    failWhen = null;
+    releaseHeld();
     window.removeEventListener('message', capture);
     for (const { type, listener } of installed) window.removeEventListener(type, listener);
 });
@@ -339,6 +410,48 @@ describe('answering only for runs the page itself listed', () => {
         expect(result!.lastEvent).not.toBeNull();
     });
 
+    it('waits for EVERY list parse in flight, not only the newest', async () => {
+        // The ledger used to hold ONE promise for "the parse in flight", and a
+        // second list response overwrote it. Two of them overlap routinely — the UI
+        // polls its own list, the namespace picker fetches another — and they finish
+        // in whatever order their bodies happen to parse in. A question about a row
+        // from the FIRST response then awaited only the SECOND's parse, found the
+        // ledger without that row, and REFUSED it: a false refusal, in the one code
+        // path whose whole job is deciding what may be fetched with the page's
+        // bearer. It would present as the column being intermittently empty.
+        //
+        // Made deterministic by holding the first response's body parse open, so the
+        // two finish in the opposite order to their arrival. A namespace of its own,
+        // because this describe's beforeEach has already listed the default one and
+        // an already-filled ledger would answer regardless.
+        const THIRD_WORKFLOW_ID = 'shipment-3';
+        const THIRD_RUN_ID = '00000000-0000-4000-8000-000000000003';
+        holdBodyWhen = (url) => url.includes('nextPageToken=page-1');
+
+        // Arrives first, carries the row we will ask about, and its parse hangs.
+        listBody = { executions: [{ execution: { workflowId: OTHER_WORKFLOW_ID, runId: OTHER_RUN_ID } }] };
+        await window.fetch(`${OTHER_LIST_URL}&nextPageToken=page-1`, { headers: { authorization: OTHER_BEARER } });
+        // Arrives second and parses at once, so it is the one a single-promise
+        // ledger is left waiting on — and it does not carry our row.
+        listBody = { executions: [{ execution: { workflowId: THIRD_WORKFLOW_ID, runId: THIRD_RUN_ID } }] };
+        await window.fetch(`${OTHER_LIST_URL}&nextPageToken=page-2`, { headers: { authorization: OTHER_BEARER } });
+
+        const answered = askRows({
+            ...ONE_QUESTION,
+            namespace: OTHER_NAMESPACE,
+            runs: [{ workflowId: OTHER_WORKFLOW_ID, runId: OTHER_RUN_ID }],
+        });
+        // One hop, so the question reaches the gate and has its chance to be refused
+        // BEFORE the held parse is let go. Releasing in the same turn as the
+        // dispatch would let the broken version pass.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        releaseHeld();
+        const [result] = await answered;
+
+        expect(result!.error).toBeNull();
+        expect(result!.lastEvent).not.toBeNull();
+    });
+
     it('keeps one namespace’s list from standing in for another’s', async () => {
         // Finding 2. A Temporal UI page fetches lists for more than one namespace —
         // the namespace picker does — and a single global record was overwritten by
@@ -448,7 +561,19 @@ describe('asking Temporal about rows the page is showing', () => {
         expect(posted).toContain('1518');
     });
 
-    it('answers each run separately, so a slow row does not hold up a fast one', async () => {
+    it('answers a fast row while an EARLIER slow row is still in the air', async () => {
+        // ONE MESSAGE PER RUN, not one per batch — and the difference only shows
+        // when one row is genuinely slower than the other.
+        //
+        // Two things about this test were got wrong before, and both made it pass
+        // for the wrong reason:
+        //   • it let both fake responses resolve immediately, so "two answers
+        //     arrived" was also true of an implementation that awaited every row
+        //     before replying. The fake network now HOLDS the slow row open.
+        //   • it held the row asked about LAST, which a strictly sequential
+        //     implementation answers in the right order anyway. The held row must
+        //     be the FIRST one asked about; then only an implementation that does
+        //     not queue behind it can answer the second.
         listBody = {
             executions: [
                 { execution: { workflowId: WORKFLOW_ID, runId: RUN_ID } },
@@ -457,15 +582,39 @@ describe('asking Temporal about rows the page is showing', () => {
         };
         await window.fetch(LIST_URL, { headers: { authorization: BEARER } });
 
-        const answers = await askRows({
-            runs: [
-                { workflowId: WORKFLOW_ID, runId: RUN_ID },
-                { workflowId: SECOND_WORKFLOW_ID, runId: SECOND_RUN_ID },
-            ],
-        });
+        // Both of the FIRST row's requests hang; the second row's are answered at
+        // once. Set after the list call, which must not be held.
+        holdWhen = (url) => url.includes(WORKFLOW_ID);
 
+        const before = rowInfoResults.length;
+        window.dispatchEvent(
+            new MessageEvent('message', {
+                data: rowInfoRequest({
+                    runs: [
+                        { workflowId: WORKFLOW_ID, runId: RUN_ID },
+                        { workflowId: SECOND_WORKFLOW_ID, runId: SECOND_RUN_ID },
+                    ],
+                }),
+                source: window,
+            }),
+        );
+        await settle();
+
+        // The slow row's requests really are outstanding — asserted, so that the
+        // assertion below is about ordering and not about a row nobody asked for.
+        expect(held).toHaveLength(2);
+        const early = rowInfoResults.slice(before);
+        expect(early).toHaveLength(1);
+        expect(early[0]!.workflowId).toBe(SECOND_WORKFLOW_ID);
+        expect(early[0]!.lastEvent).not.toBeNull();
+
+        releaseHeld();
+        await settle();
+
+        const answers = rowInfoResults.slice(before);
         expect(answers).toHaveLength(2);
-        expect(answers.map((answer) => answer.workflowId).sort()).toEqual([WORKFLOW_ID, SECOND_WORKFLOW_ID].sort());
+        expect(answers[1]!.workflowId).toBe(WORKFLOW_ID);
+        expect(answers[1]!.lastEvent).not.toBeNull();
         // Answers are matched by (workflowId, runId) rather than by a request id,
         // so every message has to name the run it is about.
         expect(answers.every((answer) => answer.runId.length > 0)).toBe(true);
@@ -516,6 +665,221 @@ describe('asking Temporal about rows the page is showing', () => {
 
         expect(rowInfoResults).toHaveLength(0);
         expect(reachedNetwork).toHaveLength(before);
+    });
+});
+
+// ── The four things that keep this from being a load generator ────────────────
+//
+// rowInfoServe.ts opens by naming four of them, and until this block existed only
+// one was asserted from outside: a cache HIT, by the "asks the network once and
+// answers a repeat from the cache" test above. TTL EXPIRY, IN-FLIGHT COALESCING,
+// FAILURE CACHING, the CONCURRENCY CAP and the 429 BACKOFF WIRING were claims in a
+// comment. Each of them is a claim about how much traffic this extension makes with
+// the page's own credentials, which is the one cost a reader of this repository
+// cannot measure for themselves, so each gets a test that COUNTS REQUESTS.
+//
+// These drive the two modules together, through the message bus and the fake
+// network. The pacer's own invariants — a slot held across a backoff, the longest
+// overlapping Retry-After winning, a success during a block not resetting the
+// doubling — are pinned with a fake clock and no network in tests/unit/pacer.spec.ts.
+describe('the four things that keep the per-row questions affordable', () => {
+    // Mirrors TTL_MS and the pacer's maxConcurrent in src/rowInfoServe.ts, neither
+    // of which is exported: a static import of that module here would run
+    // pageApi.ts — and install its window.fetch property — before beforeEach could
+    // put the fake network in place. Duplicating the two numbers is self-detecting
+    // rather than a drift risk: change either in the source and the boundary
+    // assertions below go red, which is what they are for.
+    const TTL_MS = 30_000;
+    const MAX_CONCURRENT = 4;
+    // More rows than the cap, so something has to queue. With MAX_CONCURRENT or
+    // fewer, "four at a time" is also true of an implementation with no cap at all.
+    const BUSY_ROWS = MAX_CONCURRENT * 3;
+
+    const SECOND_WORKFLOW_ID = 'order-2';
+    const SECOND_RUN = { workflowId: SECOND_WORKFLOW_ID, runId: '00000000-0000-4000-8000-000000000009' };
+    const FIRST_RUN = { workflowId: WORKFLOW_ID, runId: RUN_ID };
+
+    type Runs = RowInfoRequest['runs'];
+
+    // What the page was handed, which is what the ledger will authorise.
+    const listing = (runs: Runs): unknown => ({ executions: runs.map((run) => ({ execution: run })) });
+
+    const manyRuns = (count: number): Runs =>
+        Array.from({ length: count }, (_, index) => ({
+            workflowId: `order-${index}`,
+            runId: `00000000-0000-4000-8000-0000000002${String(index).padStart(2, '0')}`,
+        }));
+
+    // Dispatched without settling, because three of these tests are about what has
+    // NOT happened yet.
+    const ask = (overrides: Partial<RowInfoRequest>): void => {
+        window.dispatchEvent(new MessageEvent('message', { data: rowInfoRequest(overrides), source: window }));
+    };
+
+    const newest = (): RowInfoResult => {
+        const last = rowInfoResults.at(-1);
+        expect(last).toBeDefined();
+        return last!;
+    };
+
+    beforeEach(async () => {
+        await window.fetch(LIST_URL, { headers: { authorization: BEARER } });
+    });
+
+    it('asks again once an answer has gone stale, and not a moment before', async () => {
+        // 1. THE TTL CACHE — its expiry, which is the half that decides the
+        // traffic. A TTL that never expires is a column that silently stops
+        // updating; one that expires immediately is a request per DOM mutation, and
+        // the Temporal UI produces dozens of those a second while it re-renders.
+        const start = Date.now();
+        const clock = vi.spyOn(Date, 'now');
+        try {
+            clock.mockReturnValue(start);
+            await askRows({ want: ['lastEvent'] });
+            expect(reverseCalls()).toHaveLength(1);
+
+            // One millisecond inside the window: answered, without a request.
+            clock.mockReturnValue(start + TTL_MS - 1);
+            expect((await askOneRow({ want: ['lastEvent'] })).lastEvent).not.toBeNull();
+            expect(reverseCalls()).toHaveLength(1);
+
+            // And one millisecond outside it. Both sides are asserted because
+            // either one alone passes for an implementation with no cache and for
+            // one that never expires.
+            clock.mockReturnValue(start + TTL_MS);
+            expect((await askOneRow({ want: ['lastEvent'] })).lastEvent).not.toBeNull();
+            expect(reverseCalls()).toHaveLength(2);
+        } finally {
+            clock.mockRestore();
+        }
+    });
+
+    it('turns many render passes during one slow request into one request', async () => {
+        // 2. IN-FLIGHT COALESCING, which the cache above cannot do: nothing has
+        // been answered yet, so there is nothing to hit. A request that takes a
+        // second outlives dozens of render passes, and each of them asks again.
+        holdWhen = (url) => url.includes('/history-reverse');
+        const before = rowInfoResults.length;
+        for (let pass = 0; pass < BUSY_ROWS; pass++) ask({ want: ['lastEvent'] });
+        await settle();
+
+        expect(reverseCalls()).toHaveLength(1);
+        expect(rowInfoResults.slice(before)).toHaveLength(0);
+
+        holdWhen = null;
+        releaseHeld();
+        await settle();
+
+        // Every pass is then answered off that one response. Asserting the ANSWERS
+        // as well as the request is what separates coalescing from the later
+        // questions being dropped on the floor — which would leave the column empty
+        // and pass a request count on its own.
+        const answers = rowInfoResults.slice(before);
+        expect(answers).toHaveLength(BUSY_ROWS);
+        expect(answers.every((answer) => answer.lastEvent !== null)).toBe(true);
+        expect(reverseCalls()).toHaveLength(1);
+    });
+
+    it('caches a refusal too, without pausing the rows that were not refused', async () => {
+        // 3a. A FAILURE IS CACHED, on the same TTL. Otherwise every render pass
+        // retries a request that has just failed, which is the fastest way to turn
+        // one 403 into a thousand.
+        listBody = listing([FIRST_RUN, SECOND_RUN]);
+        await window.fetch(LIST_URL, { headers: { authorization: BEARER } });
+        failWhen = (url) => (url.includes(WORKFLOW_ID) ? { status: 403 } : null);
+
+        const first = await askOneRow({ want: ['lastEvent'] });
+        const again = await askOneRow({ want: ['lastEvent'] });
+
+        expect(first.error).toMatch(/HTTP 403/);
+        expect(first.lastEvent).toBeNull();
+        expect(again.error).toBe(first.error);
+        expect(reverseCalls()).toHaveLength(1);
+
+        // 3b. And a 403 is a permanent answer for THAT run, not a signal to slow
+        // down — only 429 and 503 mean "later". A row the server never refused
+        // still asks at once and still answers.
+        const other = await askOneRow({ want: ['lastEvent'], runs: [SECOND_RUN] });
+        expect(other.error).toBeNull();
+        expect(other.lastEvent).not.toBeNull();
+        expect(reverseCalls()).toHaveLength(2);
+    });
+
+    it('keeps a capped number of requests in the air, not one per row', async () => {
+        // 4. THE CONCURRENCY CAP. A hundred running rows is two hundred requests,
+        // and fired at once they arrive looking, from the server's side, exactly
+        // like an attack. This is the assertion that a burst is a queue.
+        const runs = manyRuns(BUSY_ROWS);
+        listBody = listing(runs);
+        await window.fetch(LIST_URL, { headers: { authorization: BEARER } });
+
+        // Set after the list call, which must not be held.
+        holdWhen = (url) => url.includes('/history-reverse');
+        const before = rowInfoResults.length;
+        ask({ want: ['lastEvent'], runs });
+        await settle();
+
+        expect(reverseCalls()).toHaveLength(MAX_CONCURRENT);
+        expect(rowInfoResults.slice(before)).toHaveLength(0);
+
+        holdWhen = null;
+        releaseHeld();
+        await settle();
+
+        // The queue drains rather than being dropped: a cap that lost the rest
+        // would satisfy the assertion above and leave most of the column empty.
+        expect(reverseCalls()).toHaveLength(BUSY_ROWS);
+        expect(rowInfoResults.slice(before)).toHaveLength(BUSY_ROWS);
+    });
+
+    it('stops asking for as long as a 429 asked for, then resumes', async () => {
+        // 4b. BACKOFF, and specifically its WIRING: the Retry-After header has to
+        // reach the pacer, and the pause it produces has to apply to rows that had
+        // nothing to do with the refused one.
+        //
+        // Fake timers rather than settle(), because that pause is a real sleep. Left
+        // to run for real it fires during a LATER test, where its fetch lands in
+        // that test's request log — the cross-test contamination the note above
+        // loadMainWorldScripts() is about, arriving from the other direction.
+        const ADVISED_MS = 5_000;
+        listBody = listing([FIRST_RUN, SECOND_RUN]);
+        await window.fetch(LIST_URL, { headers: { authorization: BEARER } });
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        // Date is faked WITH the timers on purpose: the pacer re-checks the clock
+        // after each sleep, so a clock that did not move would sleep again forever.
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: Date.now() });
+        try {
+            failWhen = () => ({ status: 429, retryAfter: String(ADVISED_MS / 1000) });
+            ask({ want: ['lastEvent'] });
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(reverseCalls()).toHaveLength(1);
+            // Not "HTTP 429": the tooltip has to say this is temporary, because the
+            // user's next move otherwise is to reload the page and ask again.
+            expect(newest().error).toMatch(/rate-limiting/);
+            // The header, not the built-in doubling. The log line is the only place
+            // the wait it settled on is visible, which is why it is asserted.
+            expect(
+                warn.mock.calls.some((call) => String(call[1]).includes(`pausing row info for ${ADVISED_MS / 1000}s`)),
+            ).toBe(true);
+
+            // A different row, which the server never refused — and which is
+            // nevertheless not asked about while the pause lasts.
+            failWhen = null;
+            ask({ want: ['lastEvent'], runs: [SECOND_RUN] });
+            await vi.advanceTimersByTimeAsync(ADVISED_MS - 1);
+            expect(reverseCalls()).toHaveLength(1);
+
+            // …and asked about when the pause expires, rather than never. A backoff
+            // that never lifts is indistinguishable from the feature being broken.
+            await vi.advanceTimersByTimeAsync(2);
+            expect(reverseCalls()).toHaveLength(2);
+            expect(newest().error).toBeNull();
+        } finally {
+            vi.useRealTimers();
+            warn.mockRestore();
+        }
     });
 });
 

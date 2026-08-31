@@ -1,7 +1,13 @@
 // Settings, stored in chrome.storage.sync.
 //
-// `storage` is the ONLY permission this extension asks for. It reads no hosts,
-// holds no credentials and makes no requests of its own — see docs/how-it-works.md.
+// `storage` is the ONLY permission this extension asks for, and it holds no
+// credential of its own.
+//
+// It DOES make requests — that is the point of this stage. They go to the API the
+// page is already talking to, from inside the page, with the page's own session,
+// and only for runs that page was already handed: see src/pageApi.ts for the
+// ledger that enforces the last part, and src/pacer.ts for what keeps the volume
+// down. Two of the toggles below are what turn those requests on.
 
 import type { DeepLinkTemplate } from './deepLink';
 
@@ -25,8 +31,9 @@ export interface Settings {
 // There is deliberately no codec-server setting in this build. Reading a payload
 // means decoding it, and decoding one Temporal cannot decode for you means sending
 // it to a server — the first thing here that would move workflow data off the
-// machine. That is 03-goodies, where the egress has a section of its own; this
-// project's whole claim is that it learns what it knows from event METADATA.
+// machine. That is stage 03, the payload stage, where the egress gets a section of
+// its own; this project's whole claim is that it learns what it knows from event
+// METADATA.
 
 // The default link points at example.com on purpose: it is a reserved
 // documentation domain, so it cannot accidentally send a workflow id to someone

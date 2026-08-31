@@ -9,7 +9,7 @@
 // pass — including the "inconclusive" exit, because an archive is the one
 // artefact that leaves this machine and a half-checked one is indistinguishable
 // from a checked one. Preflight is repo-wide on purpose: the leak gate does not
-// become less relevant because you are only shipping one of three projects.
+// become less relevant because you are only shipping one of the projects.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';

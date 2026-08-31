@@ -119,14 +119,32 @@ function decodeSafely(raw: string): string {
 // about a DIFFERENT workflow must not be drawn onto this one. A single-page app
 // keeps fetching after you navigate, so this is not hypothetical.
 //
-// A missing run id is accepted when the workflow and namespace match. It means the
-// page asked about "the latest run" without naming it, so whatever the server
-// answered is by definition what the page is displaying — we are reading the
-// page's own request, not making one of our own.
+// A RUNLESS ANSWER IS ACCEPTED ONLY ON A RUNLESS PAGE, and that asymmetry is the
+// correction to this function's first version, which accepted one anywhere.
+//
+// A request with no `execution.runId` means "the latest run of this workflow id",
+// and the latest run is NOT necessarily the run on screen: open an older attempt of
+// a retried workflow and the two differ. The old rule read "we are only watching
+// the page's own request, so whatever came back is what the page is showing" — true
+// of the page's own rendering, false of ours, because the URL we compare against is
+// the run in the address bar, not whatever the app last asked for. On a run page a
+// runless answer was folded straight into another run's card, with no marker that
+// anything was mixed: an activity list belonging to attempt 12 under the heading of
+// attempt 3.
+//
+// Rejecting it costs nothing in practice. The Temporal UI names the run on every
+// history and describe call it makes from a run page — its own fetch omits
+// `execution.runId` only when it was not given one — so the card is not starved by
+// being strict here. And detailRefFromPath() above refuses a URL with no run id, so
+// on the only page this feature draws on, `page.runId` is never null.
+//
+// Which is why the rule is plain equality rather than a special case for null: it
+// pairs a runless answer with a runless page and refuses every other combination,
+// including the one that used to slip through as `answer.runId === null ||`.
 export function acceptFactsFor(page: DetailRef, answer: DetailRef): boolean {
     if (page.namespace !== answer.namespace) return false;
     if (page.workflowId !== answer.workflowId) return false;
-    return answer.runId === null || answer.runId === page.runId;
+    return answer.runId === page.runId;
 }
 
 // ── What we fold out of the two responses ────────────────────────────────────

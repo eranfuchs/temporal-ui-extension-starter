@@ -109,8 +109,24 @@ describe('acceptFactsFor', () => {
         expect(acceptFactsFor(page, { namespace: NS, workflowId: 'order-42', runId: RUN })).toBe(true);
     });
 
-    it('accepts an answer that did not name a run, because the page did not either', () => {
-        expect(acceptFactsFor(page, { namespace: NS, workflowId: 'order-42', runId: null })).toBe(true);
+    it('refuses an answer that named no run while the page names one', () => {
+        // A request without `execution.runId` asks for the LATEST run, which on a
+        // retried workflow is not the run in the address bar. This test's ancestor
+        // asserted the opposite and was titled "because the page did not either" —
+        // while passing a page that did. Two runs' facts merged into one card, with
+        // nothing on screen to say so.
+        expect(acceptFactsFor(page, { namespace: NS, workflowId: 'order-42', runId: null })).toBe(false);
+    });
+
+    it('accepts an answer that named no run when the page names none either', () => {
+        // The other half, so this is a rule about matching rather than a blanket
+        // refusal: a workflow-scoped view asks runless questions and gets runless
+        // answers, and those belong together.
+        const runless = { namespace: NS, workflowId: 'order-42', runId: null };
+        expect(acceptFactsFor(runless, { namespace: NS, workflowId: 'order-42', runId: null })).toBe(true);
+        // …and a run-specific answer still does not belong on a runless page: it may
+        // be any run of that workflow, not the one the page would have shown.
+        expect(acceptFactsFor(runless, { namespace: NS, workflowId: 'order-42', runId: RUN })).toBe(false);
     });
 
     it('refuses another run, another workflow and another namespace', () => {

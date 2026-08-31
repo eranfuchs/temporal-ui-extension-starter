@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Lineage gate — the three projects duplicate files on purpose, and this is what
+// Lineage gate — the projects duplicate files on purpose, and this is what
 // keeps that duplication honest.
 //
 // WHY THE DUPLICATION EXISTS

@@ -74,19 +74,80 @@ describe('isRowInfoRequest', () => {
 });
 
 describe('isRowInfoResult', () => {
+    const GOOD_EVENT = { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW };
+    const GOOD_RETRY = {
+        activityType: 'ChargeCard',
+        attempt: 3,
+        maximumAttempts: 5,
+        nextRetryAtMs: NOW + 1_000,
+        scheduledAtMs: NOW - 1_000,
+    };
+    const GOOD_ANSWER = {
+        source: MESSAGE_SOURCE,
+        type: 'row-info-result',
+        namespace: 'sample-namespace',
+        ...RUN,
+        lastEvent: null,
+        retry: null,
+        error: null,
+    };
+
     it('accepts an answer and rejects the page’s own traffic', () => {
-        const answer = {
-            source: MESSAGE_SOURCE,
-            type: 'row-info-result',
-            ...RUN,
-            lastEvent: null,
-            retry: null,
-            error: null,
-        };
-        expect(isRowInfoResult(answer)).toBe(true);
-        expect(isRowInfoResult({ ...answer, type: 'workflows' })).toBe(false);
-        expect(isRowInfoResult({ ...answer, source: 'temporal-ui' })).toBe(false);
+        expect(isRowInfoResult(GOOD_ANSWER)).toBe(true);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: GOOD_EVENT, retry: GOOD_RETRY })).toBe(true);
+        // Every optional number may be null and only null — that is what "asked,
+        // and Temporal did not say" looks like on the wire.
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: null } })).toBe(true);
+        expect(
+            isRowInfoResult({
+                ...GOOD_ANSWER,
+                retry: { ...GOOD_RETRY, maximumAttempts: null, nextRetryAtMs: null, scheduledAtMs: null },
+            }),
+        ).toBe(true);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, error: 'HTTP 403' })).toBe(true);
+
+        expect(isRowInfoResult({ ...GOOD_ANSWER, type: 'workflows' })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, source: 'temporal-ui' })).toBe(false);
         expect(isRowInfoResult(undefined)).toBe(false);
+        // The namespace is what the receiving side files the answer under, so an
+        // answer that does not name one cannot be filed anywhere.
+        expect(isRowInfoResult({ ...GOOD_ANSWER, namespace: '' })).toBe(false);
+        const { namespace: _dropped, ...noNamespace } = GOOD_ANSWER;
+        expect(isRowInfoResult(noNamespace)).toBe(false);
+    });
+
+    it('validates the nested objects, not just the envelope', () => {
+        // The declared type says `LastEvent | null` and the renderer reads
+        // `event.eventType` straight into a template. Before this check the guard
+        // looked at four fields, so `{lastEvent: 42}` type-checked its way through
+        // to a property read on a number — a well-formed envelope is the easy half.
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: 42 })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: {} })).toBe(false);
+        // int64 in the proto, therefore a STRING in JSON. A number here means
+        // somebody re-typed the field and lost precision on the way.
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, eventId: 42 } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, eventType: null } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: '2026-01-01' } })).toBe(false);
+
+        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { attempt: 3 } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, attempt: '3' } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, activityType: 7 } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, scheduledAtMs: 'soon' } })).toBe(false);
+
+        expect(isRowInfoResult({ ...GOOD_ANSWER, error: 404 })).toBe(false);
+    });
+
+    it('rejects NaN and undefined where it declares number | null', () => {
+        // NaN is a number to typeof and formats as "NaN" in a tooltip; undefined
+        // means "this field was never set", which is a different message from one
+        // that says "asked, and there is nothing". Neither can come from our own
+        // serve — numberOf and timeToMs return null — so rejecting both is free.
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: NaN } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: undefined } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, attempt: Infinity } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, maximumAttempts: NaN } })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: undefined })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, error: undefined })).toBe(false);
     });
 });
 

@@ -4,7 +4,7 @@
 // WHY: this is the failure mode that produces a confident, wrong answer months
 // later. A README says "see src/inject.ts"; the file moves into a project
 // directory; the sentence still reads fine and nothing fails. Someone follows it,
-// finds nothing, and concludes the feature was removed. The three projects in
+// finds nothing, and concludes the feature was removed. The projects in
 // this repository were created by MOVING every source file at once, so every path
 // in every document was wrong simultaneously — which is what made a gate cheaper
 // than proofreading.

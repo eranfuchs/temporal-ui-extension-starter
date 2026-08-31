@@ -1,9 +1,9 @@
 {
     "name": "temporal-ui-extension-starter",
-    "version": "0.7.0",
+    "version": "0.8.1",
     "private": true,
     "type": "module",
-    "description": "Three standalone Chrome extensions, in increasing order of ambition, showing how to add your own view to the Temporal Web UI without a backend, a credential, or a change to Temporal.",
+    "description": "Standalone Chrome extensions, in increasing order of ambition, showing how to add your own view to the Temporal Web UI without a backend, a credential, or a change to Temporal. Two of them are here; the payload stage is not written yet.",
     "license": "MIT",
     "engines": {
         "node": ">=22"

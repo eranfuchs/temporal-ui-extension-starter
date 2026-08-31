@@ -22,7 +22,7 @@ const STROKE = [0xe6, 0xed, 0xf3, 0xff];
 
 // ── Telling the projects apart ───────────────────────────────────────────────
 //
-// Three extensions from one repository, loaded at the same time, in a toolbar
+// Several extensions from one repository, loaded at the same time, in a toolbar
 // that shows them at 16px: one glyph for all of them means the only way to know
 // which is which is to hover each in turn. So each project's icon carries its
 // own NUMBER — the same number as its directory — and its own hue.
@@ -247,8 +247,8 @@ function encodePng(size, pixels) {
 
 // One glyph per project, because the number and the hue come from the project.
 // These files are therefore a declared FORK in scripts/lineage.json, not a shared
-// file — three extensions that look identical in a toolbar are indistinguishable
-// exactly when it matters, which is while all three are loaded.
+// file — extensions that look identical in a toolbar are indistinguishable
+// exactly when it matters, which is while all of them are loaded.
 const projects = discoverProjects().filter((project) => !project.incomplete);
 if (projects.length === 0) {
     console.error('No projects found — nothing to write icons into.');

@@ -15,26 +15,26 @@
 // in the MAIN world would have to be told the rows over postMessage and would
 // then be pacing whatever a forged message asked for.
 //
-// FOUR THINGS KEEP THIS FROM BEING A LOAD GENERATOR, and every one of them is
-// here rather than in the caller:
+// FOUR THINGS KEEP THIS FROM BEING A LOAD GENERATOR, and every one of them is on
+// this side of the boundary rather than in the caller:
 //
 //   1. A TTL CACHE, per (run, field). A render pass happens on every DOM mutation
 //      — dozens per second while the Temporal UI re-renders — and without this,
 //      each one would be a fresh round of requests.
 //   2. IN-FLIGHT COALESCING. Ten render passes during one slow request must
 //      produce one request, not ten. The pending promise is the dedupe key.
-//   3. A CONCURRENCY CAP. A hundred running rows is two hundred requests; fired
-//      at once they arrive as a burst that looks, from the server's side, exactly
-//      like an attack. Four at a time turns it into a queue that drains in
-//      seconds.
-//   4. BACKOFF ON 429/503, honouring Retry-After. A rate limiter answered with
-//      more requests is a rate limiter that escalates.
+//   3. A CONCURRENCY CAP, and
+//   4. BACKOFF ON 429/503 honouring Retry-After — both in src/pacer.ts, which
+//      exists as a separate module because it is about TIME and therefore needs an
+//      injected clock to be testable at all. It was inline here, untested, and
+//      wrong: read the note at the top of that file before copying either idea.
 //
 // It also refreshes for free: the Temporal UI polls its own workflow list, every
 // poll re-renders the table, every re-render asks again, and the TTL decides
 // whether that becomes a request. Nothing here holds a timer of its own.
 
 import { fetchFailureMessage, fetchForListedRun, replyToPage, TAG } from './pageApi';
+import { makePacer } from './pacer';
 import {
     readLastEvent,
     readPendingRetry,
@@ -52,41 +52,29 @@ import { MESSAGE_SOURCE } from './types';
 // single number that decides how much traffic the feature makes.
 const TTL_MS = 30_000;
 
-const MAX_CONCURRENT = 4;
-
-// Where backoff starts and stops. The ceiling matters more than the floor: an
-// unbounded doubling eventually parks the feature for an hour and looks like it
-// broke.
-const BACKOFF_START_MS = 2_000;
-const BACKOFF_CEILING_MS = 60_000;
-
 // ── The pacer ────────────────────────────────────────────────────────────────
-
-let active = 0;
-const waiting: (() => void)[] = [];
-let blockedUntil = 0;
-let backoffMs = BACKOFF_START_MS;
-
-async function paced<T>(work: () => Promise<T>): Promise<T> {
-    // A while, not an if: being woken only means a slot was freed, and another
-    // waiter may have taken it first.
-    while (active >= MAX_CONCURRENT) {
-        await new Promise<void>((resolve) => waiting.push(resolve));
-    }
-    const pause = blockedUntil - Date.now();
-    if (pause > 0) await sleep(pause);
-    active++;
-    try {
-        return await work();
-    } finally {
-        active--;
-        waiting.shift()?.();
-    }
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
+//
+// Points 3 and 4 of the four above live in src/pacer.ts, with the clock and the
+// sleep injected so that "never more than four, even coming out of a backoff" is a
+// test rather than a claim. It was inline here, and it was broken here; the note at
+// the top of that file says exactly how.
+//
+// This is the only pacer in the extension, and every request in this file goes
+// through it. There is nowhere else a fetch to Temporal can be added from.
+const pacer = makePacer(
+    { now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
+    {
+        // A hundred running rows is two hundred requests; fired at once they arrive
+        // as a burst that looks, from the server's side, exactly like an attack.
+        // Four at a time turns it into a queue that drains in seconds.
+        maxConcurrent: 4,
+        backoffStartMs: 2_000,
+        backoffCeilingMs: 60_000,
+        // A Retry-After longer than this is honoured up to here and no further; see
+        // PacerLimits for why a server-supplied wait needs a ceiling of its own.
+        advisedCeilingMs: 300_000,
+    },
+);
 
 // Turns a non-OK response into the error that will be shown, and applies backoff
 // when the server said to slow down.
@@ -97,18 +85,11 @@ function sleep(ms: number): Promise<void> {
 // be wrong.
 function refuse(response: Response, what: string): never {
     if (response.status === 429 || response.status === 503) {
-        const advised = Number(response.headers.get('retry-after'));
-        const wait = Number.isFinite(advised) && advised > 0 ? advised * 1000 : backoffMs;
-        blockedUntil = Date.now() + wait;
-        backoffMs = Math.min(backoffMs * 2, BACKOFF_CEILING_MS);
+        const wait = pacer.noteRateLimit(response.headers.get('retry-after'));
         console.warn(TAG, `rate-limited by the Temporal API — pausing row info for ${Math.round(wait / 1000)}s`);
         throw new Error(`Temporal is rate-limiting this page; ${what} will be retried shortly.`);
     }
     throw new Error(`${what} failed: HTTP ${response.status}`);
-}
-
-function succeeded(): void {
-    backoffMs = BACKOFF_START_MS;
 }
 
 // ── One cache per field ──────────────────────────────────────────────────────
@@ -142,7 +123,7 @@ function makeFieldStore<T>(load: (namespace: string, run: RunRef) => Promise<T |
             const promise = (async (): Promise<Answer<T>> => {
                 let answer: Answer<T>;
                 try {
-                    answer = { value: await paced(() => load(namespace, run)), error: null, atMs: Date.now() };
+                    answer = { value: await pacer.run(() => load(namespace, run)), error: null, atMs: Date.now() };
                 } catch (err) {
                     // A failure is cached too, with the same TTL. Otherwise every
                     // render pass retries a request that just failed, which is the
@@ -170,14 +151,14 @@ const lastEventStore = makeFieldStore<LastEvent>(async (namespace, run) => {
         historyUrl({ ...target, direction: 'reverse', maximumPageSize: 1 }),
     );
     if (!response.ok) refuse(response, 'reading the last event');
-    succeeded();
+    pacer.noteSuccess();
     return readLastEvent(await response.json());
 });
 
 const retryStore = makeFieldStore<PendingRetry>(async (namespace, run) => {
     const response = await fetchForListedRun(namespace, run, describeWorkflowUrl);
     if (!response.ok) refuse(response, 'reading pending activities');
-    succeeded();
+    pacer.noteSuccess();
     return readPendingRetry(await response.json());
 });
 
@@ -228,6 +209,10 @@ async function answerOne(namespace: string, run: RunRef, want: RowInfoField[]): 
     const result: RowInfoResult = {
         source: MESSAGE_SOURCE,
         type: 'row-info-result',
+        // Echoed, not looked up: the answer names the namespace it was ASKED about,
+        // so the isolated world can match it to the question it asked and file it
+        // where a same-named workflow in another namespace cannot reach.
+        namespace,
         workflowId: run.workflowId,
         runId: run.runId,
         lastEvent,

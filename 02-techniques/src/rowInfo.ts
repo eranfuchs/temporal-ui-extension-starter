@@ -59,6 +59,13 @@ export interface RowInfoRequest {
 export interface RowInfoResult {
     source: typeof MESSAGE_SOURCE;
     type: 'row-info-result';
+    // Echoed back from the request it answers. A workflow id is unique within a
+    // namespace and NOT across them, and a Temporal UI page fetches lists for more
+    // than one — so without this an answer about `order-42` in a namespace the
+    // picker touched could be filed under the `order-42` on screen. It is what lets
+    // the ISOLATED world file answers per namespace, and what lets it recognise an
+    // answer to a question it never asked.
+    namespace: string;
     workflowId: string;
     runId: string;
     lastEvent: LastEvent | null;
@@ -93,11 +100,59 @@ export function isRowInfoRequest(value: unknown): value is RowInfoRequest {
     });
 }
 
+// SHAPE ONLY, for the same reason as above and with one extra sting in the tail:
+// this message travels INTO the isolated world, which is the side that renders.
+// Anything on the page can post a well-formed one. So the shape check below is
+// deliberately total — every field, to the leaves — but it is still not provenance,
+// and it never will be: `postMessage` carries no authenticated sender. What narrows
+// forged and accidental traffic is the correlation check in rowInfoClient.ts, which
+// keeps an answer only when this side asked that exact question. The worst a forged
+// answer can then do is put a wrong event type or retry count in a row it was asked
+// about; it cannot make a request, reach the network, or move a payload.
+//
+// Validating to the leaves is what makes the renderer's `RowInfo` honest. Before
+// this, `lastEvent` was declared `LastEvent | null` and checked not at all, so
+// `{lastEvent: 42}` type-checked its way to `event.eventType.length` in a template.
 export function isRowInfoResult(value: unknown): value is RowInfoResult {
     const message = asObject(value);
     if (!message) return false;
     if (message['source'] !== MESSAGE_SOURCE || message['type'] !== 'row-info-result') return false;
-    return typeof message['workflowId'] === 'string' && typeof message['runId'] === 'string';
+    if (typeof message['namespace'] !== 'string' || !message['namespace']) return false;
+    if (typeof message['workflowId'] !== 'string' || typeof message['runId'] !== 'string') return false;
+    if (!isNullOr(message['error'], (error) => typeof error === 'string')) return false;
+    if (!isNullOr(message['lastEvent'], isLastEvent)) return false;
+    return isNullOr(message['retry'], isPendingRetry);
+}
+
+function isLastEvent(value: unknown): boolean {
+    const event = asObject(value);
+    if (!event) return false;
+    if (typeof event['eventId'] !== 'string' || typeof event['eventType'] !== 'string') return false;
+    return isNullOr(event['timeMs'], isFiniteNumber);
+}
+
+function isPendingRetry(value: unknown): boolean {
+    const retry = asObject(value);
+    if (!retry) return false;
+    if (typeof retry['activityType'] !== 'string') return false;
+    if (!isFiniteNumber(retry['attempt'])) return false;
+    if (!isNullOr(retry['maximumAttempts'], isFiniteNumber)) return false;
+    if (!isNullOr(retry['nextRetryAtMs'], isFiniteNumber)) return false;
+    return isNullOr(retry['scheduledAtMs'], isFiniteNumber);
+}
+
+// `null` and only null — never `undefined`. An absent field is a different message
+// from one that says "asked, and there is nothing", and the readers below already
+// return the explicit null.
+function isNullOr(value: unknown, ok: (value: unknown) => boolean): boolean {
+    return value === null || ok(value);
+}
+
+// Rejects NaN and both infinities, which JSON.stringify would have turned into
+// `null` anyway — so a number that survives a round-trip as a number is finite.
+// Safe against our own serve: numberOf and timeToMs below return null, not NaN.
+function isFiniteNumber(value: unknown): boolean {
+    return typeof value === 'number' && Number.isFinite(value);
 }
 
 // ── Reading the answers ──────────────────────────────────────────────────────

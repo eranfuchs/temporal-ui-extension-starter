@@ -101,14 +101,26 @@ interface PageApi {
     // handed by the server, in this namespace. It is the authorisation list — see
     // the trust-boundary note at the top of this file.
     executions: Set<string>;
-    // The parse of the most recent list response, while it is still running.
+    // EVERY list-response parse that is still running, not just the newest one.
     //
     // A request is authorised from the ledger, and the ledger is filled off the
     // response body a moment after the response arrives. Without something to
     // wait on, a hover that lands inside that window is refused for a row that IS
     // on the page — a correctness bug that would present as the feature being
-    // flaky, which is the worst kind. Never rejects: see the try/catch.
-    filling: Promise<void> | null;
+    // flaky, which is the worst kind.
+    //
+    // WHY A SET AND NOT ONE PROMISE. This was a single `filling` field, and a
+    // second list response overwrote it: the Temporal UI polls its list and
+    // fetches more than one namespace's, so two parses overlap routinely, and
+    // they finish in whatever order their bodies happen to parse in. A hover then
+    // awaited only the LAST-ARRIVED parse and could be refused for a row that the
+    // FIRST one was in the middle of adding — a false refusal, in the one code
+    // path whose whole job is to decide what may be fetched. Waiting on all of
+    // them is a few microtasks and removes the race outright.
+    //
+    // Entries remove themselves when they settle, so this is "parses in flight"
+    // and not a log. None of them ever rejects: see the try/catch.
+    fills: Set<Promise<void>>;
 }
 const byNamespace = new Map<string, PageApi>();
 
@@ -171,7 +183,7 @@ function remember(url: string, input: RequestInfo | URL, init?: RequestInit): st
         existing.apiPrefix = apiPrefix;
         existing.auth = auth;
     } else {
-        byNamespace.set(namespace, { apiPrefix, auth, executions: new Set(), filling: null });
+        byNamespace.set(namespace, { apiPrefix, auth, executions: new Set(), fills: new Set() });
     }
     return namespace;
 }
@@ -195,7 +207,7 @@ function recordListedRuns(response: Response, namespace: string): void {
     const record = byNamespace.get(namespace);
     if (!record) return;
     const clone = response.clone();
-    record.filling = (async () => {
+    const fill = (async () => {
         try {
             const body: unknown = JSON.parse(await clone.text());
             const executions = (body as { executions?: unknown } | null)?.executions;
@@ -217,6 +229,10 @@ function recordListedRuns(response: Response, namespace: string): void {
             }
         }
     })();
+    record.fills.add(fill);
+    // Drops out the moment it settles: the set means "still running", and a parse
+    // that has finished must not make a later hover wait on it.
+    void fill.finally(() => record.fills.delete(fill));
 }
 
 // ── 1b. Watching one more thing, with NONE of the authority ─────────────────
@@ -236,8 +252,8 @@ function recordListedRuns(response: Response, namespace: string): void {
 //   • it DOES NOT LEARN apiPrefix OR auth. A watcher cannot cause a request, so it
 //     has no use for either; not learning them means an observed URL can never
 //     extend where the page's bearer may be spent.
-//   • there is no `filling` promise to wait on, because nothing is authorised off
-//     a watched response. It arrives when it arrives, and the card redraws.
+//   • there is nothing to wait on, no `fills` entry, because nothing is authorised
+//     off a watched response. It arrives when it arrives, and the card redraws.
 //
 // The cost is one clone and one deferred JSON.parse per matching response — the
 // same bill inject.ts pays for the list, and paid on a body the page has just
@@ -360,7 +376,11 @@ export async function fetchForListedRun(namespace: string, run: RunRef, route: R
     // A list response that is still being read is not yet a refusal. Hovering
     // that fast takes a machine rather than a hand, but the panel is also opened
     // programmatically by this project's own tests.
-    if (page.filling) await page.filling;
+    //
+    // ALL of the parses in flight, and a SNAPSHOT of them: a list poll that starts
+    // after this line must not be able to keep a hover waiting, and on a busy page
+    // there is always another one about to start.
+    if (page.fills.size > 0) await Promise.all(Array.from(page.fills));
     if (!page.executions.has(runKey(run.workflowId, run.runId))) {
         // A real hover cannot reach this: the row was hovered because the page
         // listed it. A forged message asking about some other workflow can, and
@@ -390,7 +410,7 @@ export async function fetchForListedRun(namespace: string, run: RunRef, route: R
 // itself is talking to, through the function above, which picks the origin itself
 // and takes only a route.
 //
-// 03-goodies adds the other kind, for a codec server, and keeps it as a separate
+// Stage 03, the payload stage, adds the other kind, for a codec server, as a separate
 // function for the reason the two must never converge: that one posts to an origin
 // this module chooses and carries the page's bearer, and the other posts to an
 // origin the CALLER chooses and must therefore carry nothing.
@@ -398,9 +418,12 @@ export async function fetchForListedRun(namespace: string, run: RunRef, route: R
 // ── 3. Answering ────────────────────────────────────────────────────────────
 
 export function replyToPage(message: object): void {
-    // location.origin, never '*' — the same rule as inject.ts. These messages can
-    // carry payload data, so an iframe on the page must not be able to read one
-    // out of a wildcard post.
+    // location.origin, never '*' — the same rule as inject.ts. No payload data
+    // travels this way in this build (nothing here decodes one), but these messages
+    // do carry workflow ids, run ids and activity type names read with the page's
+    // own bearer, and a cross-origin iframe on the page has no business receiving
+    // them. A wildcard post is also the habit that becomes a leak in a later stage,
+    // where the same channel carries decoded input and result.
     window.postMessage(message, location.origin);
 }
 

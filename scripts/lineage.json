@@ -23,7 +23,7 @@
         },
         {
             "path": "src/tree.ts",
-            "why": "The feature as a pure function. This is the file a reader is most likely to copy out; it must be the same file in all three."
+            "why": "The feature as a pure function. This is the file a reader is most likely to copy out; it must be the same file in every project that has it."
         },
         {
             "path": "tests/helpers.ts",
@@ -53,7 +53,7 @@
         },
         {
             "path": "public/icons/icon-16.png",
-            "why": "Each project's icon carries its own number and hue, both derived from its directory name by scripts/make-icons.mjs — three extensions loaded at once in a 16px toolbar have to be distinguishable, and one shared glyph makes hovering each in turn the only way to tell them apart. The reviewable artefact is still the script, not the PNG."
+            "why": "Each project's icon carries its own number and hue, both derived from its directory name by scripts/make-icons.mjs — several extensions loaded at once in a 16px toolbar have to be distinguishable, and one shared glyph makes hovering each in turn the only way to tell them apart. The reviewable artefact is still the script, not the PNG."
         },
         {
             "path": "public/icons/icon-32.png",

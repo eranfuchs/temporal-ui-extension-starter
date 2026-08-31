@@ -12,7 +12,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isRowInfoRequest, MAX_RUNS_PER_REQUEST, type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo';
-import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from '../../src/rowInfoClient';
+import {
+    clearRowInfo,
+    installRowInfo,
+    MAX_REMEMBERED_RUNS,
+    requestRowInfo,
+    rowInfoFor,
+} from '../../src/rowInfoClient';
 import { normalizeExecutions } from '../../src/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
 import { MESSAGE_SOURCE, type WorkflowRow } from '../../src/types';
@@ -146,6 +152,7 @@ describe('receiving answers', () => {
         return {
             source: MESSAGE_SOURCE,
             type: 'row-info-result',
+            namespace: NAMESPACE,
             workflowId: 'live',
             runId: LIVE_RUN,
             lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW },
@@ -159,29 +166,115 @@ describe('receiving answers', () => {
         window.dispatchEvent(new MessageEvent('message', { data, source }));
     }
 
+    // An answer is only kept for a question this side asked, so every spec that
+    // expects an answer to LAND has to ask first. That is the correlation check
+    // under test, not scaffolding — the specs below that skip this call are the
+    // ones asserting a message gets dropped.
+    function ask(namespace = NAMESPACE): void {
+        requestRowInfo(namespace, ['lastEvent'], LIVE_AND_DONE, NOW);
+    }
+
     it('stores an answer per run and re-renders once per answer', () => {
         const onUpdate = vi.fn();
         installRowInfo(onUpdate);
+        ask();
 
         deliver(answer());
 
         expect(onUpdate).toHaveBeenCalledTimes(1);
-        expect(rowInfoFor('live', LIVE_RUN)?.lastEvent?.eventType).toBe('ActivityTaskStarted');
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)?.lastEvent?.eventType).toBe('ActivityTaskStarted');
         // Keyed by RUN, not by workflow id: a retried or continued-as-new workflow
         // keeps its id and gets a new run, and both appear in the same list.
-        expect(rowInfoFor('live', DONE_RUN)).toBeUndefined();
+        expect(rowInfoFor(NAMESPACE, 'live', DONE_RUN)).toBeUndefined();
     });
 
     it('ignores the page’s own traffic and anything from an iframe', () => {
         const onUpdate = vi.fn();
         installRowInfo(onUpdate);
+        // Asked, so the correlation check is OPEN and each refusal below is
+        // attributable to the shape or the sender rather than to the gate.
+        ask();
 
         deliver({ source: MESSAGE_SOURCE, type: 'workflows', executions: [] });
         deliver('hello');
+        // Well-formed envelope, junk inside: `lastEvent` is declared an object and
+        // the renderer reads a property off it. isRowInfoResult validates to the
+        // leaves precisely so this cannot reach a cell.
+        deliver(answer({ lastEvent: 42 as unknown as RowInfoResult['lastEvent'] }));
         deliver(answer(), null); // event.source !== window
 
         expect(onUpdate).not.toHaveBeenCalled();
-        expect(rowInfoFor('live', LIVE_RUN)).toBeUndefined();
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)).toBeUndefined();
+    });
+
+    it('drops an answer to a question this side never asked', () => {
+        // Anything running in the page can post one of these, and the ISOLATED
+        // world is the side that renders. This does NOT authenticate the sender —
+        // postMessage cannot — but an answer now has to name a question that was
+        // actually asked, which is what rules out another extension's traffic and a
+        // forgery about a run the user is not even looking at.
+        const onUpdate = vi.fn();
+        installRowInfo(onUpdate);
+
+        deliver(answer());
+
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)).toBeUndefined();
+    });
+
+    it('drops an answer that names a namespace this page did not ask about', () => {
+        // The same workflow id exists in more than one namespace, and one tab
+        // reaches several. Without the namespace in the key this answer would be
+        // rendered on the row that happens to share its id.
+        const onUpdate = vi.fn();
+        installRowInfo(onUpdate);
+        ask();
+
+        deliver(answer({ namespace: 'another-namespace' }));
+
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)).toBeUndefined();
+        expect(rowInfoFor('another-namespace', 'live', LIVE_RUN)).toBeUndefined();
+    });
+
+    it('keeps two namespaces’ answers about the same run apart', () => {
+        installRowInfo(() => {});
+        ask();
+        ask('another-namespace');
+
+        deliver(answer());
+        deliver(
+            answer({
+                namespace: 'another-namespace',
+                lastEvent: { eventId: '7', eventType: 'WorkflowTaskTimedOut', timeMs: NOW },
+            }),
+        );
+
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)?.lastEvent?.eventType).toBe('ActivityTaskStarted');
+        expect(rowInfoFor('another-namespace', 'live', LIVE_RUN)?.lastEvent?.eventType).toBe('WorkflowTaskTimedOut');
+    });
+
+    it('evicts before recording a pass, so the answers to that pass still land', () => {
+        // Eviction is whole-map, and askedAt is now what lets an answer in — so
+        // evicting AFTER recording throws away the questions in the message that
+        // was just posted, and every row in the table stays blank for a full ask
+        // interval. Ordering is the whole content of this spec.
+        installRowInfo(() => {});
+        const crowd = rows(
+            Array.from({ length: MAX_REMEMBERED_RUNS + 1 }, (_, index) => ({
+                workflowId: `live-${index}`,
+                runId: fakeRunId(20_000 + index),
+                running: true,
+            })),
+        );
+
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], crowd, NOW)).toBe(MAX_REMEMBERED_RUNS + 1);
+        deliver(answer({ workflowId: 'live-0', runId: fakeRunId(20_000) }));
+        expect(rowInfoFor(NAMESPACE, 'live-0', fakeRunId(20_000))?.lastEvent?.eventType).toBe('ActivityTaskStarted');
+
+        // And the maps really were bounded: the next pass finds nothing remembered,
+        // so it re-asks about the whole table instead of throttling it away.
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], crowd, NOW + 1_000)).toBe(MAX_REMEMBERED_RUNS + 1);
     });
 
     it('forgets everything when a setting changes what an answer would have been', () => {
@@ -189,12 +282,13 @@ describe('receiving answers', () => {
         // interval keeps the column empty for half a minute and the toggle looks
         // like it did nothing.
         installRowInfo(() => {});
+        ask();
         deliver(answer());
-        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)).toBeDefined();
 
         clearRowInfo();
 
-        expect(rowInfoFor('live', LIVE_RUN)).toBeUndefined();
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)).toBeUndefined();
         expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW)).toBe(1);
     });
 });

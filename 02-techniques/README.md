@@ -31,8 +31,8 @@ node this extension put on the page — so "off" is verifiable, not merely claim
 or a failure message; everything on screen is derived from event *metadata* — event
 types, ids, timestamps, attempt counts, activity type names. That boundary is what
 makes this stage self-contained: no codec server, no egress, and no setting that
-could add one. Payloads belong to the next rung, `03-goodies`, which is not in this
-repository yet.
+could add one. Payloads belong to the next rung — stage 03, the payload stage —
+which is not in this repository yet.
 
 ## Run it
 
@@ -113,9 +113,20 @@ is visible rather than merely intended.
 | **One field, one call** | The two toggles are separate, so a user who wants only the column pays one request per running row and not two. |
 | **Answers cached 30s** in the page world | Set in `TTL_MS`, `src/rowInfoServe.ts`. |
 | **Asked at most every 35s** per run in the table world | `ASK_INTERVAL_MS`, `src/rowInfoClient.ts`. The cache alone is not enough: a request answered *from* cache is still a `postMessage` per row per render pass, and there are a great many render passes. |
-| **Four requests at a time** | `MAX_CONCURRENT`. A hundred-row list becomes a queue, not a burst. |
-| **429/503 backs off**, honouring `Retry-After` | 2s doubling to a 60s ceiling. A rate limiter answered with a retry storm is how one tab degrades the API for a whole team. |
-| **No timer anywhere** | Refresh comes from the Temporal UI polling its own list, which re-renders the table, which asks again — and the TTLs decide whether asking turns into fetching. Nothing here polls on its own. |
+| **Four requests at a time** | `maxConcurrent`, in `src/pacer.ts`. A hundred-row list becomes a queue, not a burst. |
+| **429/503 backs off**, honouring `Retry-After` | `src/pacer.ts` again: 2s doubling to a 60s ceiling, or the server's own `Retry-After` when it sent one. A rate limiter answered with a retry storm is how one tab degrades the API for a whole team. |
+| **No polling timer** | Refresh comes from the Temporal UI polling its own list, which re-renders the table, which asks again — and the TTLs decide whether asking turns into fetching. Nothing here polls on its own. The one timer in the project is the backoff sleep in `src/pacer.ts`, which exists to make *fewer* requests. |
+
+Each bound above is asserted somewhere rather than only described here: **which**
+rows are asked about, and how often, in `tests/unit/rowInfoClient.spec.ts`; the
+cache and its **expiry**, many render passes during one slow request collapsing into
+one request, a refusal that is cached without pausing the rows that were not
+refused, the four-at-a-time cap and the `Retry-After` wiring in the *four things
+that keep the per-row questions affordable* block of `tests/unit/apiInject.spec.ts`,
+which counts requests against a fake network; and the pacer's own time invariants in
+`tests/unit/pacer.spec.ts`, with the clock injected. A comment claiming a bound and
+a test counting requests are not the same artefact, and this feature is the one place
+in the repository where the difference is billable.
 
 **It reads; it never writes.** There is no signal, no terminate, no reset, no
 update anywhere in this project.
@@ -264,6 +275,16 @@ What closes it is not a shape check:
   kind, for a codec server, and keeps it a separate function for exactly this
   reason: one carries the page's bearer to an origin this module picks, the other
   goes to an origin the caller picks and must therefore carry nothing.)
+- **And in the other direction: an answer is kept only for a question this side
+  asked.** The reply crosses the same unauthenticated bus, into the half that
+  *renders*, so the same reasoning applies mirrored. `isRowInfoResult` validates
+  every field to the leaves — before a review found it, it checked four of them, and
+  `{lastEvent: 42}` type-checked its way to a property read in a template — and then
+  `rowInfoClient.ts` drops anything whose `(namespace, workflowId, runId)` it did not
+  ask about. Not authentication, which `postMessage` cannot provide; a narrowing that
+  removes another extension's traffic, a reply replayed from a different namespace,
+  and a forgery about a run you are not looking at. What a forger who reads our own
+  request can still do is put a wrong event type in that row's cell.
 
 **What is left, stated rather than omitted.** A script already in your page can
 still make this extension spend requests it did not need — naming runs that *are* on
@@ -331,9 +352,19 @@ does not own.
   the payload panel — now 03's — closing the instant the pointer entered it, unusable
   for its actual purpose, with no unit test that could have said so. Each of those had
   a green suite behind it minutes earlier.
-- **Rate-limit behaviour has not been observed in the wild.** The backoff is
-  implemented and unit-tested against a synthetic 429; no real Temporal rate limiter
-  has answered it.
+- **Rate-limit behaviour has not been observed in the wild.** The pacer is
+  unit-tested against a synthetic 429 and a synthetic `Retry-After` with an injected
+  clock, so "never more than four in flight, even coming out of a backoff" is an
+  assertion rather than a claim (`tests/unit/pacer.spec.ts`), and the *wiring* — the
+  header reaching the pacer, the pause applying to rows the server never refused,
+  and the pause lifting rather than sticking — is asserted end-to-end through the
+  fake network in `tests/unit/apiInject.spec.ts`. **No real Temporal rate limiter
+  has answered any of it**, and a synthetic 429 is exactly as considerate as the
+  person who wrote it. Worth saying plainly, because the first version of that code
+  was inline in `rowInfoServe.ts`, untested, and wrong: it took its slot *after*
+  sleeping out the backoff, so a 429 turned the queue into a crowd that all woke at
+  once and burst straight past the limit of four. A review found it; no amount of
+  reading the surrounding prose would have.
 - **No supply-chain attestation.** Build it yourself; the bundle is unminified on
   purpose, so `dist/*.js` is readable.
 
@@ -345,7 +376,8 @@ src/
   pageApi.ts        MAIN world — the bearer, the ledger, the response-watcher seam,
                     and the ONLY function in this build that issues a request
   apiInject.ts      MAIN world — every message accepted from the page, in one switch
-  rowInfoServe.ts   MAIN world — answers the per-row questions: cache, pacing, backoff
+  rowInfoServe.ts   MAIN world — answers the per-row questions: cache, then the pacer
+  pacer.ts          concurrency cap + 429/503 backoff, with the clock injected
   detailWatch.ts    MAIN world — folds a single workflow's own responses, fetches nothing
   types.ts          the shapes crossing the postMessage boundary
   rows.ts           API response → a flat row shape
@@ -380,9 +412,10 @@ thing send" means reading one file.
 ## What it deliberately does not do
 
 **No payload is decoded here** — that is the boundary of this stage, not an
-omission. Input and result on hover, through a codec server, plus column reorder, a
-larger page size, a cross-workflow activity finder and expand-to-families, belong to
-`03-goodies`, which is not in this repository yet.
+omission. Input and result on hover, through a codec server, are stage 03, the
+payload stage; column reorder, a larger page size, a cross-workflow activity finder
+and expand-to-families are conveniences one rung further up. Neither stage is in
+this repository yet.
 
 ## Commands
 
