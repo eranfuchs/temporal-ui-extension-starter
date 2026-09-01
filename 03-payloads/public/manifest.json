@@ -1,0 +1,55 @@
+{
+    "manifest_version": 3,
+    "name": "Temporal starter 03 — payloads",
+    "version": "0.4.2",
+    "description": "Draws parent/child workflow families in the Temporal UI, and shows each workflow's input and result on hover — decoding them, when they are encrypted, through the codec server you name in the popup. No backend of ours, no host permissions, and no credential of its own.",
+    "permissions": [
+        "storage"
+    ],
+    "action": {
+        "default_title": "Temporal starter 03 — payloads",
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "icons/icon-16.png",
+            "32": "icons/icon-32.png",
+            "48": "icons/icon-48.png",
+            "128": "icons/icon-128.png"
+        }
+    },
+    "icons": {
+        "16": "icons/icon-16.png",
+        "32": "icons/icon-32.png",
+        "48": "icons/icon-48.png",
+        "128": "icons/icon-128.png"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://cloud.temporal.io/*",
+                "http://localhost/*",
+                "http://127.0.0.1/*"
+            ],
+            "js": [
+                "inject.js",
+                "apiInject.js"
+            ],
+            "world": "MAIN",
+            "run_at": "document_start"
+        },
+        {
+            "matches": [
+                "https://cloud.temporal.io/*",
+                "http://localhost/*",
+                "http://127.0.0.1/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "css": [
+                "content.css"
+            ],
+            "world": "ISOLATED",
+            "run_at": "document_start"
+        }
+    ]
+}

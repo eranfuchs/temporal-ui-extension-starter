@@ -1,0 +1,432 @@
+/* The tree connectors.
+ *
+ * Two decisions here are load-bearing and were both arrived at by getting them
+ * wrong first.
+ *
+ * 1. z-index: 0 — not 1, not -1.
+ *    At 1 the strokes painted OVER the table's sticky pagination bar, drawing
+ *    tree lines across a toolbar. At -1 they disappeared behind the row's own
+ *    background, which looks exactly like "the feature does not work". 0 puts
+ *    them above the background and below everything positioned.
+ *
+ * 2. The strokes are borders on absolutely-positioned pseudo-elements, not text
+ *    characters in the link. A text glyph cannot join across the row boundary,
+ *    because the cell's vertical padding sits between one row's glyph and the
+ *    next; the line breaks at every row and no amount of line-height fixes it.
+ *
+ * Colour is currentColor at low opacity so the connectors follow the UI's own
+ * light/dark theme without this file knowing which one is active.
+ */
+
+/* The overlay needs a positioned ancestor. Selecting the cell by the link it
+ * contains — rather than by nth-child or a class — survives the UI adding or
+ * reordering columns, which it does between versions. */
+td:has(a[href*="/workflows/"]) {
+    position: relative;
+}
+
+.tuis-prefix {
+    position: absolute;
+    z-index: 0;
+    top: 0;
+    bottom: 0;
+    /* The workflow-id cell carries ~8px of left padding; without this offset the
+     * first stroke sits outside the visible cell. */
+    left: 8px;
+    display: flex;
+    align-items: stretch;
+    /* Never intercept a click meant for the row or the link underneath. */
+    pointer-events: none;
+    user-select: none;
+    opacity: 0.4;
+}
+
+.tuis-seg {
+    position: relative;
+    /* Must match SEGMENT_WIDTH_PX in src/render.ts. */
+    width: 18px;
+    flex: 0 0 18px;
+    height: 100%;
+}
+
+/* An ancestor further up still has rows below: carry its line through. */
+.tuis-seg-cont::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid currentColor;
+}
+
+/* An ancestor whose subtree is finished: hold the column, draw nothing.
+ * (.tuis-seg-pad needs no rule — the empty box is the point.) */
+
+/* A child with siblings after it: full-height vertical, plus the stub to its own
+ * row. */
+.tuis-seg-branch::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid currentColor;
+}
+
+.tuis-seg-branch::after {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    width: 10px;
+    border-bottom: 1px solid currentColor;
+}
+
+/* The last child: an elbow. One box with a left and a bottom border and a
+ * rounded corner between them draws the whole shape. */
+.tuis-seg-last::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    height: 50%;
+    width: 10px;
+    border-left: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    border-bottom-left-radius: 10px;
+}
+
+/* Per-row deep-link buttons. Deliberately quiet: they sit beside a workflow id
+ * on every row, so anything louder makes the table harder to read than it was
+ * before the extension was installed. */
+.tuis-link {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 16px;
+    text-decoration: none;
+    white-space: nowrap;
+    opacity: 0.6;
+}
+
+.tuis-link:hover,
+.tuis-link:focus-visible {
+    opacity: 1;
+}
+
+/* A template that expanded to something we will not open (anything that is not
+ * an absolute http/https URL). It carries no href, so it is already unclickable;
+ * this only makes it LOOK unclickable, because a button that silently does
+ * nothing is indistinguishable from a broken extension. The title says why. */
+.tuis-link-blocked {
+    border-style: dashed;
+    text-decoration: line-through;
+    cursor: not-allowed;
+}
+
+/* The `{ }` button that opens the payload panel. Same quiet treatment as a deep
+ * link, plus a <button> reset: the UI's own button styling would otherwise give this
+ * one a background, a border radius and a padding meant for a toolbar. */
+.tuis-payload {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    line-height: 16px;
+    white-space: nowrap;
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+.tuis-payload:hover,
+.tuis-payload:focus-visible {
+    opacity: 1;
+}
+
+/* The retrying-activity badge.
+ *
+ * Deliberately the loudest thing this extension draws, and the only place it uses
+ * a colour of its own: every other decoration is information the reader asked for,
+ * while this one is information they did not know to look for. A workflow whose
+ * activity has failed 900 times is still "Running" in the status column.
+ *
+ * color-mix onto Canvas rather than a fixed pair of hex values, so it stays
+ * readable in both themes without this file knowing which one is active. */
+.tuis-retry {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, #d97706 70%, CanvasText);
+    border-radius: 10px;
+    background: color-mix(in srgb, #d97706 18%, Canvas);
+    color: inherit;
+    font-size: 11px;
+    line-height: 16px;
+    white-space: nowrap;
+    /* There is a title to read, and nothing to click. */
+    cursor: help;
+}
+
+/* The "Last event" column. It sits immediately after the workflow id, where the
+ * question it answers is actually asked — so narrow, quiet and nowrap matter more
+ * here than they would at the end of the row: this column pushes the UI's own
+ * columns right, and it must not be the thing that makes the table scroll
+ * sideways. */
+.tuis-last-event {
+    white-space: nowrap;
+    font-size: 11px;
+    opacity: 0.75;
+    /* Tabular figures so a column of ages does not jitter as digits change. */
+    font-variant-numeric: tabular-nums;
+}
+
+/* Our header cell: the word and the refresh button, side by side and never wrapped
+ * onto two lines — a header that grows a second line makes the UI's own header row
+ * taller, which is a change to the whole table for the sake of one column. */
+.tuis-col-head {
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+/* Dotted underline: this header is ours, not the UI's, and a reader comparing the
+ * extension against a vanilla tab should be able to tell at a glance. On the LABEL
+ * rather than the cell, so it marks the word and not the button beside it. */
+.tuis-col-label {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+
+/* The refresh control. A <button> reset like the others — the UI's own button
+ * styling would give this one a toolbar's background and padding — and quiet for the
+ * same reason as .tuis-link: it sits in the UI's own header row, where anything loud
+ * reads as part of the product rather than as something a reader chose to install.
+ *
+ * SIZED, not inherited. It first shipped at `font: inherit`, which is the 11px of the
+ * header text around it: a ~11px square hit area for a control that is the only way
+ * to move the number in this column, and small enough that the glyph read as
+ * punctuation. So the glyph is set larger than its label and the box is given a
+ * minimum, which is the part that matters — 24px is the smallest target the WCAG 2.2
+ * "Target Size (Minimum)" criterion accepts, and a header cell has the room.
+ *
+ * inline-flex + center is what keeps the glyph optically on the label's baseline once
+ * the box is taller than the text; with `display: inline` the larger glyph pushes the
+ * header row's height instead, and a header row that grows by a pixel or two when this
+ * extension loads is the kind of change that gets noticed and blamed. */
+.tuis-col-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    margin-left: 4px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.55;
+    /* The box is deliberately bigger than the header text; without this it would add
+     * its own height to the row it sits in. */
+    vertical-align: middle;
+    margin-top: -6px;
+    margin-bottom: -6px;
+}
+
+/* A hover target you can see. The opacity change alone tells a user the glyph is
+ * interactive only after they have already found it. */
+.tuis-col-refresh:hover,
+.tuis-col-refresh:focus-visible {
+    opacity: 1;
+    border-radius: 4px;
+    background: rgba(127, 127, 127, 0.18);
+}
+
+/* Disabled for as long as pressing it again would be refused anyway — see
+ * FRESH_FLOOR_MS in src/rowInfo.ts. Dimmer and with the pointer taken away, because
+ * a button that accepts the click and does nothing is the version of this that gets
+ * reported as a bug. */
+.tuis-col-refresh:disabled {
+    cursor: default;
+    opacity: 0.25;
+}
+
+/* The payload panel.
+ *
+ * z-index is deliberately the opposite decision from .tuis-prefix above, and for the
+ * opposite reason. The connectors live INSIDE a table cell and must stay under the
+ * UI's own positioned chrome, so they sit at 0. The panel is a floating overlay on
+ * <body> whose entire job is to be on top; under the sticky table header it would be
+ * unreadable exactly when it is most useful.
+ *
+ * Canvas/CanvasText are the system colours, so the panel is legible in both themes
+ * without this file knowing which one the UI is using. It follows the BROWSER's
+ * scheme rather than the page's, which can differ from the page for one frame after a
+ * theme switch — a trade taken knowingly, because the alternative is hardcoding two
+ * palettes that will not match the UI's next redesign either. */
+.tuis-panel {
+    position: fixed;
+    z-index: 2147483000;
+    max-width: 560px;
+    max-height: 60vh;
+    overflow: auto;
+    /* Reaching the bottom of the panel must not hand the rest of the wheel gesture to
+     * the page behind it: a page scroll closes the panel (see src/tooltip.ts), so
+     * scroll chaining would dismiss the panel at the exact moment the reader got to
+     * the end of a long payload. */
+    overscroll-behavior: contain;
+    padding: 8px 10px;
+    border: 1px solid;
+    border-radius: 6px;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+    font:
+        12px/1.45 system-ui,
+        -apple-system,
+        sans-serif;
+}
+
+.tuis-panel-title {
+    font-weight: 600;
+    /* A workflow id has no spaces to break at and can be very long. */
+    overflow-wrap: anywhere;
+    padding-bottom: 4px;
+}
+
+.tuis-panel-heading {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    padding-top: 6px;
+}
+
+/* Which codec server decoded this payload. Opted out of the heading's uppercasing on
+ * purpose: this is the one part of the line a reader has to check character by
+ * character, and a hostname is not spelled in capitals. */
+.tuis-panel-provenance {
+    text-transform: none;
+    letter-spacing: normal;
+    /* A hostname has no spaces to break at, and the panel is narrow. */
+    overflow-wrap: anywhere;
+}
+
+.tuis-panel-body {
+    margin: 2px 0 0;
+    /* pre-wrap, not pre: a single-line JSON payload would otherwise scroll sideways
+     * for a kilometre. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font:
+        11px/1.45 ui-monospace,
+        SFMono-Regular,
+        monospace;
+    /* Selecting a value out of here is most of the point, so the panel must not be
+     * dismissed by the drag — see rule 3 in src/tooltip.ts. */
+    user-select: text;
+}
+
+/* The workflow-scoped links on a single workflow's own page, in a bar beside the
+ * page's own tabs.
+ *
+ * Almost no styling on purpose. This bar sits INSIDE the UI's layout — see the note
+ * at the top of src/detailLinks.ts for why that replaced a floating card — so it
+ * inherits the surrounding font and colour, and the less it declares the less there
+ * is to clash with the UI's next redesign. Nothing here positions it: where it goes
+ * is decided in the DOM, not in CSS. */
+.tuis-linkbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+}
+
+/* The one case where it could not find the page's own layout, parked where it can be
+ * SEEN rather than left at the top-left of <body> behind the app's chrome — the
+ * failure described at the top of src/detailLinks.ts. Every pass looks for the real
+ * anchor again, so this styling is meant to be temporary on screen as well as in the
+ * code.
+ *
+ * Same z-index and the same system colours as the payload panel above, for the same
+ * reasons. */
+.tuis-linkbar-adrift {
+    position: fixed;
+    z-index: 2147483000;
+    right: 16px;
+    bottom: 16px;
+    max-width: calc(100vw - 32px);
+    padding: 6px 8px;
+    border: 1px solid;
+    border-radius: 6px;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+    font:
+        12px/1.45 system-ui,
+        -apple-system,
+        sans-serif;
+}
+
+/* The bar's one aside: what has been observed and what has not. Only ever present
+ * when there is nothing to link yet. */
+.tuis-linkbar-note {
+    font-size: 11px;
+    opacity: 0.7;
+    overflow-wrap: anywhere;
+}
+
+/* The activity-scoped links, appended inside the value cell of the row the UI
+ * labels "Activity Id".
+ *
+ * inline-flex with a left margin, so it trails the id on the same line and adds no
+ * height to a row this extension does not own — the same reasoning as
+ * .tuis-col-refresh above. Nothing of the UI's is moved or restyled to make room. */
+.tuis-act-links {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+/* In a table cell a link's own left margin is what separates it from the workflow
+ * id; in both containers above the `gap` does that job, so the margin would only
+ * indent the first one. Same class, same look, one less rule to keep in step than a
+ * second link class would be. */
+.tuis-linkbar .tuis-link,
+.tuis-act-links .tuis-link {
+    margin-left: 0;
+}
+
+/* The master switch. The content script also removes the nodes, but hiding them
+ * by class takes effect in the same frame as the toggle. */
+html.tuis-off .tuis-prefix,
+html.tuis-off .tuis-link,
+html.tuis-off .tuis-payload,
+html.tuis-off .tuis-retry,
+html.tuis-off .tuis-panel,
+html.tuis-off .tuis-linkbar,
+html.tuis-off .tuis-act-links {
+    display: none !important;
+}
+
+/* The column is hidden with visibility, not display: a `display: none` on one cell
+ * of a table row leaves the row one cell short of the header and the whole table
+ * misaligns for the frame before the nodes are removed. */
+html.tuis-off .tuis-last-event,
+html.tuis-off .tuis-col-head {
+    visibility: hidden !important;
+}

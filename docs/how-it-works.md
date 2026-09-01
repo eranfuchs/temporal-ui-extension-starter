@@ -1,8 +1,13 @@
 # How it works
 
-No backend, no credentials to configure or store, and — in
+No backend of ours, no credentials to configure or store, and — in
 [`01-family-tree/`](../01-family-tree/) — no permissions at all. This document is the map: what runs where, why the design is
 shaped like this, and which parts are the traps that cost real time to find.
+
+There is exactly one server in this repository that is not the one the page is
+already talking to: the codec server [`03-payloads/`](../03-payloads/) can send an
+unreadable payload to, which you name yourself and which is empty by default. Every
+other outbound byte in every project goes to the page's own Temporal.
 
 Paths below are relative to a project directory. The mechanism is identical in
 all of them, so read it against `01-family-tree/`, which has the least around it.
@@ -42,31 +47,35 @@ around a permission; it is the only place the call works at all.
 
 What that buys:
 
-- **No `host_permissions`.** `01` issues no request whatsoever; `02` issues its
-  per-row requests from the page's world, where a host grant would buy nothing.
-  Either way there is no grant to ask for.
-- **No credential of our own.** No API key, no bearer token, no mTLS certificate,
-  in either project. `02` additionally *reads* the page's own `Authorization`
+- **No `host_permissions`.** `01` issues no request whatsoever; `02` and `03` issue
+  theirs from the page's world, where a host grant would buy nothing — including
+  `03`'s call to a codec server, which is why naming one does not change the
+  manifest. No project asks for a grant.
+- **No credential of our own.** No API key, no bearer token, no mTLS certificate, in
+  any project. `02` and `03` additionally *read* the page's own `Authorization`
   header, in the page's world, to re-issue the page's own call — see the split
-  below.
-- **Cloud and OSS, unchanged.** Both drive the same API from the page.
-- **It cannot show anyone data they could not already see.** If the page was not
-  allowed to fetch it, there is nothing to observe — and `02`'s own requests ride
-  the page's session, so they can only reach what the page could have reached by
+  below. `03` never attaches it to the codec host, and has no setting that could.
+- **Cloud and OSS, unchanged.** All of them drive the same API from the page.
+- **It cannot reach data you could not already reach.** If the page was not allowed
+  to fetch it, there is nothing to observe — and every request in `02` and `03` rides
+  the page's session, so it can only reach what the page could have reached by
   clicking. That is a much easier sentence to defend in a security review than any
-  design involving a token of its own.
+  design involving a token of its own. Note the word: **reach**, not *show*. `03`
+  shows you more than the list page does, because it decodes what it fetched — a
+  payload the page's own session was entitled to, put on screen without the trip
+  through the workflow's own page.
 
-**Where `01` and `02` genuinely differ.** Three of the properties above are often
-quoted as if they held for the whole repository. They do not, and the ladder is
+**Where the three projects genuinely differ.** Several of the properties above are
+often quoted as if they held for the whole repository. They do not, and the ladder is
 worth nothing if the rungs are not distinguished:
 
-| | `01` | `02` |
-|---|---|---|
-| Requests issued | none, ever | up to two per **running** row: one `history-reverse` page of one event, one `DescribeWorkflowExecution`. Cached, paced, never for a closed workflow |
-| Backend needed | none | none. `02` talks to exactly one server — the one the page is already talking to |
-| Payloads decoded | none | **none.** Everything it draws comes from event metadata: types, ids, timestamps, attempt counts, activity type names. No input, result or failure message is read |
-| The page's `Authorization` header | never touched | held in one closure in `pageApi.ts`, attached to Temporal's own API and to nothing else. Never stored, never in a `postMessage`, never logged |
-| Instructions taken from the page | none — the MAIN-world half only ever *tells* the extension things | it **serves** `row-info-request` messages, which is a trust boundary in both directions. `postMessage` has no unforgeable sender, so the request cannot be the authority for what gets fetched (a per-namespace ledger of runs the page was actually handed is), and the `row-info-result` coming back cannot be trusted either — it is validated to the leaves and kept only if this side asked that exact question. Read [`../02-techniques/README.md`](../02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) before copying that half |
+| | `01` | `02` | `03` |
+|---|---|---|---|
+| Requests issued | none, ever | up to two per **running** row: one `history-reverse` page of one event, one `DescribeWorkflowExecution`. Cached, paced, never for a closed workflow | the same two, plus **one history event per question** — the first event for the input, the last for the outcome, so a *closed* row costs two and a *running* one costs one. Nothing on render; nothing without a pointer, and a question already in flight is joined rather than asked twice |
+| Backend needed | none | none. `02` talks to exactly one server — the one the page is already talking to | none, until you name a codec server in the popup. That field is the only place a second host can come from, it starts empty, and while it is empty no payload byte leaves the machine |
+| Payloads decoded | none | **none.** Everything it draws comes from event metadata: types, ids, timestamps, attempt counts, activity type names. No input, result or failure message is read | **yes — this is the stage where that boundary is crossed on purpose.** Plaintext encodings are decoded in the browser; the rest are shown as a byte count until a codec server is named. What lands on screen is application data, and can be personal |
+| The page's `Authorization` header | never touched | held in one closure in `pageApi.ts`, attached to Temporal's own API and to nothing else. Never stored, never in a `postMessage`, never logged | the same closure, the same one route — and explicitly **not** the codec call, which is issued by a second exported function that takes its origin from a message and carries no credential of ours. There is no setting that could change that; the option was deleted rather than defaulted off |
+| Instructions taken from the page | none — the MAIN-world half only ever *tells* the extension things | it **serves** `row-info-request` messages, which is a trust boundary in both directions. `postMessage` has no unforgeable sender, so the request cannot be the authority for what gets fetched (a per-namespace ledger of runs the page was actually handed is), and the `row-info-result` coming back cannot be trusted either — it is validated to the leaves and kept only if this side asked that exact question. Read [`../02-techniques/README.md`](../02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) before copying that half | the same ledger and the same validation, over **two** message types instead of one — and the second names an outbound host. What that leaves open, and what closing most of it took, is in [`../03-payloads/README.md`](../03-payloads/README.md#the-weakness-and-what-closing-most-of-it-took) |
 
 What it costs, stated plainly:
 
@@ -95,35 +104,48 @@ These two differ per project, and the difference is the lesson:
 
 | File | What it is |
 |---|---|
-| `src/content.ts` | ISOLATED world. Wiring: receives messages, drives a `MutationObserver`. No DOM writes. In `01` it uses no `chrome.*` API at all; in `02` it also loads settings and answers the popup. |
-| `src/render.ts` | Every DOM write in the extension. `01`'s takes no options, because it has no settings to vary. |
+| `src/content.ts` | ISOLATED world. Wiring: receives messages, drives a `MutationObserver`. No DOM writes. In `01` it uses no `chrome.*` API at all; in `02` and `03` it also loads settings, answers the popup, and holds no repeating timer of any kind — the only one it schedules is a single pass `FRESH_FLOOR_MS` after a `⟳` press, to re-enable that button, because the "last event" ages are frozen at the instant Temporal was read rather than animated against the clock. In `03` it additionally drops the decoded-payload cache when the master switch goes off or the codec setting changes. |
+| `src/render.ts` | Every DOM write in the extension. `01`'s takes no options, because it has no settings to vary. `03`'s adds the per-row `{ }` button, which carries no row identity on any attribute. |
 
-`02-techniques/` adds `src/deepLink.ts` (templated per-row links, pure),
-`src/settings.ts` (`chrome.storage.sync`) and `src/popup.ts` (the toolbar popup,
-including an honest answer to "is it working?" — rows *seen* reported separately
-from rows *matched*, so the two failure modes are distinguishable).
+`02-techniques/` and `03-payloads/` add `src/deepLink.ts` (templated per-row links,
+pure), `src/settings.ts` (`chrome.storage.sync`) and `src/popup.ts` (the toolbar
+popup, including an honest answer to "is it working?" — rows *seen* reported
+separately from rows *matched*, so the two failure modes are distinguishable).
 
-It also adds the two features that ask Temporal something — the "last event"
+They also add the two features that ask Temporal something — the "last event"
 column and the retrying-activity badge — and they are spread over several files for
 one reason: exactly one of them is allowed to touch the network, and the rest are
 pure enough to test.
 
 | File | What it is |
 |---|---|
-| `src/pageApi.ts` | MAIN world. **The only code in the project that issues a request**, and the only code that ever sees the page's `Authorization` header, which never leaves its closure. Holds the ledger, and the seam other features use to read a response the page fetched. |
+| `src/pageApi.ts` | MAIN world. **The only file that issues a request**, and the only code that ever sees the page's `Authorization` header, which never leaves its closure. Holds the ledger, and the seam other features use to read a response the page fetched. |
+| `src/apiInject.ts` | MAIN world, the second bundle. The entry point that installs the servers — and therefore the enumerable list of message types this extension accepts from the page: one in `02`, two in `03`. |
 | `src/temporalApi.ts` | Pure. The API prefix, and the two route builders — nothing else may name a URL. |
 | `src/rowInfo.ts` | Pure. The two questions, how to read their answers, and what a badge is allowed to say (see the no-failure-message note at the top of it). |
 | `src/rowInfoServe.ts` | MAIN world. Answers the questions: the TTL cache, the concurrency cap and the backoff. Four times the size of the watcher below, entirely because it asks rather than piggybacks. |
 | `src/rowInfoClient.ts` | ISOLATED world. Which rows are worth asking about — running only, on screen only, once per interval — and what came back. |
+| `src/pacer.ts` | Pure, with the clock and the sleep injected: the concurrency cap and the `Retry-After` backoff, testable without a network. `02` builds its one instance inside `rowInfoServe.ts`; `03` moves the instance to `src/requestPacing.ts` — see below. |
 
-And the deep-link card on a single workflow's own page, which fetches nothing at
-all:
+And the deep links on a single workflow's own page, which fetch nothing at all:
 
 | File | What it is |
 |---|---|
 | `src/detail.ts` | Pure. Which URLs belong to one workflow, and the folds that reduce a history or describe response to ids, type names, timestamps and attempt counts — *before* anything is posted. |
 | `src/detailWatch.ts` | MAIN world. Subscribes to `pageApi.ts`'s watcher seam, folds, posts. No request, no cache, no ledger entry. |
-| `src/detailCard.ts` | ISOLATED world. The card itself: workflow-scoped links once, activity-scoped links per activity the page mentioned. |
+| `src/detailLinks.ts` | ISOLATED world. The drawing: workflow-scoped links in a bar beside the page's own tabs, activity-scoped links inside the row the UI labels "Activity Id" — resolved to one activity by its id, never by its type. The header of that file records the floating card it replaced, and why the fallback corner is a way-station rather than a design. |
+
+`03-payloads/` adds four files, and the split is the same one: every decision that
+can be made without a network is made in a pure module, and the requests still go
+through `pageApi.ts` — including the one to a host `pageApi.ts` had never heard of
+until a message named it.
+
+| File | What it is |
+|---|---|
+| `src/payloads.ts` | Pure, and where nearly all of the stage's reasoning lives. Which encodings are readable without any server and which are not; the event's payloads found by its **attributes key** rather than by `eventType`, because the type comes back as `WorkflowExecutionStarted` from one Temporal version and `EVENT_TYPE_WORKFLOW_EXECUTION_STARTED` from another while the attributes key is one string in both; the plan of which payloads to send to a codec and how to re-attach the answers by position; `safeCodecEndpoint`, which accepts `https` or loopback `http` and nothing else; and the formatting, including the rule that a JSON body containing a ≥16-digit integer is shown exactly as the server wrote it, because `JSON.parse` would silently round the id. |
+| `src/payloadServe.ts` | MAIN world. The second server: one history event per question — the *first* event for an input, the *last* for an outcome — and then, only if something came back unreadable and only if you named an endpoint, one POST to it. |
+| `src/tooltip.ts` | ISOLATED world. The hover panel: when to ask, the correlation check on the answer, the bounded cache of decoded payloads, and the pointer/scroll guards that traps 9 and 10 below are about. |
+| `src/requestPacing.ts` | The pacer **instance**, module-level, imported by both servers. `02` did not need this file; read its header for why `03` does, and why a second `makePacer()` call would have been the bug that looked correct in both places. |
 
 The split between `content.ts` and `render.ts` is not tidiness. It is what makes
 the DOM behaviour unit-testable: `tests/unit/render.spec.ts` drives `render.ts`
@@ -287,13 +309,13 @@ second observer still sees the list, the tree still gets its rows, and the page'
 own wrapper is still called — because the version that shipped satisfied only the
 middle one.
 
-**Traps 9 and 10 belong to a feature that is not in this tree yet.** They were met
-while building the hover panel that shows a workflow's input and result — which left
-this tree when the ladder was drawn at "02 decodes no payload", and which belongs to
-stage 03, the payload stage, not yet written. They are
-recorded here anyway, because neither is a fact about that feature: they are facts
+**Traps 9 and 10 belong to `03-payloads`**, whose `src/tooltip.ts` is the hover
+panel that shows a workflow's input and result. They are written up here rather than
+in that project's own notes because neither is a fact about payloads: they are facts
 about the pointer and scroll models, and they will bite the first floating panel you
-build over a page you do not own.
+build over a page you do not own. Neither `01` nor `02` has one: `02`'s deep links are
+placed in the page's own layout and stay put, so nothing there depends on knowing
+where the pointer is.
 
 **9. `pointerout` fires between two children of the same element, and
 `pointerenter` does not fire again to undo it.**
@@ -330,16 +352,18 @@ Both of 9 and 10 shipped, both were found by hovering a live tenant rather than 
 test, and both are the same species of bug: **the pointer and scroll models are
 about elements, and a panel is a subtree.**
 
-The way they were finally pinned is the transferable part. One test per guard, and a
-**mutation audit** of the spec — because the first version of it drove the faithful
-browser sequence and stayed green against the broken handler: the `pointerover` that
-follows a `pointerout` cancelled the close, so the test passed on the strength of the
-*other* guard. Removing any single guard has to make a named test fail, and the only
-way to know that is to remove each one and watch.
+The way they were finally pinned is the transferable part. One test per guard — the
+`the panel under the pointer` block of
+[`../03-payloads/tests/unit/tooltip.spec.ts`](../03-payloads/tests/unit/tooltip.spec.ts)
+— and a **mutation audit** of that block, because its first version drove the
+faithful browser sequence and stayed green against the broken handler: the
+`pointerover` that follows a `pointerout` cancelled the close, so the test passed on
+the strength of the *other* guard. Removing any single guard has to make a named test
+fail, and the only way to know that is to remove each one and watch.
 
 ## Retargeting it
 
-The three things most teams will want to change, in the order they will want to
+The four things most teams will want to change, in the order they will want to
 change them:
 
 1. **A different view** — replace `buildTree` with your own pure function over the
@@ -359,26 +383,41 @@ change them:
    pattern is: match a URL in `inject.ts`, post the response, render it in the
    extension world. Any API call the page already makes is available to you on the
    same terms.
+4. **Your own codec** — in `03-payloads/` this is a setting too, and the same
+   endpoint your Temporal UI is already configured with will do: the request is
+   `POST {endpoint}/decode` with an `X-Namespace` header, issued from the page's
+   origin, which is the origin such a server already allows (trap 7 again). If your
+   codec speaks a different shape, `src/payloads.ts` is the only file that needs to
+   know — `codecDecodeCall` builds the request and `readCodecResponse` reads it, both
+   pure. What the endpoint is allowed to *be* is deliberately narrow: `https`, or
+   `http` on loopback only, because what comes back is decrypted.
 
 ## Permissions, in full
 
 `01-family-tree` has no `permissions` key in its manifest. Not an empty array —
 no key.
 
-`02-techniques` has exactly one:
+`02-techniques` has exactly one — and so does `03-payloads`:
 
 ```json
 "permissions": ["storage"]
 ```
 
-Neither has `host_permissions`, `scripting`, `tabs`, `webRequest`,
+None of the three has `host_permissions`, `scripting`, `tabs`, `webRequest`,
 `web_accessible_resources`, or a service worker.
 
-Do not read that as "neither makes a request". `02-techniques` makes up to two per
-running row, from the page's own world, and no manifest key records it —
-`host_permissions` would not help it and so is not asked for (trap 7 above). **A
-permission diff is not a capability diff**; what those requests are is in "What
-leaves your machine".
+Do not read that as "none of them makes a request". `02-techniques` makes up to two
+per running row, from the page's own world, and no manifest key records it —
+`host_permissions` would not help it and so is not asked for (trap 7 above).
+
+And `03-payloads`'s manifest asks for exactly what `02`'s does: same one permission,
+same three match patterns, no new key of any kind — the diff is the name, the
+description, the version and the button's tooltip. What it gained over
+`02` is a request per question asked, decoded application data on screen, and — once you type
+a codec endpoint into its popup — **an outbound host that is not Temporal's**. Every
+one of those rides the page's world, so there is nothing for a manifest to declare.
+**A permission diff is not a capability diff**, and `02`→`03` is the sharpest example
+of it in this repository; what those requests are is in "What leaves your machine".
 
 The content scripts are declared
 against `https://cloud.temporal.io/*`, `http://localhost/*` and
@@ -426,13 +465,68 @@ From `02-techniques`, three things, each of which you asked for:
   rather than two. The popup reports the running total, because a cost you cannot see
   is a cost nobody reviews.
 
+  The `⟳` in the column header re-asks now rather than on the cache's schedule, and
+  that is the only way to make this extension fetch faster than it chose to. It is
+  bounded to one round per run per five seconds, and the bound is enforced where the
+  request is made rather than where the button is, because a page can post that
+  message too. That button is the *only* thing that moves an age. The ages are exact
+  to the second but **frozen at the instant Temporal was read** — every one is
+  measured from the cache entry's own `observedAtMs`, not from the clock, and the
+  hover text dates it and says so. There is no ticker: the cell is a function of its
+  answers, so a pass over unchanged answers writes nothing. The trade is deliberate
+  and it errs the safe way — a genuine stall reads *younger* than it is, by up to one
+  ask interval, where an animated age would have shown a stall that had already ended.
+
   **No payload is decoded, anywhere.** Everything on screen is metadata — an event
   type, an event id, a timestamp, an attempt count, an activity type name. In
   particular the retry badge does **not** read `lastFailure.message`, which sits
   directly beside the attempt count it does read: a failure message is application
-  data, and this project's claim is that it never reads any. Stage 03 — the payload
-  stage — is where that boundary is deliberately crossed, with a codec server, and it
-  gets a section of this document to itself when it is written.
+  data, and this project's claim is that it never reads any. `03-payloads` is where
+  that boundary is deliberately crossed — next.
+
+From `03-payloads`: the three above, and two more. The permission surface is the
+same, so no permission marks the difference:
+
+- **One more question to your own Temporal, per question asked.** A single history
+  event each: the first one for a workflow's input, the last one for its outcome — so a
+  hover on a *closed* row costs two requests and a hover on a *running* one costs one,
+  because it has no outcome to ask about. Nothing on render — the `{ }` button costs
+  nothing until a pointer rests on it — and a question already in flight is joined
+  rather than asked again, which matters because a click on the button fires `focusin`
+  and `click` and both open the panel. The same ledger authorises it, the same pacer
+  paces it, and the answers are cached per `(namespace, workflowId, runId, kind)` in a
+  bounded cache that the payload switch and the master switch both empty, because what
+  that cache holds is decoded personal data rather than an event id.
+- **The payload itself, to the codec server you named — and to nowhere else.** This
+  is the only egress in this repository that is not the page's own Temporal, and it
+  exists only after you type a host into the popup:
+
+  - **Empty by default.** With no endpoint, unreadable payloads are shown as a byte
+    count and a sentence saying so. Nothing is sent, nothing is guessed from the
+    namespace, and nothing is read out of the Temporal UI's own codec setting — the
+    field in the popup is the only place an endpoint can come from.
+  - **Only what cannot be read locally.** A plaintext payload is decoded in the
+    browser and never sent, including a plaintext one sitting beside an encrypted one
+    in the same request.
+  - **`https`, or `http` on loopback.** Nothing else is accepted, because the response
+    is decrypted data.
+  - **Never with any credential.** The codec call goes out through a different
+    function from the one that spends the page's bearer, and that function's own type
+    has no `credentials` field and refuses an `Authorization` or cookie header outright
+    — not a default, a thing it cannot express. A codec server that authenticates its
+    callers simply cannot be used from here, and the panel says so when it answers
+    `401`.
+  - **Only on a hover, through this extension's own UI.** No egress on render, no egress
+    on scroll, no background refresh. A script already running in the page can forge the
+    request without any gesture; that is the weakness section's subject, not this list's.
+
+  What that means in plain terms: **a codec server you name can see decrypted
+  workflow payloads for the runs you hover.** That is the point of the feature, and it
+  is the reason this one setting is off until you fill it in while every other feature
+  in this repository ships on. [`../03-payloads/README.md`](../03-payloads/README.md#the-row-that-matters-data-leaves-the-browser)
+  states the same thing in the security card, and its
+  [weakness section](../03-payloads/README.md#the-weakness-and-what-closing-most-of-it-took)
+  says what a hostile page can still do with that field.
 
 There is no analytics and no telemetry in any project. To check rather than
 believe:
@@ -449,5 +543,14 @@ fetching; the ones that are code are in `src/inject.ts` (the same wrapper as `01
 and `src/pageApi.ts`, which captures the page's `fetch` once as `pageFetch` and calls
 it in exactly two places: to pass the page's own request through untouched, and to ask
 one of the two questions in `src/rowInfo.ts` about a run the ledger has authorised.
-Nothing else in either project touches the network: there is no `XMLHttpRequest`,
+
+`03-payloads` is the same two files — and that is the useful part of the check, since
+the payload feature adds no third holder of the page's `fetch`. `pageApi.ts` there
+calls `pageFetch` in three places rather than two, and the third is the whole
+difference between the stages: a URL that came from a message rather than from the
+ledger, sent with no `Authorization` header. Which of the two functions a caller
+reaches is therefore the security question in that project, and it is why they are
+separate exports with the reasoning written between them.
+
+Nothing else in any project touches the network: there is no `XMLHttpRequest`,
 `sendBeacon`, `WebSocket` or `EventSource` anywhere.

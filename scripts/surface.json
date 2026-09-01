@@ -85,6 +85,17 @@
             "content_security_policy": false,
             "chrome_api": true,
             "why": "One permission, `storage`, for the user's own deep-link templates and toggles. Still no host_permissions — but read the next sentences, because this project DOES originate requests and no manifest key says so. Two per running row: one history-reverse page of one event for the `Last event` column, and one DescribeWorkflowExecution for the retrying-activity badge (pendingActivities is in no other response, which is the justification for the whole request path). Both are issued from the page's own world, by src/pageApi.ts and nothing else, where a host permission would buy nothing: Chrome treats a content-script fetch as cross-origin even with one. There is ONE gate, not one per feature — fetchForListedRun() is the only route to the page's Authorization header and it checks the ledger itself, so a feature added later cannot forget to. There is no other outbound host in this project and no setting that can add one: it decodes no payload, and the retry badge deliberately does not read lastFailure.message, so nothing here reads application data. The deep-link card on a single workflow's page fetches nothing at all — it reads responses the page fetched for itself, through the watcher seam in pageApi.ts, which touches neither the ledger nor the credentials. The codec server, the first external egress and the personal-data question all arrive together in stage 03, the payload stage. A permission diff is not a capability diff; the audit for this project is that security card, not this list alone."
+        },
+        "03-payloads": {
+            "permissions": ["storage"],
+            "optional_permissions": [],
+            "host_permissions": [],
+            "background": false,
+            "web_accessible_resources": false,
+            "externally_connectable": false,
+            "content_security_policy": false,
+            "chrome_api": true,
+            "why": "THE SAME BUDGET AS 02, AND THAT IS THE WARNING THIS ENTRY EXISTS TO CARRY. One permission, `storage`, no host_permissions, no service worker, the same three content-script matches — every capability-bearing key is identical, and a manifest diff against 02 shows the name, the description, the version and the button's tooltip. What changed is the capability: this is the first project that can send data OUT of the browser, the first that decodes payloads at all, and therefore the first whose panel can hold personal or financial data. No manifest key says any of that, and no permission budget can, which is why this entry is the floor and not the audit. The audit is the security card in 03-payloads/README.md, where the egress is described request-for-request, the two credential options are shown as deliberate deletions, and the residual forged-message risk is stated once at full width along with the argument for accepting it. The egress claims are asserted from outside the extension in 03-payloads/tests/unit/apiInject.spec.ts."
         }
     }
 }

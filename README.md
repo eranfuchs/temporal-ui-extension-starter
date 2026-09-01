@@ -2,16 +2,19 @@
 
 Small Chrome extensions that add a **parent/child family tree** to the Temporal Web
 UI — and, more to the point, a worked example of how to add your own view to a UI
-you do not own. **Two of them are in this repository**, as the first two rungs of a
-ladder; the table below says what the later stages are planned to add and what each
-of them costs.
+you do not own. **Three of them are in this repository**, as the first three rungs
+of a ladder; the table below says what each rung costs, and what stage 04 is planned
+to add.
 
-No backend. No credentials to configure or store. No changes to Temporal. They work on Temporal Cloud
-and on a local `temporal server start-dev` without a line of configuration,
-because they read the API responses the page is already fetching. 01 never talks
-to Temporal at all; 02 asks the page's own API two small questions per *running*
-row, using the page's own session, and still holds no credential of its own — and
-still decodes no payload.
+No backend of ours. No credentials to configure or store. No changes to Temporal.
+They work on Temporal Cloud and on a local `temporal server start-dev` without a
+line of configuration, because they read the API responses the page is already
+fetching. 01 never talks to Temporal at all; 02 asks the page's own API two small
+questions per *running* row, using the page's own session, and still holds no
+credential of its own — and still decodes no payload. 03 is where payloads arrive:
+a workflow's input and result on hover, decoded in the browser when they are
+readable and through **a codec server you name yourself** when they are not, which
+makes it the first rung that can send anything out of the browser at all.
 
 ```
 Workflow ID                                    Type                Status
@@ -53,13 +56,13 @@ produce real parent/child families in about a minute.
 
 They are separate extensions, not one extension with feature flags. Each is
 clonable and buildable on its own, and each rung of the ladder costs something
-visible. Two rungs are here; the rest are planned:
+visible. Three rungs are here; stage 04 is planned:
 
 | Project | Adds | Permissions | Requests it makes | Worker |
 |---|---|---|---|---|
 | [`01-family-tree/`](01-family-tree/) | the family tree, and nothing else | **none** | **none** | none |
-| [`02-techniques/`](02-techniques/) | deep links to your own log tool (per row, and per activity on a workflow's own page), a settings pane, a "last event" column, a retrying-activity badge | `storage` | up to two per **running** row, to the page's own Temporal API, paced and cached. Nowhere else | none |
-| stage 03, the **payload stage** — planned, not here yet | each workflow's input and result on hover, decoded through your own codec server | `storage` | the above, plus the codec server you typed into the popup | none |
+| [`02-techniques/`](02-techniques/) | deep links to your own log tool (per row, and per activity on a workflow's own page), a settings pane, a "last event" column with a refresh control, a retrying-activity badge | `storage` | up to two per **running** row, to the page's own Temporal API, paced and cached — plus whatever the refresh control is pressed for, floored at one round per run per 5s. Nowhere else | none |
+| [`03-payloads/`](03-payloads/), the **payload stage** | each workflow's input and result on hover, decoded through your own codec server | `storage` — **the same permission surface as 02** | the above, plus one history event per question — one for a running row, two for a closed one — and, only once you have named one, the codec server you typed into the popup | none |
 | stage 04, conveniences — sketched only | column reorder, a larger page size, an activity finder, expand-to-families | `storage` | no new destination | none |
 
 The "requests" column is there because it is the one cost the manifest does
@@ -77,19 +80,28 @@ purpose, which is why the codec server, the first external dependency and the wh
 personal-data question arrive together, in one project, rather than being spread
 across the ladder.
 
-03 is the rung that carries what most teams actually came for — seeing a workflow's
-input and result without leaving the list — which is why it is a stage of its own
-and not a bag of extras. The conveniences that were once bundled with it are stage
-04's problem; none of them changes what the extension can reach.
+03 carries what most teams actually came for — seeing a workflow's input and result
+without leaving the list — which is why it is a stage of its own and not a bag of
+extras. The conveniences that were once bundled with it are stage 04's problem; none
+of them changes what the extension can reach.
 
-**Neither 03 nor 04 is written yet**, and there is no empty directory standing in for
-either. The two rows above them say what they are planned to carry; every claim in
-the two rows above *those* is about code that is in this tree.
+**And 03's manifest asks for exactly what 02's does.** Same one permission, same
+absent `host_permissions`, same absent service worker, same three content-script
+matches — every capability-bearing key is identical, and the diff is the name, the
+description, the version and the button's tooltip — while the extension gains payload
+decoding, an outbound host and a panel that can hold somebody's personal data. If you
+read one diff in this repository, read that one: it is the clearest statement the
+ladder makes that **a permission diff is not a capability diff**.
+
+**Stage 04 is not written yet**, and there is no empty directory standing in for it.
+Its row above says what it is planned to carry; every claim in the three rows above
+it is about code that is in this tree.
 
 That ladder is the argument this repository is making: a genuinely useful view
 costs zero permissions, and every permission after that should be traceable to a
-feature you can name. Read `01`, then diff it against `02` — the diff *is* the
-lesson about what each capability costs.
+feature you can name. Read `01`, then diff it against `02`, then diff `02` against
+`03` — those diffs *are* the lesson about what each capability costs, and the second
+one is the lesson that a capability can cost nothing in the manifest.
 
 ## How it works
 
@@ -101,22 +113,23 @@ replaces `window.fetch` with a wrapper, clones any response from
 extension's world, which folds them into a tree and rewrites the table.
 Consequently:
 
-- **no `host_permissions`** — 01 never issues a request at all, and 02's requests
-  are made in the page's world, where a host grant changes nothing;
+- **no `host_permissions`** — 01 never issues a request at all, and 02's and 03's
+  requests are made in the page's world, where a host grant changes nothing;
 - **it cannot surface data the user could not already see**, because the only data
-  it has is a response the page was allowed to receive;
+  it has is a response the page was allowed to receive — which holds for 03's
+  payloads too: the same session, the same runs, the same API;
 - **Cloud and self-hosted work identically**, since both drive the same API from
   the browser.
 
 Three more properties hold for **01 only**, and the point of the ladder is that you
 can see exactly where each one stops:
 
-| | 01 | 02 |
-|---|---|---|
-| Holds no credential of any kind | yes — nothing to leak, rotate or explain | it **reads** the page's `Authorization` header in the page's world to re-issue the page's own call. Never stored, never posted to the extension's world, never sent anywhere but Temporal's own API |
-| Issues no request at all | yes | up to two per running row: one `history-reverse` page of one event, one `DescribeWorkflowExecution`. Cached, paced, and never for a closed workflow |
-| Needs no server | yes | the same — 02 talks to exactly one server, the one the page is already talking to. (03 is where that stops.) |
-| Takes no instruction from the page | yes — the page's world only ever *tells* it things | it **serves** requests over `postMessage`, which is a trust boundary and the most interesting thing in the repository. See [`02-techniques/README.md`](02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) |
+| | 01 | 02 | 03 |
+|---|---|---|---|
+| Holds no credential of any kind | yes — nothing to leak, rotate or explain | it **reads** the page's `Authorization` header in the page's world to re-issue the page's own call. Never stored, never posted to the extension's world, never sent anywhere but Temporal's own API | the same, and the outbound half is where it matters: the codec fetch carries **no** credential of any kind — `credentials: 'omit'` as a literal — and there is no option to attach one. Temporal's own UI has two (an access token, and cookies); here the token was never built and the cookie switch was deleted rather than defaulted off, because a default protects only the honest path when the endpoint arrives over `postMessage` |
+| Issues no request at all | yes | up to two per running row: one `history-reverse` page of one event, one `DescribeWorkflowExecution`. Cached, paced, and never for a closed workflow | the same, plus **one history event per payload question** — one for a running row, two for a closed one, and nothing on render, so a hundred-row list still costs zero. Both features share one pacer, so "four Temporal requests at a time" is a property of the extension |
+| Needs no server | yes | the same — 02 talks to exactly one server, the one the page is already talking to | **no — this is where that stops.** An encrypted payload needs a codec server you name, and that field is the only thing in the repository that can send data off the machine. Empty by default; empty means nothing leaves |
+| Takes no instruction from the page | yes — the page's world only ever *tells* it things | it **serves** requests over `postMessage`, which is a trust boundary and the most interesting thing in the repository. See [`02-techniques/README.md`](02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) | the same bus, now carrying decoded payloads back and a caller-named codec host out — so the ledger is worth more here than it was there. See [`03-payloads/README.md`](03-payloads/README.md#the-weakness-and-what-closing-most-of-it-took) |
 
 The full walkthrough — including the traps that cost hours to find, from the
 `window.fetch` getter lock to why `z-index` must be exactly `0` — is in
@@ -144,6 +157,22 @@ driving it against a case per rule it must reject and a case it must accept. A
 gate that has quietly stopped detecting its own failure case is worse than no
 gate: it converts an unchecked risk into a false assurance.
 
+### Every feature ships on, except one
+
+Every toggle in every project defaults to **on**. A feature that arrives switched
+off is a feature nobody turns on, and it teaches nobody anything — so the cost of
+each one is bounded and written down instead of being deferred to a checkbox: the
+per-row questions ask only about *running* rows, the payload panel asks nothing
+until a pointer lands on a row, and each of those bounds is asserted by a test that
+counts requests.
+
+**One setting defaults to off, and it is the one that names a host.** 03's codec
+endpoint is empty out of the box, and empty is not a cautious default — it is the
+reason "no payload byte leaves this machine" is checkable rather than promised,
+because that field is the only place an endpoint can come from. The rule the
+repository follows, and the one worth copying into a fork: default on, unless the
+setting enables egress, bypasses a security control, or writes something.
+
 If you fork this inside a company, put your own internal terms in a **gitignored**
 `leakgate.local.txt` — see [`leakgate.denylist.example`](leakgate.denylist.example).
 A repository that publishes the list of your internal hostnames has already
@@ -154,6 +183,8 @@ leaked it.
 ```
 01-family-tree/     the tree, no permissions               ← start here
 02-techniques/      + deep links, settings, two questions  (storage)
+03-payloads/        + input and result on hover, a codec server  (storage — the
+                    same permission surface as 02, and the first rung with egress)
 sample/             Temporal SDK workflows that produce a hierarchy to look at
 scripts/            preflight and the gates, shared by every project
 docs/how-it-works.md   the mechanism, and the traps that cost hours
@@ -219,15 +250,24 @@ Specific about which parts are proven:
   wrapper evicted it, the tree went on working, and every per-row question answered
   "Nothing observed on this page yet" for the life of the tab, silently (trap 8).
 - **Not verified on a tenant** — `02-techniques`' newest features: the **last-event
-  column**, the **retrying-activity badge** and the **detail-page card**. They were
+  column** (including its refresh control and its frozen, dated ages), the
+  **retrying-activity badge** and the **detail-page links**. They were
   built after those rounds. Their specs are green, which on this repository's own
   evidence is not the same thing; treat every claim about how they behave on a real
   tenant as unverified, and see the "What has not been done" section of
   [`02-techniques/README.md`](02-techniques/README.md).
-- **Not verified here** — either project against a self-hosted UI holding real
+- **Not verified on a tenant, and not against a real codec server** —
+  `03-payloads`, in full. Its specs are green, including every egress claim asserted
+  from the attacker's side against a fake network that records request bodies; no
+  round has been driven on a live tenant, and no real codec server has answered a
+  `/decode`. The panel's own hover behaviour was fixed *because* of a live round on
+  the internal extension it was rewritten from, which is the strongest available
+  argument for not trusting the specs alone. See the "What has not been done"
+  section of [`03-payloads/README.md`](03-payloads/README.md).
+- **Not verified here** — any project against a self-hosted UI holding real
   workflows; the rate-limit backoff against a real Temporal rate limiter;
   `sample/` end-to-end, whose dependencies have not been installed on the machine it
-  was written on; and everything about stages 03 and 04, which do not exist yet.
+  was written on; and everything about stage 04, which does not exist yet.
 
 Expect a self-hosted UI on another hostname to need that hostname adding to the
 project's `public/manifest.json` — and to `scripts/surface.json`, deliberately,

@@ -159,14 +159,17 @@ typechecker is where that claim is enforced rather than asserted.
 Deep links to your log tool, a settings pane, a last-event column and a
 retrying-activity badge are [`../02-techniques/`](../02-techniques/). Workflow
 input and result on hover, decoded through your codec server, are the rung above
-that — stage 03, the payload stage — and conveniences like column reorder, a bigger
-page size and a cross-workflow activity finder are the one above *that*. Neither is
-in this repository yet.
+that — [`../03-payloads/`](../03-payloads/), the payload stage. Conveniences like
+column reorder, a bigger page size and a cross-workflow activity finder are the one
+above *that*, and are not in this repository yet.
 
 Each step up the ladder costs something: 02 asks for `storage`, and — the part no
 manifest key shows — it **originates requests**, because two of the facts it puts
-on screen are in no response the page had already fetched. This one asks for
-nothing and requests nothing, and that is the point of having it separately.
+on screen are in no response the page had already fetched. 03 asks for the same
+`storage` and nothing more, while gaining decoded payloads and a host of your
+choosing to send the unreadable ones to; its manifest is 02's, which is the sharpest
+thing this ladder has to say. This one asks for nothing and requests nothing, and
+that is the point of having it separately.
 
 ## Commands
 
