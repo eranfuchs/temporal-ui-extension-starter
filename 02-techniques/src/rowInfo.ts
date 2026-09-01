@@ -54,6 +54,21 @@ export interface RowInfoRequest {
     // the same answer no matter which render pass asked for it — and one answer
     // per run means the slow ones do not hold up the fast ones.
     runs: { workflowId: string; runId: string }[];
+    // "Do not answer these from what you already know." False on every automatic
+    // pass; true only when the user pressed the refresh control in the column
+    // header.
+    //
+    // This flag switches OFF the TTL cache, which is the first of the four things
+    // that keep this feature from being a load generator (see rowInfoServe.ts) —
+    // and anything running in the page can post this message, so a flag that
+    // switched it off on request would have switched it off for whoever asked, as
+    // often as they liked. FRESH_FLOOR_MS below is what stops that, enforced by
+    // the receiver rather than promised by the sender.
+    //
+    // It is a flag on the existing message and NOT a message of its own, which is
+    // deliberate: the number of message types this extension accepts from the page
+    // is what a reviewer enumerates, and a refresh button is not worth adding one.
+    fresh: boolean;
 }
 
 export interface RowInfoResult {
@@ -70,6 +85,29 @@ export interface RowInfoResult {
     runId: string;
     lastEvent: LastEvent | null;
     retry: PendingRetry | null;
+    // WHEN THIS WAS TRUE — the instant the answer was read from Temporal, not the
+    // instant it was sent on. The two differ by up to the TTL, because an answer may
+    // be served from the cache in rowInfoServe.ts.
+    //
+    // Everything that renders an age measures it against THIS and never against
+    // Date.now(), and that is the whole reason the field exists. An age is a
+    // subtraction, so measuring against the current clock produces a number that
+    // creeps upward on its own — which reads as a live measurement of a workflow
+    // nobody is watching. The event timestamp is at most 35 seconds old (see
+    // ASK_INTERVAL_MS) and may be a great deal staler than the display implies; what
+    // this extension actually knows is "at 12:04:31, the newest event was 3m 00s
+    // old", and that is the sentence the column now tells.
+    //
+    // The cost of the honest version is that the age UNDER-reports a stall by up to
+    // one ask interval. That is the right direction to be wrong in: the alternative
+    // was a number that looked precise to the second while the fact under it was half
+    // a minute old, and the only way to make a per-second age truthful would be a
+    // per-second request per row — the load this whole file exists to avoid.
+    //
+    // Where fields disagree — one served from cache, the other freshly fetched — this
+    // is the OLDER of them, so it is a floor: everything in this message was true at
+    // or after this instant.
+    observedAtMs: number;
     // Set when a question could not be answered at all. Rendered into a title
     // attribute, so it is written for a human — never a status code on its own.
     error: string | null;
@@ -79,6 +117,17 @@ export interface RowInfoResult {
 // build and a ledger lookup. The bound is deliberately larger than a Temporal
 // list page so the real caller never trips it.
 export const MAX_RUNS_PER_REQUEST = 500;
+
+// The floor under `fresh`. An answer that arrived less than this ago is not
+// re-fetched however many times it is asked for, so the worst a page script can do
+// by posting `fresh` in a loop is one round of requests per run per five seconds —
+// rather than one per message. It is the bound that lets the flag exist at all.
+//
+// Five seconds is short enough that a human who presses refresh gets something they
+// would call fresh, and far enough below the TTL that the button is not decoration.
+// The button disables itself for the same interval, so the rule the receiver
+// enforces is the rule the reader can see.
+export const FRESH_FLOOR_MS = 5_000;
 
 // SHAPE ONLY. This says the message is well-formed and nothing whatever about who
 // sent it — every field of it is published in this repository. What stops a forged
@@ -92,6 +141,10 @@ export function isRowInfoRequest(value: unknown): value is RowInfoRequest {
     const want = message['want'];
     if (!Array.isArray(want) || want.length === 0) return false;
     if (!want.every((field) => field === 'lastEvent' || field === 'retry')) return false;
+    // Required, not optional. A message that does not say which mode it is asking
+    // for is a message from a different build, and defaulting it here would make the
+    // cache-bypassing mode the one you get by omission.
+    if (typeof message['fresh'] !== 'boolean') return false;
     const runs = message['runs'];
     if (!Array.isArray(runs) || runs.length > MAX_RUNS_PER_REQUEST) return false;
     return runs.every((run) => {
@@ -119,6 +172,10 @@ export function isRowInfoResult(value: unknown): value is RowInfoResult {
     if (message['source'] !== MESSAGE_SOURCE || message['type'] !== 'row-info-result') return false;
     if (typeof message['namespace'] !== 'string' || !message['namespace']) return false;
     if (typeof message['workflowId'] !== 'string' || typeof message['runId'] !== 'string') return false;
+    // Required, and NOT nullable. Every age on screen is measured against it, so a
+    // message without it would either have to be dropped later or silently fall back
+    // to Date.now() — which is the exact behaviour this field was added to remove.
+    if (!isFiniteNumber(message['observedAtMs'])) return false;
     if (!isNullOr(message['error'], (error) => typeof error === 'string')) return false;
     if (!isNullOr(message['lastEvent'], isLastEvent)) return false;
     return isNullOr(message['retry'], isPendingRetry);
@@ -269,11 +326,64 @@ export function readPendingRetry(body: unknown): PendingRetry | null {
 
 // ── Saying it in a cell ──────────────────────────────────────────────────────
 
-// The compact form for the column: "3m", "2h", "just now". No "ago" — the column
-// header says what these are, and the width is the point.
-export function formatAge(timeMs: number | null, nowMs: number): string {
+// EVERY AGE HERE IS FROZEN AT AN OBSERVATION, which is why the second argument of
+// each of these is called asOfMs and why passing Date.now() to any of them is a bug.
+//
+// The value is measured against the instant the answer was READ (observedAtMs on the
+// result), so it changes when — and only when — a newer answer arrives. Nothing in
+// this extension animates an age. A number that advances on a timer says "I am
+// watching this workflow"; this feature reads each running row at most every 35
+// seconds, so the honest claim is about a past instant and the tooltip names it.
+//
+// TWO FORMATS, and the difference is how much room the caller has:
+//
+//   • formatAgePrecise — the "Last event" column. Exact to the second, because the
+//     difference between 12s and 4m 12s of silence is the whole question the column
+//     answers, and width-stable because it sits in a table.
+//   • formatAge — the tooltips, where a compact "3m" is enough and the string
+//     shares a line with other text. detailLinks.ts uses it for an activity's own
+//     age, measured from a timestamp in the event history rather than from a reading
+//     of one, and rounded to a whole minute — so that tooltip is rewritten at most
+//     once a minute rather than once a render pass.
+//
+// Do not collapse them into one until that difference goes away.
+
+// The two most significant units, seconds included: "47s", "3m 07s", "5h 12m",
+// "3d 04h". Three decisions, none of them cosmetic:
+//
+//   • TWO UNITS, never three. "2d 05h 13m 09s" makes the column wide enough to push
+//     the UI's own columns off the right-hand edge, and nobody reads the seconds on
+//     a two-day-old event anyway.
+//   • THE SMALLER UNIT IS ZERO-PADDED. Without it "3m 9s" and "3m 10s" are different
+//     widths, so the column's width would depend on which rows are in it; tabular
+//     figures fix the width of a digit, not the number of them.
+//   • FLOOR, NOT ROUND. Rounding reports "1m 00s" for an event that is 59 seconds
+//     old, and this number's one job is to never claim more silence than there was.
+export function formatAgePrecise(timeMs: number | null, asOfMs: number): string {
     if (timeMs === null) return '—';
-    const seconds = Math.round((nowMs - timeMs) / 1000);
+    const seconds = Math.floor((asOfMs - timeMs) / 1000);
+    if (seconds <= 0) return 'now'; // a clock skew of a second or two is normal
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ${padTwo(seconds % 60)}s`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) return `${hours}h ${padTwo(minutes % 60)}m`;
+    return `${Math.floor(hours / 24)}d ${padTwo(hours % 24)}h`;
+}
+
+function padTwo(value: number): string {
+    return value < 10 ? `0${value}` : `${value}`;
+}
+
+// The compact form: "3m", "2h", "just now". No "ago" — whatever shows this says
+// what it is, and the width is the point. Measured from a reading, like everything
+// else here, EXCEPT where the timestamp itself is exact: retryBadgeTitle dates the
+// string it goes into, while detailLinks.ts feeds this an activity's scheduled time
+// straight out of the event history, which is the moment itself and not an
+// observation of it — so that one needs no dating.
+export function formatAge(timeMs: number | null, asOfMs: number): string {
+    if (timeMs === null) return '—';
+    const seconds = Math.round((asOfMs - timeMs) / 1000);
     if (seconds < 0) return 'now'; // a clock skew of a second or two is normal
     if (seconds < 10) return 'now';
     if (seconds < 60) return `${seconds}s`;
@@ -284,9 +394,25 @@ export function formatAge(timeMs: number | null, nowMs: number): string {
     return `${Math.floor(hours / 24)}d`;
 }
 
-export function lastEventTitle(event: LastEvent, nowMs: number): string {
+// The title on the column's own cell. It uses the column's own format — a reader
+// comparing the two would otherwise be told "3m 07s" in the cell and "3m ago" in the
+// tooltip and have to work out which one to trust — and it is where the cell's number
+// is DATED.
+//
+// That last part is the tooltip's real job. The cell has room for an age and nothing
+// else, so on its own it cannot say which instant the age is measured from; a reader
+// who assumes "now" would be wrong by up to one ask interval. So the title gives the
+// reading's own timestamp, and says the number is frozen and how to move it. An
+// as-of value that does not disclose its as-of is the thing this feature was
+// criticised for, and it was a fair criticism.
+export function lastEventTitle(event: LastEvent, asOfMs: number): string {
     const when = event.timeMs === null ? 'no timestamp' : new Date(event.timeMs).toISOString();
-    return `Last event #${event.eventId}: ${event.eventType}\n${when} (${formatAge(event.timeMs, nowMs)} ago)`;
+    return [
+        `Last event #${event.eventId}: ${event.eventType}`,
+        `at ${when}`,
+        `${formatAgePrecise(event.timeMs, asOfMs)} old when this was read, at ${new Date(asOfMs).toISOString()}`,
+        'Frozen at that reading — press ⟳ in the column header to ask Temporal again.',
+    ].join('\n');
 }
 
 // "↻ 900" — the attempt count, because that single number is what separates "this
@@ -298,19 +424,25 @@ export function retryBadgeLabel(retry: PendingRetry): string {
 // The badge's title. Read the no-failure-message note at the top of this file
 // before adding a line here: everything in this string has to be safe to show to
 // somebody looking over the operator's shoulder.
-export function retryBadgeTitle(retry: PendingRetry, nowMs: number): string {
+//
+// Its two relative times are measured from the reading, like the column's, and the
+// last line dates them. "next attempt in 8s" is a statement about a moment that has
+// already passed by the time anybody hovers, and without the date it would read as a
+// countdown that had stopped.
+export function retryBadgeTitle(retry: PendingRetry, asOfMs: number): string {
     const ceiling = retry.maximumAttempts === null ? 'unlimited' : `${retry.maximumAttempts}`;
     const lines = [`${retry.activityType} is retrying`, `attempt ${retry.attempt} of ${ceiling}`];
-    if (retry.nextRetryAtMs !== null) lines.push(`next attempt ${formatWhen(retry.nextRetryAtMs, nowMs)}`);
+    if (retry.nextRetryAtMs !== null) lines.push(`next attempt ${formatWhen(retry.nextRetryAtMs, asOfMs)}`);
     if (retry.scheduledAtMs !== null) {
-        lines.push(`this attempt scheduled ${formatAge(retry.scheduledAtMs, nowMs)} ago`);
+        lines.push(`this attempt scheduled ${formatAge(retry.scheduledAtMs, asOfMs)} ago`);
     }
+    lines.push(`read at ${new Date(asOfMs).toISOString()}`);
     lines.push('(the failure message is deliberately not read — see src/rowInfo.ts)');
     return lines.join('\n');
 }
 
-function formatWhen(atMs: number, nowMs: number): string {
-    const seconds = Math.round((atMs - nowMs) / 1000);
+function formatWhen(atMs: number, asOfMs: number): string {
+    const seconds = Math.round((atMs - asOfMs) / 1000);
     if (seconds <= 0) return 'due now';
     if (seconds < 60) return `in ${seconds}s`;
     return `in ${Math.floor(seconds / 60)}m`;

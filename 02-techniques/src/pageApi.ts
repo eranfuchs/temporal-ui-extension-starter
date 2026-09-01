@@ -239,7 +239,7 @@ function recordListedRuns(response: Response, namespace: string): void {
 //
 // A seam for reading a response the page fetched that is NOT a workflow list —
 // the one caller is src/detailWatch.ts, which reads a single workflow's own
-// history and describe calls to draw its deep-link card.
+// history and describe calls to draw its deep links.
 //
 // OBSERVATION IS NOT AUTHORITY, and that is the whole reason this is a second,
 // weaker path instead of a couple of extra branches inside remember():
@@ -253,7 +253,7 @@ function recordListedRuns(response: Response, namespace: string): void {
 //     has no use for either; not learning them means an observed URL can never
 //     extend where the page's bearer may be spent.
 //   • there is nothing to wait on, no `fills` entry, because nothing is authorised
-//     off a watched response. It arrives when it arrives, and the card redraws.
+//     off a watched response. It arrives when it arrives, and the links redraw.
 //
 // The cost is one clone and one deferred JSON.parse per matching response — the
 // same bill inject.ts pays for the list, and paid on a body the page has just

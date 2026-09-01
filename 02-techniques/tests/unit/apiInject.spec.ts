@@ -180,6 +180,9 @@ function rowInfoRequest(overrides: Partial<RowInfoRequest> = {}): RowInfoRequest
         namespace: NAMESPACE,
         want: ['lastEvent', 'retry'],
         runs: [{ workflowId: WORKFLOW_ID, runId: RUN_ID }],
+        // The automatic mode. The tests that care about the other one set it
+        // explicitly, so a reader of any single test can see which one it is about.
+        fresh: false,
         ...overrides,
     };
 }
@@ -624,12 +627,18 @@ describe('asking Temporal about rows the page is showing', () => {
         // A render pass happens on every DOM mutation. Without the TTL cache each
         // one would be a fresh round of requests, which is how a helpful column
         // becomes a load generator.
-        await askRows();
+        const first = await askOneRow();
         const again = await askOneRow();
 
         expect(again.lastEvent).not.toBeNull();
         expect(reverseCalls()).toHaveLength(1);
         expect(describeCalls()).toHaveLength(1);
+        // AND THE SECOND ANSWER IS DATED WHEN THE FIRST ONE WAS READ. This is the
+        // field the column measures its age against, so taking it from the clock at
+        // reply time — the obvious implementation — would date data up to the full TTL
+        // old to "just now", and the cell would show an age that much too short. A
+        // fresh message does not make the fact in it fresh.
+        expect(again.observedAtMs).toBe(first.observedAtMs);
     });
 
     it('asks only for the field it was asked for', async () => {

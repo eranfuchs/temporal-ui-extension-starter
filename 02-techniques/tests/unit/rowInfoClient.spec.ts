@@ -71,6 +71,9 @@ describe('choosing what to ask about', () => {
         expect(posted).toHaveLength(1);
         expect(posted[0]!.request.runs).toEqual([{ workflowId: 'live', runId: LIVE_RUN }]);
         expect(posted[0]!.request.want).toEqual(['lastEvent', 'retry']);
+        // An automatic pass never asks the MAIN world to skip its cache. Defaulting
+        // this the other way would turn every DOM mutation into a round of requests.
+        expect(posted[0]!.request.fresh).toBe(false);
     });
 
     it('sends nothing at all when nothing on screen is running', () => {
@@ -104,6 +107,63 @@ describe('choosing what to ask about', () => {
         // that actually becomes a request.
         expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 40_000)).toBe(1);
         expect(posted).toHaveLength(2);
+    });
+
+    it('asks again straight away when the user presses refresh', () => {
+        // The one path that does not wait for the ask interval, and the only caller of
+        // it is the control in the column header. Everything else about the request is
+        // unchanged — same rows, same fields — so what a press buys is exactly two
+        // things: this side skips `askedAt`, and the MAIN world is told to skip its
+        // cached answer.
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 1_000)).toBe(0);
+
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 1_000, 'fresh')).toBe(1);
+
+        expect(posted).toHaveLength(2);
+        expect(posted[1]!.request.fresh).toBe(true);
+        expect(posted[1]!.request.runs).toEqual([{ workflowId: 'live', runId: LIVE_RUN }]);
+        // A press is not an override of the filters. A closed workflow's last event
+        // still cannot change, so refresh does not turn it into a request either.
+        expect(posted[1]!.request.runs).toHaveLength(1);
+    });
+
+    it('does not let a press become a licence to ask forever', () => {
+        // A press records askedAt like any other ask, so the render passes that follow
+        // it — and a press schedules one immediately and one when the floor lifts — are
+        // throttled normally. The bound on repeated PRESSES is FRESH_FLOOR_MS, and it is
+        // enforced by the receiver rather than here; see rowInfoServe.ts.
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW, 'fresh')).toBe(1);
+        expect(requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 1_000)).toBe(0);
+        expect(posted).toHaveLength(1);
+    });
+
+    it('keeps the answers it already has while a refresh drains', () => {
+        // clearRowInfo() is deliberately NOT part of pressing refresh. Emptying the
+        // answers would blank the column for as long as the round takes, and a column
+        // that goes blank when you ask it to update reads as a feature that broke.
+        installRowInfo(() => {});
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW);
+        window.dispatchEvent(
+            new MessageEvent('message', {
+                source: window,
+                data: {
+                    source: MESSAGE_SOURCE,
+                    type: 'row-info-result',
+                    namespace: NAMESPACE,
+                    workflowId: 'live',
+                    runId: LIVE_RUN,
+                    lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW },
+                    retry: null,
+                    observedAtMs: NOW,
+                    error: null,
+                } satisfies RowInfoResult,
+            }),
+        );
+
+        requestRowInfo(NAMESPACE, ['lastEvent'], LIVE_AND_DONE, NOW + 1_000, 'fresh');
+
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)?.lastEvent?.eventType).toBe('ActivityTaskStarted');
     });
 
     it('asks about a row that appears later, without re-asking about the others', () => {
@@ -157,6 +217,7 @@ describe('receiving answers', () => {
             runId: LIVE_RUN,
             lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW },
             retry: null,
+            observedAtMs: NOW,
             error: null,
             ...overrides,
         };
@@ -186,6 +247,20 @@ describe('receiving answers', () => {
         // Keyed by RUN, not by workflow id: a retried or continued-as-new workflow
         // keeps its id and gets a new run, and both appear in the same list.
         expect(rowInfoFor(NAMESPACE, 'live', DONE_RUN)).toBeUndefined();
+    });
+
+    it('keeps the instant the answer was READ, not the instant it arrived', () => {
+        // The column subtracts against this number, so where it comes from is the whole
+        // honesty of the feature. The MAIN world may serve a cached answer up to its TTL
+        // old; storing the arrival time here — or calling Date.now() at render — would
+        // date stale data to now and print an age that is short by the cache's age.
+        installRowInfo(() => {});
+        ask();
+
+        const readAtMs = NOW - 28_000;
+        deliver(answer({ observedAtMs: readAtMs }));
+
+        expect(rowInfoFor(NAMESPACE, 'live', LIVE_RUN)?.observedAtMs).toBe(readAtMs);
     });
 
     it('ignores the page’s own traffic and anything from an iframe', () => {

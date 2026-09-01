@@ -12,10 +12,10 @@ ask for within a day of installing it:
   most recently, and whether one of its activities is stuck in a retry loop.
 
 ```
-Workflow ID                                Status     Last event
-order-2601011200-01           Logs         Running    3m · ActivityTaskStarted
- ├─ …-01-payment      ↻ 47    Logs         Running    12s · ActivityTaskFailed
- └─ …-01-fulfilment           Logs         Completed
+Workflow ID                                Last event ⟳                   Status
+order-2601011200-01           Logs         3m 00s · ActivityTaskStarted   Running
+ ├─ …-01-payment      ↻ 47    Logs         12s · ActivityTaskFailed       Running
+ └─ …-01-fulfilment           Logs                                        Completed
 ```
 
 The last two are the interesting ones, and not because they are hard: **they are
@@ -31,8 +31,9 @@ node this extension put on the page — so "off" is verifiable, not merely claim
 or a failure message; everything on screen is derived from event *metadata* — event
 types, ids, timestamps, attempt counts, activity type names. That boundary is what
 makes this stage self-contained: no codec server, no egress, and no setting that
-could add one. Payloads belong to the next rung — stage 03, the payload stage —
-which is not in this repository yet.
+could add one. Payloads belong to the next rung,
+[`../03-payloads/`](../03-payloads/) — whose manifest is identical to this one, which
+is the whole reason that rung is worth reading.
 
 ## Run it
 
@@ -54,10 +55,10 @@ own number and hue.
 
 ## The two questions it asks Temporal
 
-### "Last event" — a column appended to the list
+### "Last event" — a column beside the workflow id
 
 For every **running** row: the newest history event, as an age and a type —
-`3m · ActivityTaskStarted`. One
+`3m 00s · ActivityTaskStarted`. One
 `GetWorkflowExecutionHistoryReverse` with `maximumPageSize=1` per run, so a
 workflow with a hundred thousand events costs exactly what a three-event one does.
 
@@ -65,14 +66,80 @@ The reverse direction is the whole of it. Asking the *forward* route for one eve
 returns the workflow's **first** event instead — the same shape, a completely
 different fact, and no error anywhere to tell you.
 
-The column is **appended**, never inserted. A column pushed into the middle would
-have to agree with the header's own column order, and the Temporal UI lets the user
-reorder and hide columns; appending needs to agree with nothing.
+The column sits **immediately after the workflow id**, and that placement is the
+feature working rather than a cosmetic preference: the question it answers — *is this
+one actually moving?* — is asked while reading the id. Appended to the end of a table
+the UI already fills to the edge, the answer is off-screen behind a horizontal scroll.
+
+It was appended once, and appending is genuinely simpler: the end of a row has to
+agree with nothing, whereas a column in the middle has to agree with a header order
+the Temporal UI lets the user reorder and hide. So the position is **computed on
+every pass** — from each row's own id cell, and for the header, which has no
+workflow link of its own to find, from the first body row that had one. Two things
+that cost has to buy: the table stays rectangular (a row with no workflow link at all
+still gets a cell, appended, because a missing cell puts every header one column out
+from its data), and the placement is idempotent — moving a cell that is already in
+the right place is a DOM write, and a DOM write wakes the `MutationObserver` that
+triggered the pass. See `syncLastEventColumn` in [`src/render.ts`](src/render.ts).
 
 The cell has to distinguish four states, and all four look like an empty cell if
 you let them: `…` not asked yet, `!` asked and it failed (with the reason in the
 title), `—` answered with no events, and the answer itself. The first three are the
 ones that get mistaken for a broken extension.
+
+**The age is exact to the second, which is what makes it a clock rather than a
+label.** `4m 12s` and `12s` say different things about the same `Running` status;
+`4m` and `now` do not. Two consequences follow, and both are the interesting part
+of this small feature:
+
+- **The age is frozen at the reading, and the tooltip says when that was.** This is
+  the one design decision in the feature worth arguing about, and it was got wrong
+  first. An age is a subtraction from *now*, so the obvious implementation is a
+  `setInterval` at 1s that redraws the column — and this project had one. It was
+  honest about cost (it fetched nothing; it recomputed from timestamps already in
+  hand) and dishonest about time. The cell makes **two** claims, and only the first
+  is exact: *"event #42 happened 3m 00s ago"*, and *"#42 is the newest event"*. The
+  second is re-read at most every 35s (`ASK_INTERVAL_MS`, below). Animating the
+  subtraction over it meant a workflow that had moved on two seconds ago displayed a
+  stall climbing to the second, convincingly. So every age is now measured against
+  `observedAtMs` — the instant Temporal was actually read, taken from the cache entry
+  and not from the clock at reply time — and the hover text reads *"3m 00s old when
+  this was read, at 12:04:31 · Frozen at that reading — press ⟳ to ask again."* The
+  column changes when the data changes and at no other time. **The cost is real and
+  goes in the other direction:** a stall reads up to one ask interval *younger* than
+  it is. The only truthful per-second age would need a request per row per second,
+  which is the load this whole feature is built to avoid. Wrong-and-visible beats
+  wrong-and-animated.
+- **Two units, floored, zero-padded** — `47s`, `3m 07s`, `5h 12m`, `3d 04h`.
+  Three units would make the column wide enough to push the UI's own columns
+  off-screen, which is the problem the placement above exists to avoid. Padding is
+  not cosmetic: `3m 9s` → `3m 10s` changes the cell's *width*, and tabular figures
+  fix the width of a digit, not the number of them. And it floors
+  rather than rounds, because `1m 00s` printed over a 59-second-old event is a
+  clock that is ahead of the truth.
+
+The **`⟳` in the column header** re-asks Temporal now, for every running row on
+screen, instead of waiting for the TTL. It is one flag on the message the table
+world already sends (`fresh`), not a new message type — the number of message
+kinds the page world accepts is the thing a reviewer counts, and this feature was
+not worth adding one. Two details are load-bearing:
+
+- **The floor is on the receiving side.** `FRESH_FLOOR_MS` (5s) lives in
+  `src/rowInfoServe.ts`, not in the button, because the button is one `postMessage`
+  away from anything else running in the page: a bound applied by the caller is a
+  bound only an honest caller keeps. An answer younger than the floor is left in the
+  cache, so a held-down refresh — or a script forging the message in a loop —
+  collapses into the same cache the automatic path uses. The button greys itself out
+  for the same 5s, which is the *visible* half of that rule and not the enforcement.
+- **Refreshing does not clear the answers**, only the permission to ask again.
+  Emptying the column and refilling it as the round drains would flash `…` across
+  every row to tell the user something they already know.
+- **It is 24×24, which is a rule and not a taste.** `font: inherit` on a table
+  header made the glyph 11px and the target about 13px across; WCAG 2.2's *Target
+  Size (Minimum)* asks for 24. `.tuis-col-refresh` in `public/content.css` gets that
+  as `min-width`/`min-height` with `display: inline-flex`, and then pulls the extra
+  height back out with negative vertical margins — otherwise a control this
+  extension added would grow the row height of a header it does not own.
 
 ### "↻ 47" — the retrying-activity badge
 
@@ -115,7 +182,8 @@ is visible rather than merely intended.
 | **Asked at most every 35s** per run in the table world | `ASK_INTERVAL_MS`, `src/rowInfoClient.ts`. The cache alone is not enough: a request answered *from* cache is still a `postMessage` per row per render pass, and there are a great many render passes. |
 | **Four requests at a time** | `maxConcurrent`, in `src/pacer.ts`. A hundred-row list becomes a queue, not a burst. |
 | **429/503 backs off**, honouring `Retry-After` | `src/pacer.ts` again: 2s doubling to a 60s ceiling, or the server's own `Retry-After` when it sent one. A rate limiter answered with a retry storm is how one tab degrades the API for a whole team. |
-| **No polling timer** | Refresh comes from the Temporal UI polling its own list, which re-renders the table, which asks again — and the TTLs decide whether asking turns into fetching. Nothing here polls on its own. The one timer in the project is the backoff sleep in `src/pacer.ts`, which exists to make *fewer* requests. |
+| **No polling timer, and no heartbeat at all** | Refresh comes from the Temporal UI polling its own list, which re-renders the table, which asks again — and the TTLs decide whether asking turns into fetching. Nothing here polls Temporal on its own, and nothing here holds a repeating timer: freezing the ages (above) is what removed the last one. The two timers left are both one-shots that make no request — the single pass `src/content.ts` schedules `FRESH_FLOOR_MS` after a `⟳` press, purely to re-enable the button, and the backoff sleep in `src/pacer.ts`, which exists to make *fewer* requests. |
+| **A manual refresh is floored at 5s** per run | `FRESH_FLOOR_MS`, `src/rowInfoServe.ts`. The `⟳` in the header bypasses the 30s cache; this is the bound on how far. It is checked in the page world, because the message that asks for it can be posted by anything in the page. |
 
 Each bound above is asserted somewhere rather than only described here: **which**
 rows are asked about, and how often, in `tests/unit/rowInfoClient.spec.ts`; the
@@ -123,8 +191,18 @@ cache and its **expiry**, many render passes during one slow request collapsing 
 one request, a refusal that is cached without pausing the rows that were not
 refused, the four-at-a-time cap and the `Retry-After` wiring in the *four things
 that keep the per-row questions affordable* block of `tests/unit/apiInject.spec.ts`,
-which counts requests against a fake network; and the pacer's own time invariants in
-`tests/unit/pacer.spec.ts`, with the clock injected. A comment claiming a bound and
+which counts requests against a fake network; the pacer's own time invariants in
+`tests/unit/pacer.spec.ts`, with the clock injected; and the refresh path from both
+ends — that a press asks again immediately but does not become a licence to keep
+asking, and that it keeps the answers already on screen, in
+`tests/unit/rowInfoClient.spec.ts`, and that the button greys itself out for exactly
+as long as the receiver would refuse it, in `tests/unit/render.spec.ts`. **The freeze
+is asserted the same way**, because "the number does not move on its own" is a claim
+about a thing that did move on its own until recently: `tests/unit/render.spec.ts`
+renders the same answers ninety seconds apart and asserts the cell still reads
+`3m 00s` and that the pass wrote nothing at all, and `tests/unit/apiInject.spec.ts`
+asserts a cache hit is dated when the *data* was read rather than when the reply was
+sent. A comment claiming a bound and
 a test counting requests are not the same artefact, and this feature is the one place
 in the repository where the difference is billable.
 
@@ -155,34 +233,53 @@ were not editing. `templateScope` in `src/deepLink.ts` is the whole of that rule
 A template that expands to something that is not `http(s)` does not become a link;
 it is rendered inert, with the reason in its title.
 
-## The card on a single workflow's page
+## The links on a single workflow's page
 
-Bottom-right, collapsible: the workflow-scoped links once, then the activity-scoped
-links for each activity the page's own history mentioned, newest first.
+Two sites, both **inside the UI's own layout**:
 
-**It fetches nothing.** Everything in it comes from the history and describe
-responses the page fetched for itself, folded in the page's world by
-`src/detailWatch.ts` and posted across. No request, no cache, no pacing — and no
-ledger check, because a ledger entry is authority to spend the page's bearer and
-this feature never spends it.
+- the workflow-scoped links, in a bar beside the page's own tabs;
+- the activity-scoped links, appended to the value of the row the UI labels
+  **"Activity Id"**, in each activity panel the reader has opened.
+
+**It fetches nothing.** Everything comes from the history and describe responses the
+page fetched for itself, folded in the page's world by `src/detailWatch.ts` and
+posted across. No request, no cache, no pacing — and no ledger check, because a
+ledger entry is authority to spend the page's bearer and this feature never spends
+it.
 
 The consequence is visible on screen, and it is the trade this stage is
 demonstrating: on a tab that was already sitting on a workflow when the extension
-loaded, the card says it has observed nothing and asks for a reload. It does not go
+loaded, the bar says it has observed nothing and asks for a reload. It does not go
 and fetch the history to fill itself in.
 
-Two decisions in it are worth stealing:
+Three decisions here are worth stealing:
 
-- **A floating card, not buttons in the event table.** Rule 1 in `src/render.ts` is
-  *anchor to meaning, not position*, and the list has a perfect anchor:
-  `a[href*="/workflows/"]` is what a row **is**. A workflow's own page has no
-  equivalent for "the row of activity N" — the timeline is SVG, the event list is
-  virtualised, and neither carries a stable hook. Anchoring there is a guess that
-  breaks on the next UI release. The extension this starter came from learned it
-  expensively: a button whose selectors had gone stale was not missing, it was
-  attached to `<body>` behind the app's own chrome, and it read as "the feature only
-  appears after you toggle it". A deliberate fixed position is the honest version of
-  what that bug produced by accident.
+- **An activity is identified by its id, never by its type.** A run that calls
+  `ChargeCard` three times has three activities of that type, so a link keyed on the
+  type opens a search that matches all three — and looks right while doing it.
+  `activityByPanelId` in `src/detail.ts` resolves the id the panel is showing to one
+  activity: `activityId` first, `scheduledEventId` (which Temporal assigns, so it
+  cannot repeat) as the fallback. An id that resolves to nothing gets **no link**,
+  rather than a link built from whichever activity happens to be newest. When the id
+  turns out not to be unique — a workflow author may reuse one — the link says so in
+  its title, because that is the fact that decides whether the search results can be
+  trusted. Each link also carries the activity's own `scheduled → closed` window, so
+  a log tool that indexes neither id can still be narrowed to one execution.
+- **Anchor to meaning, then make the failure visible.** Rule 1 in `src/render.ts`
+  applies here as much as in the table: the tab bar is found as "the list containing a
+  link to this workflow's history", and the activity row as "the row the UI labelled
+  Activity Id" — the UI's own name for the field, not a class name or a position.
+  This *is* the fragile kind of anchoring, and the extension this starter came from
+  paid for it: when the selectors went stale the node was not missing, it was attached
+  to `<body>` behind the app's own chrome, and it read as "the feature only appears
+  after you toggle it". So a bar that cannot find the layout is parked in a corner
+  where it can be **seen**, the popup reports that state in words, and every pass
+  looks for the real anchor again and moves the bar inline the moment it appears.
+  A first version of this file drew that corner box *deliberately*, on the argument
+  that a workflow page has no anchor for "activity N" — and then, having nothing to
+  attach a link to, printed a line telling the reader to add `{activityType}` to a
+  template if they wanted per-activity links. A feature that explains how to
+  configure itself, on the page where it could simply have worked, has given up.
 - **Fold before posting, never after.** A raw history event carries `input`,
   `result` and `failure`. Posting the events across for the extension's side to
   reduce would put all of that on the page's message bus. `src/detail.ts` keeps ids,
@@ -334,11 +431,61 @@ does not own.
 - **No third-party security review.** The mechanism comes from an extension used
   internally, but this code is a clean-room rewrite and nobody outside this
   repository has audited it.
-- **The two request-backed features and the detail card have NOT been confirmed on
-  live Temporal Cloud.** The tree and the deep links have; these are newer. Treat
-  every claim above about how they behave on a real tenant as **unverified** —
-  the unit and jsdom specs are green, which on this project's own evidence is not
-  the same thing.
+- **The two request-backed features have NOT been confirmed on live Temporal Cloud.**
+  The tree, the deep links and the detail-page links have; the last-event column and
+  the retry badge are newer. Treat every claim above about how those two behave on a
+  real tenant as **unverified** — the unit and jsdom specs are green, which on this
+  project's own evidence is not the same thing. Two of those claims no spec could ever
+  settle: the `⟳`'s 24px hit target and the negative margins meant to keep it from
+  growing the header row are **layout**, and jsdom computes none. Nobody has yet looked
+  at that button in a browser.
+
+  The detail-page links used to be the weakest claim in that set, and are now the
+  best-evidenced. Both DOM anchors on a workflow's page — the tab bar, and the row
+  labelled "Activity Id" — were asserted only against a **hand-written** jsdom page in
+  `tests/unit/detailLinks.spec.ts`, which proves the placement logic, the idempotency
+  and the id resolution but cannot prove the real page still labels that field the way
+  this code expects. They have now been read off live Cloud 2.53.3, and the markup is:
+
+  ```html
+  <div class="flex items-start gap-4">
+    <p class="min-w-56 text-sm text-secondary/80">Activity ID</p>
+    <p class="whitespace-pre-line break-all">9</p>
+  </div>
+  ```
+
+  The label is a leaf `<p>`, it matches `LABEL_CANDIDATE_SELECTOR`, and its
+  `nextElementSibling` holds the id — so the anchor lands, the bar reports
+  `adrift: 0`, and the link's tooltip carries the resolved activity's type, status and
+  schedule time. The live page also confirmed the prediction written into
+  `detailLinks.ts` about why `div` is **not** in that selector: the wrapper div's own
+  `nextElementSibling` is the *next field's* wrapper, whose text reads
+  `Activity Type …`. Had `div` been included, every panel would have grown a link
+  keyed off the wrong field.
+
+  If a future Cloud release does move that label, the bar parks itself in the corner
+  and the popup says so — which is the whole reason that state is visible instead of
+  silent.
+
+  What the same live round found instead was two ways for the link to be missing while
+  every part of the machinery works, neither of them a selector.
+
+  **The extension arrived too late.** Installed *after* the workflow tab had finished
+  loading, the page carried no extension node at all and printed no log line. Chrome
+  injects content scripts at page load and never goes back for tabs that are already
+  open. That is a documented platform rule rather than a defect, but it presents
+  identically to a broken extension, so the popup's "no answer from this tab" message
+  now leads with the reload and the reason for it.
+
+  **A new default never reached an existing user** — the one that survives every
+  reload, and the reason this section exists. An activity link is only built if one of
+  the configured templates names an activity token, and `links` is stored as one array
+  that the popup rewrites whole. Anyone who used this extension before the activity
+  template was added has a stored array without it, so `templatesInScope(links,
+  'activity')` is legitimately empty and no per-activity link can exist — for good,
+  because reloading restores exactly the array that was stored. `withActivityScope` in
+  `src/settings.ts` now treats the *scope* as the default rather than the array, once,
+  until a human edits the list. `tests/unit/settings.spec.ts` pins both directions.
 
   It is not the same thing because a live round here has found something every
   single time. One found the tree drawing perfectly while every per-row question
@@ -384,18 +531,19 @@ src/
   tree.ts           the feature, as a pure function: rows → ordered rows
   rowInfo.ts        pure: the questions, the answers, and what a badge may say
   rowInfoClient.ts  which rows are worth asking about, and what came back
-  detail.ts         pure: URL rules and the folds behind the detail card
+  detail.ts         pure: URL rules, the folds behind the detail-page links, and
+                    which activity an id on the page resolves to
   deepLink.ts       URL templates: tokens, offsets, scope, and what may become an href
   temporalApi.ts    pure: the API prefix and the two route builders
   render.ts         everything that writes to the table
-  detailCard.ts     the card on a single workflow's page
+  detailLinks.ts    the links on a single workflow's page, in the UI's own layout
   content.ts        ISOLATED world — wiring, and nothing else
   settings.ts       chrome.storage.sync
   popup.ts          the toolbar popup, including "is it working?"
 public/
   manifest.json     one permission: storage
   popup.html        the settings pane (no inline script — MV3 forbids it)
-  content.css       connectors, buttons, column, badge, card
+  content.css       connectors, buttons, column, badge, link bar
   icons/            generated: this project's number and hue, not a committed image
 tests/              the ordering rules, the DOM bugs that cost the most, and the
                     request gate — including the cases that fail SILENTLY
@@ -406,16 +554,16 @@ tests/              the ordering rules, the DOM bugs that cost the most, and the
 The split around the request path is deliberate, and it is what makes the security
 card checkable: `rowInfo.ts` and `temporalApi.ts` are pure and therefore testable,
 `pageApi.ts` is the only file that issues a request, and `render.ts` and
-`detailCard.ts` are the only ones that touch the page. Reviewing "what can this
+`detailLinks.ts` are the only ones that touch the page. Reviewing "what can this
 thing send" means reading one file.
 
 ## What it deliberately does not do
 
 **No payload is decoded here** — that is the boundary of this stage, not an
-omission. Input and result on hover, through a codec server, are stage 03, the
-payload stage; column reorder, a larger page size, a cross-workflow activity finder
-and expand-to-families are conveniences one rung further up. Neither stage is in
-this repository yet.
+omission. Input and result on hover, through a codec server, are
+[`../03-payloads/`](../03-payloads/); column reorder, a larger page size, a
+cross-workflow activity finder and expand-to-families are conveniences one rung
+further up, and that stage is not in this repository yet.
 
 ## Commands
 

@@ -13,9 +13,11 @@
 //     from cache is still a postMessage per row per render pass, and there are a
 //     lot of render passes. `askedAt` here is what makes a settled table quiet.
 //
-// Nothing in this file holds a timer. Refresh comes from the Temporal UI polling
-// its own list, which re-renders the table, which asks again — and the TTLs decide
-// whether asking turns into fetching.
+// Nothing in this file holds a timer. Automatic refresh comes from the Temporal UI
+// polling its own list, which re-renders the table, which asks again — and the TTLs
+// decide whether asking turns into fetching. The one path that does not wait for
+// that is 'fresh' below, and it is only ever reached by a user pressing the control
+// in the column header.
 
 import {
     isRowInfoResult,
@@ -36,6 +38,12 @@ const ASK_INTERVAL_MS = 35_000;
 export interface RowInfo {
     lastEvent: LastEvent | null;
     retry: PendingRetry | null;
+    // The instant Temporal was read, carried through from the answer. Every age the
+    // renderer prints is measured against this and never against the current clock —
+    // see the long note on RowInfoResult.observedAtMs in rowInfo.ts. It is stored
+    // rather than recomputed on arrival, because an answer served from the MAIN
+    // world's TTL cache can be up to that TTL older than the message carrying it.
+    observedAtMs: number;
     error: string | null;
 }
 
@@ -85,6 +93,7 @@ export function installRowInfo(onUpdate: () => void): void {
         results.set(key, {
             lastEvent: data.lastEvent,
             retry: data.retry,
+            observedAtMs: data.observedAtMs,
             error: data.error,
         });
         // One re-render per answer, coalesced by the caller's own scheduler (one
@@ -98,10 +107,28 @@ export function rowInfoFor(namespace: string, workflowId: string, runId: string)
     return results.get(askKey(namespace, workflowId, runId));
 }
 
+// WHY A ROW IS BEING ASKED ABOUT, which decides both of the things that make asking
+// cheap — whether the ask interval applies here, and whether the MAIN world may
+// answer from its cache.
+//
+//   • 'due'   — a render pass. Skips any row asked about recently, and takes the
+//               cached answer. This is every automatic ask.
+//   • 'fresh' — the user pressed refresh. Asks about every visible running row
+//               regardless of when it was last asked, and tells the MAIN world to
+//               ignore what it already has. Bounded there by FRESH_FLOOR_MS, not
+//               here: this side is a page script's to imitate.
+export type RowInfoAskMode = 'due' | 'fresh';
+
 // Ask about every row that is worth asking about. Returns how many runs went into
 // the message, which the popup reports — a feature whose cost is invisible is a
 // feature nobody can review.
-export function requestRowInfo(namespace: string, want: RowInfoField[], rows: WorkflowRow[], nowMs: number): number {
+export function requestRowInfo(
+    namespace: string,
+    want: RowInfoField[],
+    rows: WorkflowRow[],
+    nowMs: number,
+    mode: RowInfoAskMode = 'due',
+): number {
     if (!namespace || want.length === 0) return 0;
 
     // BEFORE recording this pass, not after. askedAt is now the gate that lets an
@@ -117,7 +144,9 @@ export function requestRowInfo(namespace: string, want: RowInfoField[], rows: Wo
         if (row.status !== 'Running') continue;
         const key = askKey(namespace, row.workflowId, row.runId);
         const asked = askedAt.get(key);
-        if (asked !== undefined && nowMs - asked < ASK_INTERVAL_MS) continue;
+        // The ask interval is what makes a settled table quiet, and pressing refresh
+        // is a statement that quiet is not what was wanted.
+        if (mode === 'due' && asked !== undefined && nowMs - asked < ASK_INTERVAL_MS) continue;
         askedAt.set(key, nowMs);
         runs.push({ workflowId: row.workflowId, runId: row.runId });
     }
@@ -135,6 +164,7 @@ export function requestRowInfo(namespace: string, want: RowInfoField[], rows: Wo
             namespace,
             want,
             runs: runs.slice(from, from + MAX_RUNS_PER_REQUEST),
+            fresh: mode === 'fresh',
         };
         // location.origin, never '*': this message names runs the user is looking
         // at, and an iframe on the page has no business reading the list.
@@ -145,6 +175,15 @@ export function requestRowInfo(namespace: string, want: RowInfoField[], rows: Wo
 
 // Called when a setting changes what an answer would have been, so that a stale
 // answer cannot outlive the reason it was right.
+//
+// NOT called by refresh, on purpose. A refresh that emptied `results` would blank
+// the whole column for as long as the round takes to drain, and a column that goes
+// blank when you ask it to update reads as a feature that broke rather than one that
+// is working. The old answers stay on screen and are overwritten as the new ones
+// arrive. (This is the safe half of the pairing evictIfHuge() reasons about below:
+// keeping answers while re-asking costs one extra round; the reverse — dropping
+// answers while every row still counts as recently asked — is the one that shows the
+// user an empty column.)
 export function clearRowInfo(): void {
     results.clear();
     askedAt.clear();

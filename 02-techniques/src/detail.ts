@@ -26,7 +26,7 @@
 // ActivityTaskScheduled with no attempt count anywhere near it. That is not a hole
 // in this fold, and it is the same fact that forces the list page's retry badge to
 // call Describe (see the note at the top of src/rowInfo.ts). Folding both
-// responses into one shape is how the card ends up with both halves.
+// responses into one shape is how the links end up with both halves.
 //
 // NO PAYLOAD IS READ HERE. Every activity event carries `input`, `result` or
 // `failure`, all of them application data and some of them encrypted; this fold
@@ -35,7 +35,7 @@
 // or a "small" message quietly carries a customer's data onto the page bus.
 //
 // Everything in this file is pure. src/detailWatch.ts does the observing (MAIN
-// world) and src/detailCard.ts does the drawing (ISOLATED world).
+// world) and src/detailLinks.ts does the drawing (ISOLATED world).
 
 import { eventsOf } from './rowInfo';
 import { simplifyStatus } from './rows';
@@ -128,13 +128,13 @@ function decodeSafely(raw: string): string {
 // the page's own request, so whatever came back is what the page is showing" — true
 // of the page's own rendering, false of ours, because the URL we compare against is
 // the run in the address bar, not whatever the app last asked for. On a run page a
-// runless answer was folded straight into another run's card, with no marker that
+// runless answer was folded straight into another run's links, with no marker that
 // anything was mixed: an activity list belonging to attempt 12 under the heading of
 // attempt 3.
 //
 // Rejecting it costs nothing in practice. The Temporal UI names the run on every
 // history and describe call it makes from a run page — its own fetch omits
-// `execution.runId` only when it was not given one — so the card is not starved by
+// `execution.runId` only when it was not given one — so the links are not starved by
 // being strict here. And detailRefFromPath() above refuses a URL with no run id, so
 // on the only page this feature draws on, `page.runId` is never null.
 //
@@ -171,9 +171,15 @@ export interface DetailActivity {
     // history has no attempt count for one. Describe supplies it.
     attempt: number | null;
     scheduledAtMs: number | null;
+    // When the terminal event for this activity was written, null while it is still
+    // open. This is what turns a log query into a link about ONE execution of an
+    // activity rather than about every execution of its type: the pair
+    // (scheduledAtMs, closedAtMs) is a window no other instance shares, even when
+    // the workflow ran the same activity type twenty times.
+    closedAtMs: number | null;
     outcome: ActivityOutcome;
     // True when this came from Describe's `pendingActivities` — the activity is
-    // pending right now. Shown in the card, because "attempt 900, pending" and
+    // pending right now. Shown beside the links, because "attempt 900, pending" and
     // "attempt 900, finished eventually" are different situations.
     pending: boolean;
 }
@@ -189,9 +195,15 @@ export interface DetailFacts {
     // "TimedOut", …) so `{status}` means the same thing in both scopes.
     status: string | null;
     activities: DetailActivity[];
-    // How many history events this fold has walked, cumulatively. The card says
-    // so: "from the N events loaded so far" is the honest scope of its activity
-    // list, and the UI pages history lazily.
+    // The most events any ONE response has carried — a floor, and NOT a running
+    // total, which is what this said until it was read against mergeFacts(): that
+    // takes Math.max, because the UI re-fetches the same first page on every
+    // re-mount and a sum reports a history several times the size of the workflow.
+    // The cost of the max is that paged history counts the biggest page rather than
+    // all of them, so the number UNDER-states what the activity list was folded
+    // from. Under-stating is the right direction for a scope disclosure and it is
+    // why the wording on the page is "at least" — the UI pages history lazily, so
+    // some number has to be shown, and the honest one is a lower bound.
     eventsSeen: number;
 }
 
@@ -209,6 +221,12 @@ export const NO_FACTS: DetailFacts = {
 // map lives for as long as the tab is on the page. Same reasoning as
 // MAX_LEDGER_ENTRIES in pageApi.ts: the bound is generous, crude and stated.
 // The NEWEST are kept, because they are the ones somebody is looking at.
+//
+// State the cost, because it is paid silently: on a workflow that exceeds this, an
+// OLD activity's panel gets no link, and "no link" looks exactly like a broken
+// selector. Nothing in the panel can say why. The popup therefore says out loud when
+// the cap is in effect — it is the only place a reader can tell an evicted activity
+// from a stale anchor.
 export const MAX_ACTIVITIES = 500;
 
 // ── The history fold ─────────────────────────────────────────────────────────
@@ -287,8 +305,14 @@ export function readHistoryFacts(body: unknown): DetailFacts {
             const key = idOf(asObject(event[outcomeKey])?.['scheduledEventId']);
             // NOT the failure or the result: `activityTaskFailedEventAttributes`
             // carries `failure`, and `…Completed` carries `result`. Both are
-            // application data and neither is read — same rule as rowInfo.ts.
-            if (key) entryFor(activities, key).outcome = ACTIVITY_OUTCOME_BY_ATTRIBUTE[outcomeKey]!;
+            // application data and neither is read — same rule as rowInfo.ts. The
+            // event's own TIME is not application data, and it is the end of this
+            // activity's window.
+            if (key) {
+                const entry = entryFor(activities, key);
+                entry.outcome = ACTIVITY_OUTCOME_BY_ATTRIBUTE[outcomeKey]!;
+                entry.closedAtMs = atMs;
+            }
         }
     }
 
@@ -303,7 +327,7 @@ export function readHistoryFacts(body: unknown): DetailFacts {
 //
 // `pendingActivities[].lastFailure` is right there and is not read, for the reason
 // spelled out at the top of src/rowInfo.ts: a failure message is application data.
-// This card shows nothing the list page's badge would not show.
+// Nothing here shows more than the list page's badge does.
 export function readDescribeFacts(body: unknown): DetailFacts {
     const root = asObject(body);
     if (!root) return NO_FACTS;
@@ -338,6 +362,8 @@ export function readDescribeFacts(body: unknown): DetailFacts {
                 activityType: textOf(asObject(entry['activityType'])?.['name']) ?? '',
                 attempt: numberOf(entry['attempt']),
                 scheduledAtMs: timeToMs(entry['scheduledTime']),
+                // A pending activity has not closed, by definition.
+                closedAtMs: null,
                 outcome: 'open',
                 pending: true,
             });
@@ -355,7 +381,7 @@ export function readDescribeFacts(body: unknown): DetailFacts {
 // single small call and history is paged, so either can win — and neither is
 // "the truth" on its own: Describe knows the status, history knows the activities
 // that have finished. A merge that let a null overwrite a value would make the
-// card flicker between complete and half-empty on every poll of the page.
+// links flicker between complete and half-empty on every poll of the page.
 export function mergeFacts(base: DetailFacts, next: DetailFacts): DetailFacts {
     const activities = new Map<string, DetailActivity>();
     for (const activity of [...base.activities, ...next.activities]) {
@@ -383,6 +409,7 @@ function combine(previous: DetailActivity, next: DetailActivity): DetailActivity
         activityType: next.activityType || previous.activityType,
         attempt: next.attempt ?? previous.attempt,
         scheduledAtMs: next.scheduledAtMs ?? previous.scheduledAtMs,
+        closedAtMs: next.closedAtMs ?? previous.closedAtMs,
         // A terminal outcome never goes back to 'open'. Describe reports a pending
         // activity as open, and it arrives after the history page that saw the same
         // activity finish whenever the workflow closed between the two calls.
@@ -402,6 +429,53 @@ export function linkableActivities(facts: DetailFacts): DetailActivity[] {
         .sort((a, b) => Number(b.scheduledEventId) - Number(a.scheduledEventId));
 }
 
+// ── Matching what the page shows to what we folded ───────────────────────────
+
+// The page renders an activity's own panel with a row labelled "Activity Id". That
+// string is the handle the DOM gives us, and this turns it into one activity.
+//
+// WHY THE ID AND NOT THE TYPE. The first version of the links on this page were
+// keyed on `{activityType}`, and a type is not an identity: a workflow that calls
+// `chargeCard` three times has three activities with that type, so a link built
+// from it opens a log search matching all three — or, worse, matching the wrong
+// one and looking right. An id is unique per activity within a run, so it is what
+// the link is keyed on, and the WINDOW below (scheduledAtMs → closedAtMs) narrows
+// it further for a log backend that indexes the type but not the id, which is the
+// common case.
+//
+// TWO KEYS, IN THIS ORDER, and the order is the whole subtlety:
+//
+//  1. `activityId` — the field the panel is literally labelled with.
+//  2. `scheduledEventId` — because Temporal's DEFAULT activityId is the id of the
+//     ActivityTaskScheduled event, rendered as the same digits. A fold that saw an
+//     activity's later events but not its scheduled event has no activityId for it
+//     (see the comment on DetailActivity.activityId), and this still matches it.
+//
+// An activityId is caller-chosen, so it can repeat within one run — the workflow
+// decides. `ambiguous` says so rather than picking silently; the caller puts it in
+// the link's title, because "this link may be about a different attempt" is
+// something the person clicking it needs to know and cannot otherwise find out.
+export interface ActivityMatch {
+    activity: DetailActivity;
+    by: 'activityId' | 'scheduledEventId';
+    ambiguous: boolean;
+}
+
+export function activityByPanelId(facts: DetailFacts, panelId: string): ActivityMatch | null {
+    const id = panelId.trim();
+    if (!id) return null;
+    // Newest first, so the newest is what an ambiguous id resolves to: on a page
+    // somebody is debugging, the latest attempt is the one being looked at.
+    const byActivityId = linkableActivities(facts).filter((activity) => activity.activityId === id);
+    if (byActivityId.length > 0) {
+        return { activity: byActivityId[0]!, by: 'activityId', ambiguous: byActivityId.length > 1 };
+    }
+    const byEvent = facts.activities.find((activity) => activity.scheduledEventId === id);
+    // A scheduledEventId is unique by construction — it IS an event id — so a match
+    // here is never ambiguous.
+    return byEvent ? { activity: byEvent, by: 'scheduledEventId', ambiguous: false } : null;
+}
+
 function capActivities(activities: DetailActivity[]): DetailActivity[] {
     if (activities.length <= MAX_ACTIVITIES) return activities;
     return activities
@@ -412,13 +486,15 @@ function capActivities(activities: DetailActivity[]): DetailActivity[] {
 
 // The activity as a deep-link context. Separate from DetailActivity because the
 // link vocabulary must not grow a field just because this fold has one: `outcome`
-// and `pending` are for the card to show, not for a URL to carry.
+// and `pending` are for the label to show, not for a URL to carry.
 export function activityForLink(activity: DetailActivity): DeepLinkActivity {
     return {
+        scheduledEventId: activity.scheduledEventId,
         activityId: activity.activityId,
         activityType: activity.activityType,
         attempt: activity.attempt,
         scheduledAtMs: activity.scheduledAtMs,
+        closedAtMs: activity.closedAtMs,
     };
 }
 
@@ -470,12 +546,12 @@ export interface DetailFactsMessage {
 //
 // What a forged one can do is worth being precise about, because unlike the
 // row-info request it reaches no credential and starts no fetch — this feature
-// only ever reads. It can put a chosen string in the card (written with
+// only ever reads. It can put a chosen string in a link's label (written with
 // textContent, so it is text and stays text) and in the QUERY part of a link the
 // user has already configured. It cannot change that link's origin: the template's
 // own text supplies the scheme and host, the expansion percent-encodes by default,
 // and safeHref() re-checks the result. The honest summary is "a page that is
-// already running script can make this card say something untrue", which is true
+// already running script can make these links say something untrue", which is true
 // of every extension that renders page data.
 export function isDetailFactsMessage(value: unknown): value is DetailFactsMessage {
     const message = asObject(value);
@@ -547,6 +623,7 @@ function entryFor(activities: Map<string, DetailActivity>, scheduledEventId: str
         activityType: '',
         attempt: null,
         scheduledAtMs: null,
+        closedAtMs: null,
         outcome: 'open',
         pending: false,
     };

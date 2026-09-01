@@ -143,6 +143,7 @@
         <h2>Deep links</h2>
         <div id="links"></div>
         <button id="add-link" type="button">Add a link</button>
+        <p class="hint" id="link-scopes"></p>
         <p class="hint">
             Tokens: <code id="tokens"></code><br />
             Add <code>:raw</code> to skip URL-encoding, and an offset to widen the window —
@@ -162,8 +163,8 @@
             The badge shows the attempt count, the activity type and the next retry time. It deliberately does
             <strong>not</strong> read the failure message: that is application data, and nothing in this extension reads
             any. Everything on screen here comes from event <em>metadata</em> — no workflow input, result or failure is
-            decoded, which is why there is no codec-server box. That is stage 03, the payload stage, which is not
-            written yet.
+            decoded, which is why there is no codec-server box. Payloads — and that box — are the next project up,
+            <strong>03-payloads</strong>, whose manifest asks for no more than this one does.
         </p>
 
         <footer>

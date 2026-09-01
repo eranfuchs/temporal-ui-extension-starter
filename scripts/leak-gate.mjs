@@ -164,9 +164,10 @@ const RULES = [
         // nothing, and a grep for the line it sits on fails.
         //
         // This repository had eight of them, all deliberate and all written as raw
-        // characters instead of escapes: ASCII separators in a cache signature
-        // (src/detailCard.ts), a control byte smuggled before `javascript:` in a
-        // safeHref spec, a binary protobuf prefix in a payload spec. They were found
+        // characters instead of escapes: ASCII separators in a detail-page cache
+        // signature (in code since rewritten), a control byte smuggled before
+        // `javascript:` in a safeHref spec, a binary protobuf prefix in a payload
+        // spec. They were found
         // only because the U+0004 in the signature made a mutation audit's own
         // string search miss the line it was aiming at.
         //

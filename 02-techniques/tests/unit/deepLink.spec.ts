@@ -21,10 +21,12 @@ function row(overrides: Parameters<typeof apiWorkflow>[0] = { workflowId: 'order
 }
 
 const ACTIVITY: DeepLinkActivity = {
+    scheduledEventId: '5',
     activityId: 'charge-1',
     activityType: 'ChargeCard',
     attempt: 7,
     scheduledAtMs: Date.parse('2026-01-01T11:00:00Z'),
+    closedAtMs: Date.parse('2026-01-01T11:05:00Z'),
 };
 
 // The workflow-list context: a row and no activity, which is all a table row has.
@@ -97,7 +99,14 @@ describe('expandTemplate', () => {
         // that searches for nothing. This is the behaviour that lets the scope be
         // derived from the template instead of declared beside it.
         const r = row({ workflowId: 'x' });
-        for (const token of ['activityId', 'activityType', 'activityAttempt', 'activityScheduledIso']) {
+        for (const token of [
+            'activityId',
+            'activityEventId',
+            'activityType',
+            'activityAttempt',
+            'activityScheduledIso',
+            'activityClosedIso',
+        ]) {
             const result = expandTemplate(`{${token}}`, context(r));
             expect(result.unknownTokens, `token {${token}}`).toEqual([`{${token}}`]);
         }
@@ -112,6 +121,39 @@ describe('expandTemplate', () => {
         expect(url).toBe(
             ['ChargeCard', 'charge-1', '7', encodeURIComponent('2026-01-01T10:50:00.000Z')].join('|'),
         );
+    });
+
+    it('identifies ONE execution, not every execution of its type', () => {
+        // The rule this vocabulary is built around — see "AN ACTIVITY IS IDENTIFIED BY
+        // ITS ID, NEVER BY ITS TYPE" at the top of src/deepLink.ts. A run that calls
+        // ChargeCard three times has three activities with that type; what tells them
+        // apart is the id, the scheduled event id, and the window between them.
+        const r = row({ workflowId: 'x' });
+        const { url } = expandTemplate(
+            '{activityId}|{activityEventId}|{activityScheduledSec}|{activityClosedSec}',
+            activityContext(r),
+        );
+        expect(url).toBe(
+            [
+                'charge-1',
+                '5',
+                String(Date.parse('2026-01-01T11:00:00Z') / 1000),
+                String(Date.parse('2026-01-01T11:05:00Z') / 1000),
+            ].join('|'),
+        );
+    });
+
+    it('ends an open activity’s window where the workflow’s own ends', () => {
+        // A running activity has no close event, and the useful window for a log
+        // search is "from when it was scheduled until now" — which for a running
+        // workflow is what {endTime*} already means. An empty end would truncate the
+        // search at the scheduling instant and find nothing that has happened since,
+        // and this is the normal state of the activity somebody is looking at.
+        const r = row({ workflowId: 'x', status: 'RUNNING', closeTime: null });
+        const open = { ...ACTIVITY, closedAtMs: null };
+        const { url, unknownTokens } = expandTemplate('{activityClosedMs}', activityContext(r, open));
+        expect(unknownTokens).toEqual([]);
+        expect(url).toBe(String(NOW_MS));
     });
 
     it('reports an unknown token for an activity field Temporal has not filled', () => {

@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     formatAge,
+    formatAgePrecise,
     isRowInfoRequest,
     isRowInfoResult,
     lastEventTitle,
@@ -36,12 +37,16 @@ const GOOD_REQUEST = {
     namespace: 'sample-namespace',
     want: ['lastEvent', 'retry'],
     runs: [RUN],
+    // The automatic mode: answer from the cache if you can. `true` is the header's
+    // refresh control, and is what the specs below single out.
+    fresh: false,
 };
 
 describe('isRowInfoRequest', () => {
     it('accepts a well-formed request', () => {
         expect(isRowInfoRequest(GOOD_REQUEST)).toBe(true);
         expect(isRowInfoRequest({ ...GOOD_REQUEST, want: ['retry'] })).toBe(true);
+        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: true })).toBe(true);
         // No runs is well-formed and simply asks nothing — a render pass with
         // nothing on screen produces exactly this.
         expect(isRowInfoRequest({ ...GOOD_REQUEST, runs: [] })).toBe(true);
@@ -61,6 +66,13 @@ describe('isRowInfoRequest', () => {
         expect(isRowInfoRequest({ ...GOOD_REQUEST, want: ['lastEvent', 'everything'] })).toBe(false);
         expect(isRowInfoRequest({ ...GOOD_REQUEST, runs: [{ workflowId: 'order-1' }] })).toBe(false);
         expect(isRowInfoRequest({ ...GOOD_REQUEST, runs: [{ workflowId: 'order-1', runId: 7 }] })).toBe(false);
+        // `fresh` is REQUIRED, not optional, and this is the one field where that
+        // matters: it switches the TTL cache off. A message that omits it is a message
+        // from a different build, and defaulting it either way would pick a side on
+        // behalf of a sender who did not say.
+        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: undefined })).toBe(false);
+        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: 'yes' })).toBe(false);
+        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: 1 })).toBe(false);
     });
 
     it('caps how many runs one message may ask about', () => {
@@ -89,6 +101,10 @@ describe('isRowInfoResult', () => {
         ...RUN,
         lastEvent: null,
         retry: null,
+        // WHEN, and it is required. Every age the renderer prints is measured against
+        // this instead of the current clock, so an answer that does not carry one has
+        // no age in it at all.
+        observedAtMs: NOW,
         error: null,
     };
 
@@ -114,6 +130,16 @@ describe('isRowInfoResult', () => {
         expect(isRowInfoResult({ ...GOOD_ANSWER, namespace: '' })).toBe(false);
         const { namespace: _dropped, ...noNamespace } = GOOD_ANSWER;
         expect(isRowInfoResult(noNamespace)).toBe(false);
+
+        // `observedAtMs` is required and NOT nullable, unlike every other number in
+        // this message. An answer without it would leave the renderer to invent a
+        // reference point, and the only one available is Date.now() — the exact
+        // behaviour the field was added to remove, arrived at by omission.
+        const { observedAtMs: _noWhen, ...undated } = GOOD_ANSWER;
+        expect(isRowInfoResult(undated)).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, observedAtMs: null })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, observedAtMs: '2026-01-01' })).toBe(false);
+        expect(isRowInfoResult({ ...GOOD_ANSWER, observedAtMs: NaN })).toBe(false);
     });
 
     it('validates the nested objects, not just the envelope', () => {
@@ -296,10 +322,47 @@ describe('readPendingRetry', () => {
     });
 });
 
+describe('formatAgePrecise', () => {
+    // The "Last event" column's format, and the one that is redrawn once a second by
+    // the ticker in content.ts. All three of these specs are about that: a number that
+    // changes every second is read differently from one that changes every minute.
+    it('gives the two most significant units, seconds included', () => {
+        expect(formatAgePrecise(NOW, NOW)).toBe('now');
+        expect(formatAgePrecise(NOW - 47_000, NOW)).toBe('47s');
+        expect(formatAgePrecise(NOW - 187_000, NOW)).toBe('3m 07s');
+        expect(formatAgePrecise(NOW - (5 * 3_600_000 + 12 * 60_000 + 9_000), NOW)).toBe('5h 12m');
+        // Two days is where the seconds and then the minutes stop being worth their
+        // width: nobody reads either off a two-day-old event.
+        expect(formatAgePrecise(NOW - 47 * 3_600_000, NOW)).toBe('47h 00m');
+        expect(formatAgePrecise(NOW - (3 * 86_400_000 + 4 * 3_600_000), NOW)).toBe('3d 04h');
+        expect(formatAgePrecise(null, NOW)).toBe('—');
+    });
+
+    it('pads the smaller unit, so a ticking column does not change width', () => {
+        // Tabular figures fix the width of a digit, not the NUMBER of them. Without
+        // the pad, the column jumps one character wide at :10 and back at :00, once a
+        // minute, forever.
+        expect(formatAgePrecise(NOW - 189_000, NOW)).toBe('3m 09s');
+        expect(formatAgePrecise(NOW - 190_000, NOW)).toBe('3m 10s');
+    });
+
+    it('floors rather than rounds, so it is never ahead of the truth', () => {
+        // Rounding would show "1m 00s" while the event is still 59 seconds old.
+        expect(formatAgePrecise(NOW - 59_900, NOW)).toBe('59s');
+        expect(formatAgePrecise(NOW - 60_000, NOW)).toBe('1m 00s');
+    });
+
+    it('does not report a negative age when the clocks disagree', () => {
+        expect(formatAgePrecise(NOW + 2_000, NOW)).toBe('now');
+    });
+});
+
 describe('formatAge', () => {
     it('says how long ago in as few characters as it can', () => {
-        // The column sits at the end of a table the UI already fills, so width is a
-        // feature. No "ago" either: the header says what these are.
+        // The compact form, for the detail card and the tooltips: they are redrawn only
+        // when what they describe changes, so a second-resolution age there would be a
+        // number that is wrong until something unrelated happens to redraw it. No "ago"
+        // either — whatever shows this says what it is.
         expect(formatAge(NOW, NOW)).toBe('now');
         expect(formatAge(NOW - 45_000, NOW)).toBe('45s');
         expect(formatAge(NOW - 3 * 60_000, NOW)).toBe('3m');
@@ -332,6 +395,9 @@ describe('what the tooltips say', () => {
         expect(title).toContain('attempt 900 of unlimited');
         expect(title).toContain('next attempt in 1m');
         expect(title).toContain('this attempt scheduled 2m ago');
+        // DATED. Both relative times above are measured from the reading, so without
+        // this line "next attempt in 1m" reads as a countdown that has stopped.
+        expect(title).toContain('read at 2026-01-01T12:00:00.000Z');
         // The title is the natural place for a failure message and the reason there
         // is a line saying why there is not one.
         expect(title).toContain('the failure message is deliberately not read');
@@ -350,9 +416,26 @@ describe('what the tooltips say', () => {
     it('gives the exact time in the last-event title, since the cell only has room for an age', () => {
         const title = lastEventTitle({ eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW - 180_000 }, NOW);
         expect(title).toContain('Last event #42: ActivityTaskStarted');
-        expect(title).toContain('2026-01-01T11:57:00.000Z');
-        expect(title).toContain('(3m ago)');
+        expect(title).toContain('at 2026-01-01T11:57:00.000Z');
+        // The COLUMN's format, not the compact one: a reader comparing the cell against
+        // its own tooltip must not be told "3m 00s" in one and "3m" in the other.
+        expect(title).toContain('3m 00s old when this was read');
 
         expect(lastEventTitle({ eventId: '42', eventType: 'Unknown', timeMs: null }, NOW)).toContain('no timestamp');
+    });
+
+    it('dates the age it shows, because the cell has no room to say “as of when”', () => {
+        // THE POINT OF THIS ONE. The cell shows `3m 00s` and cannot say what it is
+        // three minutes before; a reader who assumes "now" is wrong by up to one ask
+        // interval, and this is where the extension owns up to that. The value is
+        // frozen at the reading, so it needs a reading to be frozen at.
+        const readAtMs = NOW - 20_000; // asked twenty seconds ago; nothing since
+        const title = lastEventTitle({ eventId: '7', eventType: 'TimerStarted', timeMs: NOW - 200_000 }, readAtMs);
+
+        // 3m 00s, NOT 3m 20s: measured from the reading, not from the clock.
+        expect(title).toContain('3m 00s old when this was read, at 2026-01-01T11:59:40.000Z');
+        // And that the number will not move on its own, with the way to move it.
+        expect(title).toContain('Frozen at that reading');
+        expect(title).toContain('⟳');
     });
 });

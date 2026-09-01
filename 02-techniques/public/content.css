@@ -151,9 +151,11 @@ td:has(a[href*="/workflows/"]) {
     cursor: help;
 }
 
-/* The "Last event" column. Narrow, quiet, and nowrap: it sits at the right-hand
- * end of a table the UI already fills, so it must not be the thing that makes the
- * table scroll sideways. */
+/* The "Last event" column. It sits immediately after the workflow id, where the
+ * question it answers is actually asked — so narrow, quiet and nowrap matter more
+ * here than they would at the end of the row: this column pushes the UI's own
+ * columns right, and it must not be the thing that makes the table scroll
+ * sideways. */
 .tuis-last-event {
     white-space: nowrap;
     font-size: 11px;
@@ -162,45 +164,118 @@ td:has(a[href*="/workflows/"]) {
     font-variant-numeric: tabular-nums;
 }
 
+/* Our header cell: the word and the refresh button, side by side and never wrapped
+ * onto two lines — a header that grows a second line makes the UI's own header row
+ * taller, which is a change to the whole table for the sake of one column. */
 .tuis-col-head {
     white-space: nowrap;
     font-size: 11px;
-    /* Dotted underline: this header is ours, not the UI's, and a reader comparing
-     * the extension against a vanilla tab should be able to tell at a glance. */
+}
+
+/* Dotted underline: this header is ours, not the UI's, and a reader comparing the
+ * extension against a vanilla tab should be able to tell at a glance. On the LABEL
+ * rather than the cell, so it marks the word and not the button beside it. */
+.tuis-col-label {
     text-decoration: underline dotted;
     text-underline-offset: 3px;
 }
 
-/* The deep-link card on a single workflow's own page.
+/* The refresh control. A <button> reset like the others — the UI's own button
+ * styling would give this one a toolbar's background and padding — and quiet for the
+ * same reason as .tuis-link: it sits in the UI's own header row, where anything loud
+ * reads as part of the product rather than as something a reader chose to install.
  *
- * Fixed, bottom-right, and that position is a DECISION rather than a default —
- * see the note at the top of src/detailCard.ts. A workflow's page offers no
- * meaning-anchored slot for "the row of activity N" (the timeline is SVG and the
- * event list is virtualised), so there is nothing to attach to that would survive
- * the next UI release.
+ * SIZED, not inherited. It first shipped at `font: inherit`, which is the 11px of the
+ * header text around it: a ~11px square hit area for a control that is the only way
+ * to move the number in this column, and small enough that the glyph read as
+ * punctuation. So the glyph is set larger than its label and the box is given a
+ * minimum, which is the part that matters — 24px is the smallest target the WCAG 2.2
+ * "Target Size (Minimum)" criterion accepts, and a header cell has the room.
  *
- * z-index is deliberately the opposite decision from .tuis-prefix above, and for
- * the opposite reason. The connectors live INSIDE a table cell and must stay under
- * the UI's own positioned chrome, so they sit at 0. This card is a floating overlay
- * on <body> whose entire job is to be on top; under the sticky header it would be
- * unreadable exactly when it is most useful.
+ * inline-flex + center is what keeps the glyph optically on the label's baseline once
+ * the box is taller than the text; with `display: inline` the larger glyph pushes the
+ * header row's height instead, and a header row that grows by a pixel or two when this
+ * extension loads is the kind of change that gets noticed and blamed. */
+.tuis-col-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    margin-left: 4px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.55;
+    /* The box is deliberately bigger than the header text; without this it would add
+     * its own height to the row it sits in. */
+    vertical-align: middle;
+    margin-top: -6px;
+    margin-bottom: -6px;
+}
+
+/* A hover target you can see. The opacity change alone tells a user the glyph is
+ * interactive only after they have already found it. */
+.tuis-col-refresh:hover,
+.tuis-col-refresh:focus-visible {
+    opacity: 1;
+    border-radius: 4px;
+    background: rgba(127, 127, 127, 0.18);
+}
+
+/* Disabled for as long as pressing it again would be refused anyway — see
+ * FRESH_FLOOR_MS in src/rowInfo.ts. Dimmer and with the pointer taken away, because
+ * a button that accepts the click and does nothing is the version of this that gets
+ * reported as a bug. */
+.tuis-col-refresh:disabled {
+    cursor: default;
+    opacity: 0.25;
+}
+
+/* The workflow-scoped links on a single workflow's own page, in a bar beside the
+ * page's own tabs.
  *
- * Canvas/CanvasText are the system colours, so it is legible in both themes
- * without this file knowing which one the UI is using. It follows the BROWSER's
- * scheme rather than the page's, which can differ for one frame after a theme
- * switch — a trade taken knowingly, because the alternative is hardcoding two
- * palettes that will not match the UI's next redesign either.
+ * Almost no styling on purpose. This bar sits INSIDE the UI's layout — see the note
+ * at the top of src/detailLinks.ts for why that replaced a floating card — so it
+ * inherits the surrounding font and colour, and the less it declares the less there
+ * is to clash with the UI's next redesign. Nothing here positions it: where it goes
+ * is decided in the DOM, not in CSS. */
+.tuis-linkbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+}
+
+/* The one case where it could not find the page's own layout, parked where it can be
+ * SEEN rather than left at the top-left of <body> behind the app's chrome — the
+ * failure described at the top of src/detailLinks.ts. Every pass looks for the real
+ * anchor again, so this styling is meant to be temporary on screen as well as in the
+ * code.
  *
- * max-height keeps a workflow with twenty listed activities from covering the page
- * it is annotating; the body scrolls, and overscroll-behavior stops the wheel
- * gesture continuing into the page once it reaches the end. */
-.tuis-card {
+ * Canvas/CanvasText are the system colours, so it is legible in both themes without
+ * this file knowing which one the UI is using. It follows the BROWSER's scheme rather
+ * than the page's, which can differ for one frame after a theme switch — a trade
+ * taken knowingly, because the alternative is hardcoding two palettes that will not
+ * match the UI's next redesign either.
+ *
+ * z-index is deliberately the opposite decision from .tuis-prefix above, and for the
+ * opposite reason. The connectors live INSIDE a table cell and must stay under the
+ * UI's own positioned chrome, so they sit at 0. This is a floating overlay whose
+ * entire job is to be noticed. */
+.tuis-linkbar-adrift {
     position: fixed;
     z-index: 2147483000;
     right: 16px;
     bottom: 16px;
-    width: 300px;
     max-width: calc(100vw - 32px);
+    padding: 6px 8px;
     border: 1px solid;
     border-radius: 6px;
     background: Canvas;
@@ -212,73 +287,36 @@ td:has(a[href*="/workflows/"]) {
         sans-serif;
 }
 
-.tuis-card-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 6px 8px;
-    font-weight: 600;
-}
-
-/* A <button> reset: the UI's own button styling would otherwise give this one a
- * toolbar's background and padding. */
-.tuis-card-toggle {
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    line-height: 1;
-    padding: 0 2px;
-    cursor: pointer;
-    opacity: 0.7;
-}
-
-.tuis-card-toggle:hover,
-.tuis-card-toggle:focus-visible {
-    opacity: 1;
-}
-
-.tuis-card-body {
-    max-height: 50vh;
-    overflow: auto;
-    overscroll-behavior: contain;
-    padding: 0 8px 8px;
-}
-
-/* Collapsed hides the body only, so the header stays as the affordance that
- * brings it back. */
-.tuis-card-collapsed .tuis-card-body {
-    display: none;
-}
-
-.tuis-card-group {
-    padding: 4px 0;
-    border-top: 1px solid color-mix(in srgb, CanvasText 15%, Canvas);
-}
-
-/* An activity's own line: its type, how many attempts it has taken, how old it is.
- * `anywhere` because an activity type is a symbol from somebody's source and can
- * be long without containing a space. */
-.tuis-card-label {
-    display: block;
+/* The bar's one aside: what has been observed and what has not. Only ever present
+ * when there is nothing to link yet. */
+.tuis-linkbar-note {
     font-size: 11px;
-    opacity: 0.75;
+    opacity: 0.7;
     overflow-wrap: anywhere;
 }
 
-/* The card's own asides — what has been observed, what has not, and the hint that
- * an activity token turns a template into a per-activity link. */
-.tuis-card-note {
-    padding: 4px 0;
-    font-size: 11px;
-    opacity: 0.6;
+/* The activity-scoped links, appended inside the value cell of the row the UI
+ * labels "Activity Id".
+ *
+ * inline-flex with a left margin, so it trails the id on the same line and adds no
+ * height to a row this extension does not own — the same reasoning as
+ * .tuis-col-refresh above. Nothing of the UI's is moved or restyled to make room. */
+.tuis-act-links {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
 }
 
-/* Inside the card the links are stacked in a narrow box rather than trailing a
- * table cell, so the table's left margin would indent the first one oddly. */
-.tuis-card .tuis-link {
-    margin: 2px 4px 0 0;
+/* In a table cell a link's own left margin is what separates it from the workflow
+ * id; in both containers above the `gap` does that job, so the margin would only
+ * indent the first one. Same class, same look, one less rule to keep in step than a
+ * second link class would be. */
+.tuis-linkbar .tuis-link,
+.tuis-act-links .tuis-link {
+    margin-left: 0;
 }
 
 /* The master switch. The content script also removes the nodes, but hiding them
@@ -286,7 +324,8 @@ td:has(a[href*="/workflows/"]) {
 html.tuis-off .tuis-prefix,
 html.tuis-off .tuis-link,
 html.tuis-off .tuis-retry,
-html.tuis-off .tuis-card {
+html.tuis-off .tuis-linkbar,
+html.tuis-off .tuis-act-links {
     display: none !important;
 }
 

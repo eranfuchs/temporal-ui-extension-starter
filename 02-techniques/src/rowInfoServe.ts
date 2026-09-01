@@ -20,7 +20,10 @@
 //
 //   1. A TTL CACHE, per (run, field). A render pass happens on every DOM mutation
 //      — dozens per second while the Temporal UI re-renders — and without this,
-//      each one would be a fresh round of requests.
+//      each one would be a fresh round of requests. The refresh control in the
+//      column header is the one thing that may bypass it, via `fresh` on the
+//      request; FRESH_FLOOR_MS puts a floor under that, because the message can be
+//      posted by anything in the page and not only by the button.
 //   2. IN-FLIGHT COALESCING. Ten render passes during one slow request must
 //      produce one request, not ten. The pending promise is the dedupe key.
 //   3. A CONCURRENCY CAP, and
@@ -32,10 +35,18 @@
 // It also refreshes for free: the Temporal UI polls its own workflow list, every
 // poll re-renders the table, every re-render asks again, and the TTL decides
 // whether that becomes a request. Nothing here holds a timer of its own.
+//
+// EVERY ANSWER IS DATED, and that is not bookkeeping. `observedAtMs` on the reply is
+// when the DATA was read — off the cached answer, so a cache hit reports the age of
+// the fact and not the age of the message — and it is what the column measures its
+// age against. Without it the renderer would subtract the event's timestamp from the
+// current clock and print a number that climbs once a second, which is a live
+// measurement of a run this file reads at most every 35 seconds.
 
 import { fetchFailureMessage, fetchForListedRun, replyToPage, TAG } from './pageApi';
 import { makePacer } from './pacer';
 import {
+    FRESH_FLOOR_MS,
     readLastEvent,
     readPendingRetry,
     type LastEvent,
@@ -102,7 +113,15 @@ interface Answer<T> {
 
 interface FieldStore<T> {
     get(namespace: string, run: RunRef): Promise<Answer<T>>;
+    forget(namespace: string, run: RunRef, nowMs: number): void;
     clear(): void;
+}
+
+// Namespace is part of the key: the same workflow id can exist in two of them, and
+// these maps are not per-namespace. Length-prefixed so no pair of parts can be
+// re-cut into a different pair that spells the same string.
+function storeKey(namespace: string, run: RunRef): string {
+    return `${namespace.length}:${namespace}:${run.workflowId.length}:${run.workflowId}:${run.runId}`;
 }
 
 function makeFieldStore<T>(load: (namespace: string, run: RunRef) => Promise<T | null>): FieldStore<T> {
@@ -111,9 +130,7 @@ function makeFieldStore<T>(load: (namespace: string, run: RunRef) => Promise<T |
 
     return {
         async get(namespace: string, run: RunRef): Promise<Answer<T>> {
-            // Namespace is part of the key: the same workflow id can exist in two
-            // of them, and this map is not per-namespace.
-            const key = `${namespace.length}:${namespace}:${run.workflowId.length}:${run.workflowId}:${run.runId}`;
+            const key = storeKey(namespace, run);
             const cached = answers.get(key);
             if (cached && Date.now() - cached.atMs < TTL_MS) return cached;
 
@@ -136,6 +153,22 @@ function makeFieldStore<T>(load: (namespace: string, run: RunRef) => Promise<T |
             })();
             inFlight.set(key, promise);
             return await promise;
+        },
+        // Drop one cached answer so the next get() has to fetch it. This is the whole
+        // of what `fresh` does, and THE FLOOR IS HERE rather than in the caller: the
+        // caller is a postMessage away from anything running in the page, so a bound
+        // it applied would be a bound only the honest asker keeps.
+        //
+        // An answer younger than the floor is left alone, which makes a repeated
+        // `fresh` collapse into the cache exactly like a 'due' ask would. Nothing
+        // touches `inFlight`: a request already on its way is as fresh as one started
+        // now, and cancelling it to start another would spend two requests to answer
+        // one question.
+        forget(namespace: string, run: RunRef, nowMs: number): void {
+            const key = storeKey(namespace, run);
+            const cached = answers.get(key);
+            if (cached && nowMs - cached.atMs < FRESH_FLOOR_MS) return;
+            answers.delete(key);
         },
         clear(): void {
             answers.clear();
@@ -176,30 +209,44 @@ export function clearRowInfoCache(): void {
 // empty for all of them instead of filling in as it goes.
 export function serveRowInfo(request: RowInfoRequest): void {
     for (const run of request.runs) {
-        void answerOne(request.namespace, run, request.want);
+        void answerOne(request.namespace, run, request.want, request.fresh);
     }
 }
 
-async function answerOne(namespace: string, run: RunRef, want: RowInfoField[]): Promise<void> {
+async function answerOne(namespace: string, run: RunRef, want: RowInfoField[], fresh: boolean): Promise<void> {
     const errors: string[] = [];
     let lastEvent: LastEvent | null = null;
     let retry: PendingRetry | null = null;
+    // When each field was actually read — `atMs` off the cached answer, so a cache
+    // hit reports the age of the DATA and not the age of this message. Collected per
+    // field because the two can differ: one may be served from cache while the other
+    // is fetched. The reply carries the oldest of them.
+    const observedAt: number[] = [];
+
+    // One clock reading for both fields, so a run cannot have its last event
+    // re-fetched and its pending activities served from cache because the two calls
+    // landed either side of the floor.
+    const nowMs = Date.now();
 
     // Both questions in parallel — they are two independent GETs, and the pacer
     // above is what keeps "in parallel" from meaning "all at once".
     const asked: Promise<void>[] = [];
     if (want.includes('lastEvent')) {
+        if (fresh) lastEventStore.forget(namespace, run, nowMs);
         asked.push(
             lastEventStore.get(namespace, run).then((answer) => {
                 lastEvent = answer.value;
+                observedAt.push(answer.atMs);
                 if (answer.error) errors.push(answer.error);
             }),
         );
     }
     if (want.includes('retry')) {
+        if (fresh) retryStore.forget(namespace, run, nowMs);
         asked.push(
             retryStore.get(namespace, run).then((answer) => {
                 retry = answer.value;
+                observedAt.push(answer.atMs);
                 if (answer.error) errors.push(answer.error);
             }),
         );
@@ -217,6 +264,15 @@ async function answerOne(namespace: string, run: RunRef, want: RowInfoField[]): 
         runId: run.runId,
         lastEvent,
         retry,
+        // THE OLDEST reading, not the newest and not Date.now(): the reply says "every
+        // fact in here was true at or after this instant", which is the claim a frozen
+        // age can be built on. `Date.now()` here would be a lie of exactly the kind
+        // this field exists to stop — the message is new, the data in it is not.
+        //
+        // The fallback cannot happen through serveRowInfo (an empty `want` is rejected
+        // by isRowInfoRequest) and is here so that the field is never absent, because
+        // absent would mean the renderer had to invent one.
+        observedAtMs: observedAt.length > 0 ? Math.min(...observedAt) : nowMs,
         // Deduplicated: both questions failing for the same reason (an evicted
         // ledger, a rate limit) must not print that reason twice in a tooltip.
         error: errors.length > 0 ? Array.from(new Set(errors)).join('\n') : null,

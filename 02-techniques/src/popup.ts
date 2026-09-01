@@ -6,7 +6,8 @@
 // does nothing". Showing rows-seen, rows-matched and families-found separates
 // those three cases in one glance.
 
-import { KNOWN_TOKENS, templateIsSafe, type DeepLinkTemplate } from './deepLink';
+import { KNOWN_TOKENS, templateIsSafe, templatesInScope, type DeepLinkTemplate } from './deepLink';
+import { MAX_ACTIVITIES } from './detail';
 import { loadSettings, saveSettings, type Settings } from './settings';
 
 interface PageStats {
@@ -22,6 +23,16 @@ interface PageStats {
     // number in this extension that represents requests WE made rather than
     // requests we watched, which is exactly why it is on screen.
     runsAsked: number;
+    // A single workflow's own page, where the deep links live instead. Reported
+    // separately because "no workflow table" is the right answer there and reads
+    // like a failure — see showStatus().
+    onDetailPage: boolean;
+    activitiesKnown: number;
+    activityPanelsLinked: number;
+    // The bar could not find the page's own layout and is parked in a corner. The
+    // one state that otherwise looks like nothing at all — see the note at the top
+    // of src/detailLinks.ts, where a stale anchor cost two diagnoses.
+    linksAdrift: boolean;
 }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -39,11 +50,12 @@ async function main(): Promise<void> {
     bindToggle('lastEventEnabled');
     bindToggle('retryEnabled');
     renderLinks();
+    renderLinkScopeNote();
 
     $('add-link').addEventListener('click', () => {
         settings.links = [...settings.links, { label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }];
         renderLinks();
-        void saveSettings({ links: settings.links });
+        saveLinks();
     });
 
     void showStatus();
@@ -60,6 +72,31 @@ function bindToggle(key: BooleanSetting): void {
         settings[key] = input.checked;
         void saveSettings({ [key]: input.checked });
     });
+}
+
+// The ONE way this file writes the link list, because every write carries a second
+// fact: a human has now curated these, so stop filling in a missing scope for them
+// (settings.ts, withActivityScope). Four call sites used to write `links` alone; a
+// fifth added later without the marker would quietly restore the bug where deleting
+// the activity template brings it back on the next page load.
+function saveLinks(): void {
+    settings.linkScopesSeeded = true;
+    void saveSettings({ links: settings.links, linkScopesSeeded: true });
+    renderLinkScopeNote();
+}
+
+// Says which SCOPES the current list can actually produce, next to the list itself.
+// A reader looking for a per-activity link that never appears has no way to know the
+// reason is "no template mentions an activity token" — the templates look fine, the
+// page looks fine, and the two facts are three files apart.
+function renderLinkScopeNote(): void {
+    const note = $('link-scopes');
+    const activity = templatesInScope(settings.links, 'activity').length;
+    const workflow = settings.links.length - activity;
+    note.textContent =
+        activity === 0
+            ? `${workflow} workflow link${workflow === 1 ? '' : 's'}, no activity link. A link only appears on an activity if its template names an activity token — {activityId} is the one to use.`
+            : `${workflow} workflow link${workflow === 1 ? '' : 's'}, ${activity} activity link${activity === 1 ? '' : 's'}. Activity links appear on a workflow's own page, on the row labelled "Activity Id".`;
 }
 
 function renderLinks(): void {
@@ -79,7 +116,7 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
 
     const label = textInput(link.label, 'Button label', (value) => {
         settings.links[index]!.label = value;
-        void saveSettings({ links: settings.links });
+        saveLinks();
     });
     // example.com, not a made-up hostname: it is the reserved documentation
     // domain (RFC 2606), so a placeholder in a public repo can never be read as
@@ -87,7 +124,7 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
     const template = textInput(link.urlTemplate, 'https://logs.example.com/?q={workflowId}', (value) => {
         settings.links[index]!.urlTemplate = value;
         showTemplateVerdict(template, warning);
-        void saveSettings({ links: settings.links });
+        saveLinks();
     });
 
     const remove = document.createElement('button');
@@ -97,7 +134,7 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
     remove.addEventListener('click', () => {
         settings.links = settings.links.filter((_, i) => i !== index);
         renderLinks();
-        void saveSettings({ links: settings.links });
+        saveLinks();
     });
 
     row.append(label, template, remove, warning);
@@ -140,11 +177,51 @@ async function showStatus(): Promise<void> {
     const stats = await askActiveTab();
 
     if (!stats) {
-        // This is the expected answer on any page the content script does not run
-        // on, and it is also what a tab that has not been reloaded since the
-        // extension was installed looks like.
-        status.textContent =
-            'No answer from this tab.\nOpen a Temporal workflow list — https://cloud.temporal.io/… or http://localhost:8233/… — and reload it once after installing.';
+        // Two very different situations produce this one silence, and the order of
+        // the sentences below is the whole point.
+        //
+        // The obvious one is the wrong page. The one that actually gets reported is a
+        // Temporal page that was ALREADY OPEN when the extension was installed or
+        // reloaded: Chrome injects content scripts at page load and does not go back
+        // and inject them into existing tabs, so the tab keeps running without one and
+        // every feature is simply absent. Measured on Cloud 2.53.3 with the same
+        // build, same page, same activity panel — loaded before the navigation the
+        // page carries a link bar and a per-activity link; loaded afterwards it
+        // carries no extension node at all and prints no log line.
+        //
+        // This message used to lead with "Open a Temporal workflow list", which tells
+        // a user who is standing on a workflow page that they are in the wrong place.
+        // They are not — they are one reload away. Lead with the fix that is far more
+        // likely to be theirs, and say WHY, because "reload and it works" with no
+        // reason reads like a flaky extension.
+        status.textContent = [
+            'No answer from this tab — no content script is running in it.',
+            'If this is a Temporal page, reload it. Chrome only injects content scripts into pages loaded after the extension, so a tab that was already open when you installed or reloaded the extension never got one.',
+            'If it is not, open https://cloud.temporal.io/… or http://localhost:8233/….',
+        ].join('\n');
+        return;
+    }
+    // A workflow's own page is not a failed list page, and saying "no workflow table"
+    // there reads as one. It is where the deep links live, so it gets its own answer.
+    if (!stats.onListPage && stats.onDetailPage) {
+        status.textContent = [
+            `On one workflow's own page${stats.namespace ? ` (namespace ${stats.namespace})` : ''}.`,
+            `${stats.activitiesKnown} activit${stats.activitiesKnown === 1 ? 'y' : 'ies'} known from the history this page has loaded, ${stats.activityPanelsLinked} activity panel${stats.activityPanelsLinked === 1 ? '' : 's'} linked.`,
+            stats.activitiesKnown === 0
+                ? 'Nothing observed yet — reload the page. This extension does not fetch the history itself.'
+                : 'Open an activity in the timeline to get its links: they are added to the row labelled "Activity Id".',
+            // The one state that cannot be seen from the page. At the cap the oldest
+            // activities have been dropped, so their panels get no link — identical on
+            // screen to a selector that stopped matching. Said here or nowhere.
+            stats.activitiesKnown >= MAX_ACTIVITIES
+                ? `Only the newest ${MAX_ACTIVITIES} activities are kept, so an early activity on this workflow may get no link at all. That is the cap, not a broken selector.`
+                : '',
+            stats.linksAdrift
+                ? 'The workflow links could not find this page’s own layout and are parked in the bottom-right corner. That is a stale selector, not a missing feature.'
+                : '',
+        ]
+            .filter(Boolean)
+            .join('\n');
         return;
     }
     if (!stats.onListPage) {

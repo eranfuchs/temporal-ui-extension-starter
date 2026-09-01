@@ -8,15 +8,18 @@
 //     <tr> reported the previous row's workflow id and made the tree render flat.
 // Both are asserted below.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+    ACTIVITY_LINKS_CLASS,
     applyToTable,
-    CARD_CLASS,
     COLUMN_HEAD_CLASS,
+    COLUMN_LABEL_CLASS,
+    COLUMN_REFRESH_CLASS,
     findWorkflowTbody,
     idsFromRow,
     LAST_EVENT_CLASS,
+    LINK_BAR_CLASS,
     LINK_BLOCKED_CLASS,
     LINK_CLASS,
     namespaceFromLocation,
@@ -31,10 +34,16 @@ import {
     type RowInfoLookup,
 } from '../../src/render';
 import type { RowInfo } from '../../src/rowInfoClient';
+import { FRESH_FLOOR_MS } from '../../src/rowInfo';
 import { buildTree } from '../../src/tree';
 import { normalizeExecutions, runKey } from '../../src/rows';
 import { apiWorkflow, buildWorkflowTable, fakeRunId, rowOrder, workflowLink } from '../helpers';
 import type { TemporalApiWorkflow } from '../../src/types';
+
+// How many times the header's refresh control has called back. Counted rather than
+// mocked so that every spec below — not only the ones about the button — would fail
+// if a render pass pressed it on its own.
+let refreshPresses = 0;
 
 const OPTIONS: RenderOptions = {
     treeEnabled: true,
@@ -46,6 +55,9 @@ const OPTIONS: RenderOptions = {
     nowMs: Date.parse('2026-01-01T12:00:00Z'),
     // Nothing answered. The specs that care supply their own.
     info: () => undefined,
+    onRefresh: () => {
+        refreshPresses += 1;
+    },
 };
 
 function lookupFor(executions: TemporalApiWorkflow[]): PlacementLookup {
@@ -85,6 +97,7 @@ const FAMILY: TemporalApiWorkflow[] = [
 
 beforeEach(() => {
     document.body.textContent = '';
+    refreshPresses = 0;
 });
 
 // jsdom delivers MutationObserver records in a microtask; a macrotask hop is the
@@ -405,10 +418,56 @@ function withHeader(tbody: HTMLTableSectionElement, labels: string[]): HTMLTable
     return tr;
 }
 
+// The header labels as a reader sees them, ours included. Our <th> holds a label
+// node AND a button, so its textContent is 'Last event⟳' — reading the label node
+// where there is one is what keeps a column-ORDER assertion about order rather than
+// about the glyph that happens to sit in the cell.
+function headerLabels(headRow: HTMLTableRowElement): (string | null)[] {
+    return Array.from(headRow.children).map(
+        (th) => th.querySelector(`.${COLUMN_LABEL_CLASS}`)?.textContent ?? th.textContent,
+    );
+}
+
+function refreshButton(): HTMLButtonElement | null {
+    return document.querySelector<HTMLButtonElement>(`.${COLUMN_REFRESH_CLASS}`);
+}
+
+// A press at a stated instant. render.ts stamps the press with Date.now() — read at
+// the CLICK and not at the render pass that installed the handler — so a spec about
+// the cooldown has to be able to say when the click happened. jsdom offers no way to
+// do that, which is why fake timers appear here and nowhere else in this file; only
+// `Date` is faked, and only for the duration of the click, so nothing else in the
+// suite runs on a simulated clock.
+function pressRefreshAt(atMs: number): void {
+    vi.useFakeTimers({ toFake: ['Date'], now: atMs });
+    try {
+        refreshButton()!.click();
+    } finally {
+        vi.useRealTimers();
+    }
+}
+
+// A time base for the specs that press refresh. render.ts remembers the last press
+// in MODULE state — deliberately, because the UI can replace its own header row at
+// any moment and a floor that reset with the node would not be a floor — so no spec
+// here reuses a clock reading: each starts an hour after the last, which is outside
+// FRESH_FLOOR_MS whatever order the file runs in.
+let clockMs = OPTIONS.nowMs;
+function nextHour(): number {
+    clockMs += 3_600_000;
+    return clockMs;
+}
+
+// `observedAtMs` defaults to the same instant OPTIONS.nowMs names — "asked just
+// now" — so the ages the specs below assert read the way they would on a first
+// pass. The spec that matters most about this field overrides it, because the
+// interesting case is an answer that was read a while ago and has not moved.
 function answers(byWorkflowId: Record<string, Partial<RowInfo>>): RowInfoLookup {
     return (workflowId) => {
         const answer = byWorkflowId[workflowId];
-        return answer ? { lastEvent: null, retry: null, error: null, ...answer } : undefined;
+        return answer
+            ? { lastEvent: null, retry: null, error: null, observedAtMs: OPTIONS.nowMs, ...answer }
+            : undefined;
     };
 }
 
@@ -428,12 +487,12 @@ function cellCounts(tbody: HTMLTableSectionElement): number[] {
 }
 
 describe('the “Last event” column', () => {
-    it('appends a header and one cell per row, and stays rectangular', () => {
+    it('puts a header and one cell per row immediately after the workflow id, and stays rectangular', () => {
         const tbody = buildWorkflowTable(document, [
             { workflowId: 'live', runId: LIVE_RUN },
             { workflowId: 'done', runId: DONE_RUN },
         ]);
-        withHeader(tbody, ['Workflow ID', 'Status']);
+        const headRow = withHeader(tbody, ['Workflow ID', 'Status']);
 
         applyToTable(tbody, lookupFor(MIXED), {
             ...OPTIONS,
@@ -443,21 +502,65 @@ describe('the “Last event” column', () => {
             }),
         });
 
-        // Appended, not inserted: a column pushed into the middle would have to
-        // agree with a header order the UI lets the user change.
+        // Beside the id, not at the end of the row: the question this column answers
+        // is asked while reading the id, and at the right-hand edge of a table the UI
+        // already fills, the answer is behind a horizontal scroll.
         const head = document.querySelector<HTMLTableCellElement>(`.${COLUMN_HEAD_CLASS}`)!;
-        expect(head.textContent).toBe('Last event');
-        expect(head.parentElement!.lastElementChild).toBe(head);
+        expect(head.querySelector(`.${COLUMN_LABEL_CLASS}`)!.textContent).toBe('Last event');
+        expect(headerLabels(headRow)).toEqual(['Workflow ID', 'Last event', 'Status']);
+        // A render pass draws the control; it must never act as though it were pressed.
+        expect(refreshPresses).toBe(0);
+        for (const tr of Array.from(tbody.querySelectorAll('tr'))) {
+            const idCell = tr.querySelector('a[href*="/workflows/"]')!.closest('td');
+            expect(tr.querySelector(`.${LAST_EVENT_CLASS}`)!.previousElementSibling).toBe(idCell);
+        }
         // Every row got one, including the closed one whose cell stays empty.
         expect(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`)).toHaveLength(2);
         expect(new Set(cellCounts(tbody))).toEqual(new Set([3]));
 
         const [live, done] = Array.from(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`));
-        expect(live!.textContent).toBe('3m · ActivityTaskStarted');
+        // Seconds, not "3m": the age of the newest event is the number this column
+        // exists for, and rounding it to the minute hides the first minute of a stall.
+        expect(live!.textContent).toBe('3m 00s · ActivityTaskStarted');
         expect(live!.getAttribute('title')).toContain('Last event #42');
         // A closed workflow's last event cannot change, so it is never asked about
         // and must not read as "asking…" forever.
         expect(done!.textContent).toBe('');
+    });
+
+    it('follows the id column when the id is not the first column', () => {
+        // Cloud's list draws a select-all checkbox before the id, and the UI lets the
+        // user reorder and hide columns. "After the id" therefore has to mean the id's
+        // ACTUAL position, read from the row on every pass — a hard-coded index is the
+        // version of this that looks right until someone moves a column.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        const tr = tbody.querySelector('tr')!;
+        tr.insertBefore(document.createElement('td'), tr.firstChild).textContent = '☐';
+        const headRow = withHeader(tbody, ['', 'Workflow ID', 'Status']);
+
+        applyToTable(tbody, lookupFor(MIXED), { ...OPTIONS, lastEventEnabled: true });
+
+        expect(headerLabels(headRow)).toEqual(['', 'Workflow ID', 'Last event', 'Status']);
+        expect(tr.querySelector(`.${LAST_EVENT_CLASS}`)!.previousElementSibling).toBe(
+            tr.querySelector('a[href*="/workflows/"]')!.closest('td'),
+        );
+    });
+
+    it('appends the cell on a row with no workflow link, so the table stays rectangular', () => {
+        // A "Loading…" row, or any row the UI draws that is not a workflow, has no id
+        // cell to sit beside. It still gets a cell: one in the wrong column is
+        // cosmetic, whereas a row with no cell at all puts every header one column out
+        // from the data underneath it.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const spacer = tbody.insertBefore(document.createElement('tr'), tbody.firstChild);
+        spacer.appendChild(document.createElement('td')).textContent = 'Loading…';
+        spacer.appendChild(document.createElement('td'));
+
+        applyToTable(tbody, lookupFor(MIXED), { ...OPTIONS, lastEventEnabled: true });
+
+        expect(new Set(cellCounts(tbody))).toEqual(new Set([3]));
+        expect(spacer.lastElementChild!.className).toBe(LAST_EVENT_CLASS);
     });
 
     it('tells the four empty-looking states apart', () => {
@@ -488,8 +591,10 @@ describe('the “Last event” column', () => {
 
     it('writes nothing on a second pass with the same answer', async () => {
         // Rule 2, on the newest write path. This one is the most exposed to it: the
-        // cell is re-rendered on every mutation and its text changes as the age
-        // ticks over, so the unchanged case really must touch nothing.
+        // cell is re-rendered on every DOM mutation, and there are dozens a second
+        // while the Temporal UI re-renders, so the unchanged case really must touch
+        // nothing. Freezing the age is what makes that reachable at all — see the spec
+        // below.
         const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
         withHeader(tbody, ['Workflow ID', 'Status']);
         const options = {
@@ -513,6 +618,48 @@ describe('the “Last event” column', () => {
         expect(mutations.map((m) => `${m.type} ${m.attributeName ?? ''}`.trim())).toEqual([]);
     });
 
+    it('holds the age still while the clock moves, because nothing was re-read', async () => {
+        // THE spec that makes "frozen" a guarantee instead of a claim, and it exists
+        // because the first version of this column was wrong in a way that looked
+        // right: a redraw once a second animated `now - event.timeMs`, so a workflow
+        // whose newest event was read 30 seconds ago displayed an age climbing to the
+        // second — a live measurement of something nobody had measured.
+        //
+        // The age is now taken against observedAtMs, the instant Temporal was read. So
+        // ninety seconds of wall clock with no new answer moves nothing, and the number
+        // on screen keeps meaning what it says.
+        const readAtMs = nextHour();
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor(MIXED);
+        const info = answers({
+            live: {
+                lastEvent: { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: readAtMs - 180_000 },
+                retry: A_RETRY,
+                observedAtMs: readAtMs,
+            },
+        });
+        const render = (nowMs: number) =>
+            applyToTable(tbody, lookup, { ...OPTIONS, lastEventEnabled: true, retryEnabled: true, info, nowMs });
+
+        render(readAtMs);
+        const cell = tbody.querySelector<HTMLTableCellElement>(`.${LAST_EVENT_CLASS}`)!;
+        expect(cell.textContent).toBe('3m 00s · ActivityTaskStarted');
+        // And it says so, since the cell has no room to. An age with no as-of is the
+        // part that misleads; this is where the extension owns up to it.
+        expect(cell.title).toContain('old when this was read, at ');
+        expect(cell.title).toContain('Frozen at that reading');
+
+        // Ninety seconds later, same answers. 3m 00s, NOT 4m 30s.
+        const mutations = await mutationsDuring(() => {
+            render(readAtMs + 90_000);
+        });
+        expect(cell.textContent).toBe('3m 00s · ActivityTaskStarted');
+        // Which is also rule 2, for free: with the clock out of the text, a pass over
+        // unchanged answers is a pass that writes nothing, however long it has been.
+        expect(mutations.map((m) => `${m.type} ${m.attributeName ?? ''}`.trim())).toEqual([]);
+    });
+
     it('takes both halves away when the setting is switched off', () => {
         // Both, together. A <th> left behind after the cells are gone shifts every
         // header label one column left of its data.
@@ -526,6 +673,106 @@ describe('the “Last event” column', () => {
 
         expect(document.querySelectorAll(`.${COLUMN_HEAD_CLASS}, .${LAST_EVENT_CLASS}`)).toHaveLength(0);
         expect(cellCounts(tbody)).toEqual([2, 2]);
+        // The control goes with the column it belongs to. A button left in the header
+        // after the column is gone would still fire requests when pressed.
+        expect(refreshButton()).toBeNull();
+    });
+
+    it('carries a refresh control that says what it does before it is pressed', () => {
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+
+        applyToTable(tbody, lookupFor(MIXED), { ...OPTIONS, lastEventEnabled: true, nowMs: nextHour() });
+
+        const button = refreshButton()!;
+        // `submit` is the default, and there is no form in a Temporal UI table today —
+        // which is exactly why the day somebody wraps one around it must not be the day
+        // this button starts navigating the page.
+        expect(button.type).toBe('button');
+        // A glyph is not an accessible name, and the cost of pressing it is something a
+        // user is entitled to know beforehand.
+        expect(button.getAttribute('aria-label')).toBe('Refresh the last-event column');
+        expect(button.title).toContain('Ask Temporal again');
+        expect(button.disabled).toBe(false);
+    });
+
+    it('calls back once per press, and does not stack a handler per render pass', () => {
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor(MIXED);
+        const options = { ...OPTIONS, lastEventEnabled: true, nowMs: nextHour() };
+
+        applyToTable(tbody, lookup, options);
+        const button = refreshButton()!;
+        applyToTable(tbody, lookup, options);
+        applyToTable(tbody, lookup, options);
+
+        // The same node throughout: a header rebuilt every pass would lose the disabled
+        // state below, and would be a DOM write on every mutation for the life of the
+        // page (rule 2 at the top of render.ts).
+        expect(refreshButton()).toBe(button);
+
+        pressRefreshAt(options.nowMs);
+
+        // Once, not three times. render.ts ASSIGNS onclick rather than adding a
+        // listener, which is what makes a pass unable to accumulate handlers.
+        expect(refreshPresses).toBe(1);
+    });
+
+    it('disables itself for as long as the receiver would refuse to re-fetch', () => {
+        // The button is the visible half of FRESH_FLOOR_MS in rowInfoServe.ts. It is not
+        // the enforcement — anything in the page can post the message — but a control
+        // that accepted a press the other side would ignore is one that reads as broken.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor(MIXED);
+        const pressedAtMs = nextHour();
+        const render = (nowMs: number) => applyToTable(tbody, lookup, { ...OPTIONS, lastEventEnabled: true, nowMs });
+
+        render(pressedAtMs);
+        pressRefreshAt(pressedAtMs);
+        // In the same frame as the click, not at whatever the next render pass turns out
+        // to be: a second press before then would be one the receiver refuses in silence.
+        expect(refreshButton()!.disabled).toBe(true);
+
+        render(pressedAtMs + FRESH_FLOOR_MS - 1);
+        expect(refreshButton()!.disabled).toBe(true);
+
+        // Re-enabled by an ordinary pass. This is the ONE thing in the feature measured
+        // against the real clock — it describes how long ago the USER pressed something,
+        // not how old any data is — and it is why content.ts schedules a single pass
+        // FRESH_FLOOR_MS after a press. Without that one-shot, a quiet page would leave
+        // the button greyed out until the next DOM mutation, whenever that came.
+        render(pressedAtMs + FRESH_FLOOR_MS);
+        expect(refreshButton()!.disabled).toBe(false);
+        expect(refreshPresses).toBe(1);
+    });
+
+    it('measures the cooldown from the click, not from the render that installed the handler', () => {
+        // THE QUIET PAGE. Every spec above renders and clicks at the same instant, so
+        // all of them passed while the press was stamped with the render's clock. A real
+        // table renders when it changes and then sits there: the handler is still the one
+        // installed an hour ago, and stamping the press with that pass's nowMs made the
+        // floor start an hour before the button was touched. The next pass then found it
+        // long elapsed and re-enabled the button on the spot.
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'live', runId: LIVE_RUN }]);
+        withHeader(tbody, ['Workflow ID', 'Status']);
+        const lookup = lookupFor(MIXED);
+        const render = (nowMs: number) => applyToTable(tbody, lookup, { ...OPTIONS, lastEventEnabled: true, nowMs });
+        const renderedAtMs = nextHour();
+        const pressedAtMs = nextHour(); // an hour later, with NO render in between
+
+        render(renderedAtMs);
+        // Enabled first, so the assertion after the press is about the press. Without
+        // this the spec would pass on a button that was already disabled.
+        expect(refreshButton()!.disabled).toBe(false);
+
+        pressRefreshAt(pressedAtMs);
+        render(pressedAtMs + FRESH_FLOOR_MS - 1);
+
+        // Stamped with renderedAtMs this reads as an hour ago and the button comes back
+        // straight away, one millisecond into a five-second floor.
+        expect(refreshButton()!.disabled).toBe(true);
     });
 });
 
@@ -620,18 +867,21 @@ describe('removeAllDecoration', () => {
             lastEventEnabled: true,
             links: [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }],
         });
-        // The card is not in the table — it is on <body>, because a workflow's own
-        // page offers nothing to attach to — and the master switch has to take it
-        // away too, or "off" does not mean off.
-        const card = document.createElement('div');
-        card.className = CARD_CLASS;
-        document.body.appendChild(card);
+        // Neither of the workflow-page decorations is in the table: the link bar sits
+        // in the page's own layout and an activity group sits inside a panel. The
+        // master switch has to take those away too, or "off" does not mean off — and
+        // this function is the only place that knows the full list.
+        const bar = document.createElement('div');
+        bar.className = LINK_BAR_CLASS;
+        const activityLinks = document.createElement('span');
+        activityLinks.className = ACTIVITY_LINKS_CLASS;
+        document.body.append(bar, activityLinks);
 
         removeAllDecoration(document);
 
         expect(
             document.querySelectorAll(
-                `.${PREFIX_CLASS}, .${LINK_CLASS}, .${RETRY_CLASS}, .${CARD_CLASS}, .${LAST_EVENT_CLASS}, .${COLUMN_HEAD_CLASS}`,
+                `.${PREFIX_CLASS}, .${LINK_CLASS}, .${RETRY_CLASS}, .${LINK_BAR_CLASS}, .${ACTIVITY_LINKS_CLASS}, .${LAST_EVENT_CLASS}, .${COLUMN_HEAD_CLASS}`,
             ),
         ).toHaveLength(0);
         expect(Array.from(tbody.querySelectorAll('a')).every((a) => a.style.marginLeft === '')).toBe(true);

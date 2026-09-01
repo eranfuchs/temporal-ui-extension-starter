@@ -34,10 +34,21 @@
 // job was to be kept in sync with a string the user had already typed.
 //
 // The workflow list therefore shows workflow-scoped links only (an activity token
-// has nothing to fill from a table row), and a workflow's own page shows both:
-// the workflow-scoped ones once, and the activity-scoped ones per activity. Add
-// `{activityType}` to a template and it moves between the two, with nothing else
-// to change.
+// has nothing to fill from a table row), and a workflow's own page shows both: the
+// workflow-scoped ones beside its tabs, and the activity-scoped ones inside each
+// activity's own panel. Add `{activityId}` to a template and it moves between the
+// two, with nothing else to change.
+//
+// ── AN ACTIVITY IS IDENTIFIED BY ITS ID, NEVER BY ITS TYPE ───────────────────
+//
+// `{activityType}` is in the vocabulary because a log backend may index it, but it
+// is not an identity: a workflow that calls `chargeCard` three times produces three
+// activities of that type, and a link keyed on the type alone opens a search that
+// matches all three. `{activityId}` and `{activityEventId}` are unique within the
+// run — see activityByPanelId() in src/detail.ts for which of them the page can
+// actually be matched on — and `{activityScheduled…}`/`{activityClosed…}` bound the
+// window to the one execution, which is what makes the link exact even on a backend
+// that only ever indexed the type.
 
 import type { WorkflowRow } from './types';
 
@@ -46,15 +57,23 @@ export interface DeepLinkTemplate {
     urlTemplate: string;
 }
 
-// One activity, reduced to the four things a link can be built from. Everything
-// here comes out of the workflow's own history — see src/detail.ts, which folds
-// it — and none of it is a payload.
+// One activity, reduced to the handful of things a link can be built from.
+// Everything here comes out of the workflow's own history — see src/detail.ts,
+// which folds it — and none of it is a payload.
 export interface DeepLinkActivity {
+    // The id of the ActivityTaskScheduled event: unique within the run BY
+    // CONSTRUCTION, which no other field here is. The strongest key available, and
+    // the one to reach for if the log backend can be made to carry it.
+    scheduledEventId: string;
     // Caller-chosen, and often built out of a business identifier, which is why
     // the LIST page's retry badge deliberately does not show one (see the note at
     // the top of src/rowInfo.ts). Here it is different: it is the operator's own
     // template that names this token, on the page whose event history is already
     // showing the same string.
+    //
+    // Unique per activity in practice but not by construction — the workflow chooses
+    // it, so it can repeat within a run. activityByPanelId() reports that rather
+    // than hiding it.
     activityId: string;
     activityType: string;
     // null while the activity is still running, and that is not a gap in the fold.
@@ -65,6 +84,10 @@ export interface DeepLinkActivity {
     // instead. https://docs.temporal.io/encyclopedia/retry-policies
     attempt: number | null;
     scheduledAtMs: number | null;
+    // null while the activity is still open. The other end of the window; see the
+    // note on DetailActivity.closedAtMs in src/detail.ts for why a per-instance
+    // window is what makes a type-indexed log search exact.
+    closedAtMs: number | null;
 }
 
 export interface DeepLinkContext {
@@ -199,10 +222,18 @@ function resolveToken(name: string, offset: string | undefined, ctx: DeepLinkCon
         // context, and null again when the activity has that field but Temporal
         // has not filled it — an unknown token is the honest answer for both, and
         // it is the one the popup and the link's own title report.
+        //
+        // `|| null` and not `?? null` for the two strings: both are '' rather than
+        // undefined when the fold has an activity whose scheduled event it has not
+        // read (see DetailActivity.activityId), and `{activityId}` expanding to
+        // nothing at all is a link that searches the whole index and looks like it
+        // worked. An empty value is a missing value here.
+        case 'activityEventId':
+            return ctx.activity?.scheduledEventId || null;
         case 'activityId':
-            return ctx.activity?.activityId ?? null;
+            return ctx.activity?.activityId || null;
         case 'activityType':
-            return ctx.activity?.activityType ?? null;
+            return ctx.activity?.activityType || null;
         case 'activityAttempt':
             return ctx.activity?.attempt == null ? null : String(ctx.activity.attempt);
         case 'activityScheduledMs':
@@ -216,9 +247,25 @@ function resolveToken(name: string, offset: string | undefined, ctx: DeepLinkCon
                 ? null
                 : String(Math.floor((ctx.activity.scheduledAtMs + shift) / 1000));
 
+        // The other end of one activity's window. A still-open activity has no close
+        // time, and the answer is the same one `{endTimeIso}` gives for a still-open
+        // workflow: the workflow's own end, or now. An empty `to` would silently
+        // truncate the search at the moment the activity was scheduled, which for a
+        // long-running activity is a window with nothing in it.
+        case 'activityClosedMs':
+            return ctx.activity ? String(activityCloseMs(ctx.activity, endMs) + shift) : null;
+        case 'activityClosedIso':
+            return ctx.activity ? new Date(activityCloseMs(ctx.activity, endMs) + shift).toISOString() : null;
+        case 'activityClosedSec':
+            return ctx.activity ? String(Math.floor((activityCloseMs(ctx.activity, endMs) + shift) / 1000)) : null;
+
         default:
             return null;
     }
+}
+
+function activityCloseMs(activity: DeepLinkActivity, workflowEndMs: number): number {
+    return activity.closedAtMs ?? workflowEndMs;
 }
 
 function offsetMs(offset: string | undefined): number {
@@ -238,11 +285,15 @@ function offsetMs(offset: string | undefined): number {
 // of silently moving the whole template to a page the user was not editing.
 const ACTIVITY_TOKENS = new Set([
     'activityId',
+    'activityEventId',
     'activityType',
     'activityAttempt',
     'activityScheduledIso',
     'activityScheduledMs',
     'activityScheduledSec',
+    'activityClosedIso',
+    'activityClosedMs',
+    'activityClosedSec',
 ]);
 
 // Every token this build understands, for the popup's help text. Kept next to

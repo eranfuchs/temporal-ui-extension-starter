@@ -4,7 +4,7 @@
 // tree, and hands the result to render.ts. Every DOM write lives there, so this
 // file stays small enough to read in one sitting.
 
-import { detailCardStats, installDetailCard, syncDetailCard } from './detailCard';
+import { detailLinkStats, installDetailLinks, syncDetailLinks } from './detailLinks';
 import { buildTree, countFamilies } from './tree';
 import {
     emptyPlacementIndex,
@@ -25,7 +25,7 @@ import {
     type Placement,
     type RenderStats,
 } from './render';
-import type { RowInfoField } from './rowInfo';
+import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo';
 import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfoClient';
 import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
 
@@ -46,6 +46,9 @@ let settings: Settings = {
     links: [],
     lastEventEnabled: true,
     retryEnabled: true,
+    // No links yet, so nothing to backfill a scope into; loadSettings() replaces this
+    // whole object a moment later with the real answer.
+    linkScopesSeeded: false,
 };
 let lastStats: RenderStats = {
     rowsSeen: 0,
@@ -116,12 +119,12 @@ function apply(): void {
 
     // BEFORE the table, because there is no table on the page this draws on. The
     // early return below is every page that is not the workflow list, and a single
-    // workflow's own page is exactly that — hanging the card off the same pass but
-    // after the return is how it would silently never appear.
-    syncDetailCard({
-        // No switch of its own: the card shows link templates, so the links switch
-        // is the switch. Its cost is one clone and parse of a response the page
-        // fetched anyway (see detailWatch.ts), which is not worth a toggle.
+    // workflow's own page is exactly that — hanging these links off the same pass but
+    // after the return is how they would silently never appear.
+    syncDetailLinks({
+        // No switch of its own: these are link templates, so the links switch is the
+        // switch. Their cost is one clone and parse of a response the page fetched
+        // anyway (see detailWatch.ts), which is not worth a toggle.
         enabled: settings.linksEnabled,
         links: settings.links,
         pathname: location.pathname,
@@ -146,6 +149,7 @@ function apply(): void {
         // and this is where the third part comes from — the renderer never has to
         // learn about it, and cannot look a row up in the wrong namespace.
         info: (workflowId, runId) => rowInfoFor(namespace, workflowId, runId),
+        onRefresh: refreshRowInfoNow,
     });
 
     // AFTER rendering, never before: what is on the table decides what to ask
@@ -157,6 +161,38 @@ function apply(): void {
     if (settings.retryEnabled) want.push('retry');
     if (want.length > 0) runsAsked += requestRowInfo(namespace, want, visibleRows(tbody, lookup), nowMs);
 }
+
+// The refresh control in the column header. It has to re-read the table rather than
+// use anything the render pass captured: what is on screen when the button is pressed
+// is not necessarily what was on screen when the <th> was drawn.
+//
+// 'fresh' is the only caller of that mode anywhere in the extension — it skips the
+// ask interval here and tells the MAIN world to skip its cached answer, subject to
+// the floor that side enforces. See requestRowInfo() and FRESH_FLOOR_MS.
+function refreshRowInfoNow(): void {
+    const tbody = findWorkflowTbody();
+    if (!tbody) return;
+    const namespace = namespaceFromLocation(location.pathname) ?? '';
+    const want: RowInfoField[] = [];
+    if (settings.lastEventEnabled) want.push('lastEvent');
+    if (settings.retryEnabled) want.push('retry');
+    runsAsked += requestRowInfo(namespace, want, visibleRows(tbody, lookup), Date.now(), 'fresh');
+    // So the button's own disabled state is painted now rather than at whatever the
+    // next mutation turns out to be.
+    scheduleApply();
+    // And ONE more pass when the floor lifts, to re-enable it.
+    //
+    // This is the only timer in the feature, it is a one-shot rather than a heartbeat,
+    // and it exists for the button and not for the column: the disabled state is the
+    // one thing here measured against the real clock, so it is the one thing that
+    // needs a pass at a particular time. A press during the countdown cannot happen
+    // (the button is disabled), but a forged 'fresh' message could arrive from the
+    // page and re-enter this function, so the handle is replaced rather than stacked.
+    clearTimeout(refreshFloorTimer);
+    refreshFloorTimer = setTimeout(scheduleApply, FRESH_FLOOR_MS);
+}
+
+let refreshFloorTimer: ReturnType<typeof setTimeout> | undefined;
 
 let applyScheduled = false;
 function scheduleApply(): void {
@@ -181,6 +217,33 @@ function scheduleApply(): void {
 // self-feeding loop described at the top of render.ts.
 const observer = new MutationObserver(scheduleApply);
 
+// ── THERE IS NO TICKER, AND THAT IS THE DESIGN ───────────────────────────────
+//
+// The "Last event" column shows an age to the second, so the obvious thing is a
+// setInterval that redraws it once a second. This file had one, briefly. It is worth
+// saying why it went, because the argument for it is more persuasive than the code:
+//
+// The redraw was honest about cost — it fetched nothing, it recomputed ages from
+// timestamps already in hand, and requestRowInfo()'s own interval meant a tick on a
+// settled table posted no message. What it was not honest about was TIME. Each row's
+// timestamp is read at most every 35 seconds; animating the subtraction made a
+// 35-second-old fact look like a live measurement, so a workflow that had moved on
+// two seconds ago displayed a stall counting upwards, to the second, convincingly.
+//
+// So the age is frozen at the instant the answer was read (observedAtMs, threaded
+// from rowInfoServe.ts through to render.ts) and the cell's tooltip dates it. The
+// column now changes when the data changes and at no other time, which is what a
+// reader assumes a number on a screen means. Its cost is that a stall reads up to one
+// ask interval younger than it is; the alternative — a truthful per-second age —
+// costs a request per row per second, which is the load this feature is built to
+// avoid.
+//
+// One consequence to keep in mind when adding anything time-dependent here: with no
+// heartbeat, a decoration that depends on elapsed time will sit unchanged on a quiet
+// page for as long as the page is quiet. Nothing else this extension draws is
+// time-dependent — the tree, the links and the badge all describe state — and
+// anything that becomes so needs its own answer to this, not a revived ticker.
+
 async function start(): Promise<void> {
     settings = await loadSettings();
     onSettingsChanged((next) => {
@@ -198,9 +261,9 @@ async function start(): Promise<void> {
     // pass per animation frame, so a burst of answers is a handful of passes.
     installRowInfo(scheduleApply);
 
-    // The same arrangement for the detail page's card, and the same coalescing: a
-    // history page can be observed while the UI is still rendering the last one.
-    installDetailCard(scheduleApply);
+    // The same arrangement for a workflow page's own links, and the same coalescing:
+    // a history page can be observed while the UI is still rendering the last one.
+    installDetailLinks(scheduleApply);
 
     // We run at document_start so that no workflow-list response is missed. That
     // is early enough for document.body to still be null.
@@ -225,7 +288,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
         rowsKnown: placements.byRun.size,
         families: familyCount,
         runsAsked,
-        ...detailCardStats(),
+        ...detailLinkStats(),
         ...lastStats,
     });
     return false; // responded synchronously; nothing to keep the port open for

@@ -11,7 +11,7 @@
 // concurrency cap and a backoff. The difference between piggybacking and asking is
 // most of that file.
 //
-// WHY THE WATCHER IS REGISTERED UNCONDITIONALLY, even when the card is switched
+// WHY THE WATCHER IS REGISTERED UNCONDITIONALLY, even when the links are switched
 // off. It costs one clone and one deferred JSON.parse per history page the user
 // loads — small, but not nothing on a workflow with a hundred thousand events.
 //
@@ -20,7 +20,7 @@
 // ISOLATED script has to read settings out of chrome.storage first, and the page's
 // own history fetch can easily land before that read returns. The watcher would
 // then miss the only history response the page makes for that workflow, and the
-// card would sit half-empty until the user navigated again — an intermittent,
+// links would sit half-drawn until the user navigated again — an intermittent,
 // timing-dependent failure, which is the kind this project spends its comments
 // trying to avoid.
 //
@@ -57,7 +57,7 @@ export function installDetailWatch(): void {
             if (!ref) return;
             const facts = ref.from === 'history' ? readHistoryFacts(body) : readDescribeFacts(body);
             // Nothing to say is not worth a message: the ISOLATED side would merge
-            // it into what it already has, redraw the same card, and log a round
+            // it into what it already has, redraw the same links, and log a round
             // trip that never changed anything.
             if (!worthPosting(facts)) return;
 

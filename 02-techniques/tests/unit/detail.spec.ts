@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     acceptFactsFor,
+    activityByPanelId,
     detailRefFromApiUrl,
     detailRefFromPath,
     isDetailFactsMessage,
@@ -19,6 +20,7 @@ import {
     readDescribeFacts,
     readHistoryFacts,
     rowFromFacts,
+    type DetailActivity,
     type DetailFacts,
 } from '../../src/detail';
 import { expandTemplate } from '../../src/deepLink';
@@ -197,6 +199,12 @@ describe('readHistoryFacts', () => {
                 activityType: 'ChargeCard',
                 attempt: 3,
                 scheduledAtMs: Date.parse('2026-01-01T10:00:05Z'),
+                // The pair (scheduledAtMs, closedAtMs) is this ONE execution's window,
+                // read off the scheduling event and the terminal event. It is what lets
+                // a link about an activity be a link about an activity rather than
+                // about every execution of its type — see the note on closedAtMs in
+                // src/detail.ts.
+                closedAtMs: Date.parse('2026-01-01T10:00:07Z'),
                 outcome: 'completed',
                 pending: false,
             },
@@ -319,6 +327,10 @@ describe('readDescribeFacts', () => {
                 activityType: 'ChargeCard',
                 attempt: 900,
                 scheduledAtMs: Date.parse('2026-01-01T11:00:00Z'),
+                // A pending activity has not closed, and this stays null rather than
+                // becoming "now": a window that ends at the moment the link was drawn
+                // would quietly exclude everything the activity does next.
+                closedAtMs: null,
                 outcome: 'open',
                 pending: true,
             },
@@ -377,6 +389,7 @@ describe('mergeFacts', () => {
                     activityType: 'ChargeCard',
                     attempt: null,
                     scheduledAtMs: 5,
+                    closedAtMs: 9,
                     outcome: 'open',
                     pending: false,
                 },
@@ -391,6 +404,7 @@ describe('mergeFacts', () => {
                     activityType: '',
                     attempt: 900,
                     scheduledAtMs: null,
+                    closedAtMs: null,
                     outcome: 'open',
                     pending: true,
                 },
@@ -402,6 +416,11 @@ describe('mergeFacts', () => {
             activityType: 'ChargeCard',
             attempt: 900,
             scheduledAtMs: 5,
+            // Both ends of the window survive an answer that knows neither. A describe
+            // carries no close time at all, so a merge that let the newer answer win
+            // outright would drop the end of the window every time one arrived — and a
+            // link with a start and no end is a link to "from then until whenever".
+            closedAtMs: 9,
             pending: true,
         });
     });
@@ -416,6 +435,7 @@ describe('mergeFacts', () => {
                     activityType: 'ChargeCard',
                     attempt: 3,
                     scheduledAtMs: 5,
+                    closedAtMs: 9,
                     outcome: 'failed',
                     pending: false,
                 },
@@ -440,23 +460,123 @@ describe('mergeFacts', () => {
     });
 });
 
+// One activity, with only the fields a spec cares about spelled out. Written as a
+// helper here rather than inline, because the whole point of the two specs below is
+// which FIELD a lookup keys on, and eight-field literals hide that.
+function activity(overrides: Partial<DetailActivity> = {}): DetailActivity {
+    return {
+        scheduledEventId: '5',
+        activityId: 'charge-1',
+        activityType: 'ChargeCard',
+        attempt: null,
+        scheduledAtMs: null,
+        closedAtMs: null,
+        outcome: 'open',
+        pending: false,
+        ...overrides,
+    };
+}
+
 describe('linkableActivities', () => {
     it('is newest first, and drops the ones with no identity to link', () => {
         const facts: DetailFacts = {
             ...NO_FACTS,
             activities: [
-                { scheduledEventId: '9', activityId: 'a', activityType: 'A', attempt: null, scheduledAtMs: null, outcome: 'open', pending: false },
-                { scheduledEventId: '10', activityId: 'b', activityType: 'B', attempt: null, scheduledAtMs: null, outcome: 'open', pending: false },
-                { scheduledEventId: '113', activityId: '', activityType: '', attempt: 2, scheduledAtMs: null, outcome: 'open', pending: false },
+                activity({ scheduledEventId: '9', activityId: 'a', activityType: 'A' }),
+                activity({ scheduledEventId: '10', activityId: 'b', activityType: 'B' }),
+                activity({ scheduledEventId: '113', activityId: '', activityType: '', attempt: 2 }),
             ],
         };
         // Numeric, not lexicographic — and these three ids are chosen so the two
         // orderings disagree. An event id is an int64 sent as a string, so '10'
-        // sorts BEFORE '9' as text, and a card on any workflow with more than nine
-        // activities would list them in an order that looks arbitrary. An earlier
+        // sorts BEFORE '9' as text, and on any workflow with more than nine
+        // activities the newest-first order would look arbitrary. An earlier
         // fixture here used '5'/'90'/'12', where both orderings happen to agree, and
         // a mutation audit showed the spec passing against a lexicographic sort.
         expect(linkableActivities(facts).map((a) => a.scheduledEventId)).toEqual(['10', '9']);
+    });
+});
+
+// ── Resolving one panel on the page to one activity ──────────────────────────
+//
+// The lookup behind every per-activity link. What it is for is stated at its
+// definition in src/detail.ts; these specs pin the two decisions that a reader of
+// the call site cannot see: which key wins, and what happens when the key is not
+// unique after all.
+describe('activityByPanelId', () => {
+    it('matches on the activity id — the field the panel is showing', () => {
+        const facts: DetailFacts = {
+            ...NO_FACTS,
+            activities: [
+                activity({ scheduledEventId: '5', activityId: 'charge-1' }),
+                activity({ scheduledEventId: '9', activityId: 'ship-1', activityType: 'ShipOrder' }),
+            ],
+        };
+        const match = activityByPanelId(facts, 'ship-1')!;
+        expect(match.by).toBe('activityId');
+        expect(match.activity.scheduledEventId).toBe('9');
+        expect(match.ambiguous).toBe(false);
+    });
+
+    it('ignores surrounding whitespace, because a DOM node has plenty', () => {
+        const facts: DetailFacts = { ...NO_FACTS, activities: [activity()] };
+        expect(activityByPanelId(facts, '\n  charge-1  ')?.activity.scheduledEventId).toBe('5');
+    });
+
+    it('says so when a run used one id twice, and takes the newest', () => {
+        // An activityId is chosen by the workflow author, so nothing stops a loop from
+        // reusing one. The UI's panel shows only the id, so a reader cannot tell —
+        // which is precisely why `ambiguous` exists and is put on the link's title
+        // rather than left as a detail of the lookup.
+        const facts: DetailFacts = {
+            ...NO_FACTS,
+            activities: [
+                activity({ scheduledEventId: '5', activityId: 'charge-1' }),
+                activity({ scheduledEventId: '12', activityId: 'charge-1' }),
+            ],
+        };
+        const match = activityByPanelId(facts, 'charge-1')!;
+        expect(match.ambiguous).toBe(true);
+        // Newest first, as linkableActivities orders them: on a retrying workflow the
+        // one somebody has a panel open on is the latest.
+        expect(match.activity.scheduledEventId).toBe('12');
+    });
+
+    it('falls back to the scheduled event id, which cannot repeat', () => {
+        // A history page that begins mid-workflow carries an ActivityTaskStarted with
+        // no activityId. The panel then shows the event id, and this is the only key
+        // left — one Temporal assigns, so it is unique by construction.
+        const facts: DetailFacts = {
+            ...NO_FACTS,
+            activities: [activity({ scheduledEventId: '5', activityId: '', activityType: '' })],
+        };
+        const match = activityByPanelId(facts, '5')!;
+        expect(match.by).toBe('scheduledEventId');
+        expect(match.ambiguous).toBe(false);
+    });
+
+    it('prefers the activity id when a run has one of each', () => {
+        // The ambiguity that decides the ORDER of the two keys: '9' is one activity's
+        // author-chosen id and another's event id. The panel is showing the field the
+        // UI labelled "Activity Id", so the activity id is the reading that matches
+        // what is on screen.
+        const facts: DetailFacts = {
+            ...NO_FACTS,
+            activities: [
+                activity({ scheduledEventId: '9', activityId: 'ship-1' }),
+                activity({ scheduledEventId: '40', activityId: '9' }),
+            ],
+        };
+        expect(activityByPanelId(facts, '9')?.activity.scheduledEventId).toBe('40');
+    });
+
+    it('is null for an id this run does not have, and for no id at all', () => {
+        // The alternative — falling back to the newest activity — is what turns a
+        // stale panel into a link that looks right and is about something else.
+        const facts: DetailFacts = { ...NO_FACTS, activities: [activity()] };
+        expect(activityByPanelId(facts, 'charge-2')).toBeNull();
+        expect(activityByPanelId(facts, '')).toBeNull();
+        expect(activityByPanelId(facts, '   ')).toBeNull();
     });
 });
 

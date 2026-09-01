@@ -1,7 +1,8 @@
-// Everything that writes to the TABLE, and nothing else. (The one thing this
-// extension puts on the page outside the table is the deep-link card on a single
-// workflow's own page, which detailCard.ts owns; its class name is still declared
-// here, with the others, so removeAllDecoration() below can take it away too.)
+// Everything that writes to the TABLE, and nothing else. (The things this
+// extension puts on the page outside the table are the deep links on a single
+// workflow's own page, which detailLinks.ts owns; their class names are still
+// declared here, with the others, so removeAllDecoration() below can take them away
+// too, and the anchor writer they both use lives here — see syncLinkAnchors.)
 //
 // Kept apart from content.ts on purpose: content.ts is wiring (messages,
 // observer, settings) and cannot be unit-tested without a browser, while every
@@ -28,8 +29,8 @@
 //     The UI re-renders on its own schedule and will throw our nodes away. We
 //     do not try to prevent that. We re-apply, cheaply, after it settles.
 
-import { expandTemplate, templatesInScope, type DeepLinkTemplate } from './deepLink';
-import { formatAge, lastEventTitle, retryBadgeLabel, retryBadgeTitle } from './rowInfo';
+import { expandTemplate, templatesInScope, type DeepLinkContext, type DeepLinkTemplate } from './deepLink';
+import { formatAgePrecise, FRESH_FLOOR_MS, lastEventTitle, retryBadgeLabel, retryBadgeTitle } from './rowInfo';
 import type { RowInfo } from './rowInfoClient';
 import type { SegmentKind, WorkflowRow } from './types';
 
@@ -40,20 +41,29 @@ export const LINK_CLASS = 'tuis-link';
 // renders: a button that vanishes reads as a broken extension, and the title
 // then has nowhere to explain itself.
 export const LINK_BLOCKED_CLASS = 'tuis-link-blocked';
-// The "Last event" column: one <th> appended to the header row, one <td> appended
-// to every body row. Both are needed for every row, always — a table where some
-// rows have the extra cell and some do not is a table with a visibly broken
-// layout, which is why the column is applied to the whole <tbody> at once rather
-// than inside decorateRow().
+// The "Last event" column: one <th> in the header row, one <td> in every body row,
+// both placed immediately after the workflow-id column. Both are needed for every
+// row, always — a table where some rows have the extra cell and some do not is a
+// table with a visibly broken layout, which is why the column is applied to the
+// whole <tbody> at once rather than inside decorateRow().
 export const LAST_EVENT_CLASS = 'tuis-last-event';
 export const COLUMN_HEAD_CLASS = 'tuis-col-head';
+// Inside that <th>: the word, and the button that re-asks. The label is a node of
+// its own rather than a text child so that reading the header's own name does not
+// mean stripping the button's glyph out of th.textContent — which the specs, and
+// anyone debugging the column order, do have to do.
+export const COLUMN_LABEL_CLASS = 'tuis-col-label';
+export const COLUMN_REFRESH_CLASS = 'tuis-col-refresh';
 // The retrying-activity badge, in the workflow-id cell beside the id.
 export const RETRY_CLASS = 'tuis-retry';
-// The deep-link card on a single workflow's own page. detailCard.ts builds it and
-// this file only ever removes it — same arrangement as PANEL_CLASS above, and for
-// the same reason: a selector and the node it is meant to find must not be able to
-// drift apart across two files.
-export const CARD_CLASS = 'tuis-card';
+// The two places detailLinks.ts writes on a single workflow's own page: a bar of
+// workflow-scoped links beside the page's own tabs, and a group of activity-scoped
+// links inside each activity's own panel. detailLinks.ts builds them and this file
+// only ever removes them (see removeAllDecoration), but the names live here with
+// the other class names, because two files needing the same string is exactly how a
+// selector and the node it is meant to find drift apart.
+export const LINK_BAR_CLASS = 'tuis-linkbar';
+export const ACTIVITY_LINKS_CLASS = 'tuis-act-links';
 export const OFF_CLASS = 'tuis-off';
 
 const SEGMENTS_ATTR = 'data-tuis-segments';
@@ -85,6 +95,12 @@ export interface RenderOptions {
     // What came back for a run, if anything has yet. Undefined means "not asked or
     // not answered", which is a third state and must not render as "nothing found".
     info: RowInfoLookup;
+    // Pressed the refresh control in the column header. Wired in content.ts, which
+    // is the only place that knows the namespace and which rows are on screen.
+    //
+    // Not optional: a header button whose handler was left off would look exactly
+    // like a working one, so the type is what makes the wiring impossible to forget.
+    onRefresh: () => void;
 }
 
 export type RowInfoLookup = (workflowId: string, runId: string) => RowInfo | undefined;
@@ -276,11 +292,12 @@ export function syncRetryBadge(
     options: RenderOptions,
 ): boolean {
     const existing = cell.querySelector<HTMLSpanElement>(`:scope > .${RETRY_CLASS}`);
-    const retry = options.retryEnabled && placement
-        ? options.info(placement.row.workflowId, placement.row.runId)?.retry
+    const info = options.retryEnabled && placement
+        ? options.info(placement.row.workflowId, placement.row.runId)
         : undefined;
+    const retry = info?.retry;
 
-    if (!retry) {
+    if (!retry || !info) {
         existing?.remove();
         return false;
     }
@@ -295,16 +312,50 @@ export function syncRetryBadge(
     // exactly why the unchanged case must not.
     const label = retryBadgeLabel(retry);
     if (badge.textContent !== label) badge.textContent = label;
-    const title = retryBadgeTitle(retry, options.nowMs);
+    // From the reading, like the column — its "next attempt in 8s" is a statement
+    // about the instant Temporal was asked, and the string it builds says so.
+    const title = retryBadgeTitle(retry, info.observedAtMs);
     if (badge.title !== title) badge.title = title;
     return true;
 }
 
 // The "Last event" column, applied to the whole table at once.
 //
-// Appended, never inserted: a column pushed into the middle would have to agree
-// with the header's own column order, and the Temporal UI reorders and hides
-// columns at the user's request. Appending needs to agree with nothing.
+// IT SITS IMMEDIATELY AFTER THE WORKFLOW-ID COLUMN, and that placement is the
+// feature working. The question it answers — "is this one actually moving?" — is
+// asked while reading the id; at the far right of a table the UI already fills to
+// the edge, the answer is off-screen behind a horizontal scroll and nobody looks at
+// it.
+//
+// It was appended to the end once, and appending really is simpler: the end of a row
+// has to agree with nothing. Inserting has to agree with a column order the Temporal
+// UI lets the user change, so the position is COMPUTED on every pass rather than
+// being a constant — from each row's own id cell, and for the <thead>, which has no
+// workflow link of its own to find, from the first body row that had one.
+//
+// Two properties that must survive the move:
+//
+//   • RECTANGULAR. Every body row gets exactly one cell and the header exactly one
+//     <th> — including a row with no workflow link at all, whose cell is appended
+//     instead. A cell in the wrong column is cosmetic; a row missing a cell puts
+//     every header one column out from its data.
+//   • IDEMPOTENT ABOUT POSITION, not only about text. Moving a node that is already
+//     where it belongs is still a DOM write, the write wakes the MutationObserver
+//     that called us, and the next pass moves it again — the same self-feeding loop
+//     the compare-then-write on the text exists to avoid, one level up. So each half
+//     asks where it already is before touching anything.
+//
+// THE AGES IT WRITES ARE FROZEN AT THE READING, not computed from the current clock,
+// and that makes this whole function a pure function of the answers it was given.
+// Feed it the same answers twice and it writes nothing the second time, however much
+// wall-clock time has passed in between.
+//
+// It was briefly the other way round — an age against Date.now(), redrawn by a
+// once-a-second ticker — and the number that produced was exactly right about the
+// event it named and quietly wrong about everything else: it advanced every second
+// while the fact under it was refreshed every 35, so a workflow that had moved on
+// showed a stall climbing in real time. Second-resolution is worth having; a
+// second-resolution measurement of something read half a minute ago is not.
 export function syncLastEventColumn(
     tbody: HTMLTableSectionElement,
     lookup: PlacementLookup,
@@ -319,27 +370,122 @@ export function syncLastEventColumn(
         return;
     }
 
-    if (headRow && !headRow.querySelector(`:scope > .${COLUMN_HEAD_CLASS}`)) {
-        const th = headRow.ownerDocument.createElement('th');
-        th.className = COLUMN_HEAD_CLASS;
-        th.textContent = 'Last event';
-        th.title = 'Added by this extension. One history request per running row — see src/rowInfoServe.ts.';
-        headRow.appendChild(th);
-    }
+    // Which column the ids are in. Our cell always goes AFTER the id cell, so its
+    // own presence never shifts this number on a later pass.
+    let idColumn: number | null = null;
 
     for (const tr of Array.from(tbody.querySelectorAll<HTMLTableRowElement>(':scope > tr'))) {
+        const idCell = tr.querySelector<HTMLAnchorElement>('a[href*="/workflows/"]')?.closest('td') ?? null;
+        if (idCell && idColumn === null) idColumn = Array.from(tr.children).indexOf(idCell);
+
         let cell = tr.querySelector<HTMLTableCellElement>(`:scope > .${LAST_EVENT_CLASS}`);
         if (!cell) {
             cell = tr.ownerDocument.createElement('td');
             cell.className = LAST_EVENT_CLASS;
-            tr.appendChild(cell);
         }
+        placeAfter(cell, idCell, tr);
+
         const ids = idsFromRow(tr);
         const placement = ids ? lookup(ids.workflowId, ids.runId) : undefined;
         const state = lastEventCellText(placement, options);
         if (cell.textContent !== state.text) cell.textContent = state.text;
         if (cell.title !== state.title) cell.title = state.title;
     }
+
+    if (!headRow) return;
+    let th = headRow.querySelector<HTMLTableCellElement>(`:scope > .${COLUMN_HEAD_CLASS}`);
+    if (!th) th = buildColumnHead(headRow);
+    // The UI's own headers with ours excluded, so an index counted here means the
+    // same column it means in a body row.
+    const theirs = Array.from(headRow.children).filter((node) => node !== th);
+    placeAfter(th, idColumn === null ? null : (theirs[idColumn] ?? null), headRow);
+    syncColumnRefresh(th, options);
+}
+
+// A circular arrow, and deliberately not the retry badge's `↻` (U+21BB): the two
+// mean opposite things — one is "ask again", the other is "this workflow is stuck
+// asking again" — and a column whose header repeated the badge's glyph would be
+// inviting the reader to conflate them.
+const REFRESH_GLYPH = '⟳';
+
+// When refresh was last pressed. Module state rather than a property of the button,
+// because the button is rebuilt from scratch every time the column is switched off
+// and on again, and a floor that reset with the node would not be a floor.
+let lastRefreshAtMs = Number.NEGATIVE_INFINITY;
+
+function buildColumnHead(headRow: HTMLTableRowElement): HTMLTableCellElement {
+    const doc = headRow.ownerDocument;
+    const th = doc.createElement('th');
+    th.className = COLUMN_HEAD_CLASS;
+    th.title = 'Added by this extension. One history request per running row — see src/rowInfoServe.ts.';
+
+    const label = doc.createElement('span');
+    label.className = COLUMN_LABEL_CLASS;
+    label.textContent = 'Last event';
+
+    const refresh = doc.createElement('button');
+    refresh.className = COLUMN_REFRESH_CLASS;
+    // Explicit, because the default is `submit`. There is no form in a Temporal UI
+    // table today, and a button that becomes a submit button the day somebody wraps
+    // one around it is a bug that arrives without this file being touched.
+    refresh.type = 'button';
+    refresh.textContent = REFRESH_GLYPH;
+    // A glyph is not an accessible name. The title carries the cost, because that is
+    // the part a user is entitled to know before pressing it.
+    refresh.setAttribute('aria-label', 'Refresh the last-event column');
+    refresh.title =
+        'Ask Temporal again for the most recent event of every running row on screen.\n' +
+        'The column already refreshes as the page polls its own list; this asks now, ' +
+        'and briefly disables itself afterwards because asking again immediately would ' +
+        'return the same answer.';
+
+    th.append(label, refresh);
+    return th;
+}
+
+// Everything about the button that changes after it is built: which callback it
+// calls, and whether pressing it right now would do anything.
+function syncColumnRefresh(th: HTMLTableCellElement, options: RenderOptions): void {
+    const refresh = th.querySelector<HTMLButtonElement>(`:scope > .${COLUMN_REFRESH_CLASS}`);
+    if (!refresh) return;
+
+    // ASSIGNED, not added. A property assignment replaces the previous handler, so no
+    // pass can stack a second one — and the button calls the current pass's callback
+    // rather than the one that happened to be passed to the pass that built it.
+    refresh.onclick = () => {
+        // Date.now(), and NOT options.nowMs, which is the time of the render pass that
+        // installed this handler. The handler outlives that pass: on a quiet page the
+        // table renders once and nothing touches it again, so a press an hour later
+        // was being stamped an hour early — and the next pass then measured a floor
+        // that had already elapsed and re-enabled the button immediately. It is the
+        // same clock either way (content.ts passes Date.now() as nowMs); what was
+        // wrong was WHEN it had been read.
+        lastRefreshAtMs = Date.now();
+        refresh.disabled = true; // in this frame, rather than at the next pass
+        options.onRefresh();
+    };
+
+    // FRESH_FLOOR_MS made visible: while the receiver would refuse to re-fetch, the
+    // button says so instead of accepting a press that does nothing.
+    //
+    // This is the ONE thing in the column measured against the real clock, and
+    // properly so — it describes how long ago the user pressed a button, which is a
+    // live fact about this tab and not a fact read from Temporal. It needs a pass to
+    // re-enable itself, and content.ts arms a single one-shot timer per press for
+    // exactly that; there is no repeating timer anywhere in this feature.
+    const blocked = options.nowMs - lastRefreshAtMs < FRESH_FLOOR_MS;
+    if (refresh.disabled !== blocked) refresh.disabled = blocked;
+}
+
+// Put `node` immediately after `anchor`, or at the end of `parent` when there is no
+// anchor to follow. Writes nothing when it is already in place — see the idempotency
+// note above; this is the position half of compare-then-write.
+function placeAfter(node: Element, anchor: Element | null, parent: Element): void {
+    if (anchor) {
+        if (node.previousElementSibling !== anchor) anchor.after(node);
+        return;
+    }
+    if (node.parentElement !== parent) parent.appendChild(node);
 }
 
 // FOUR STATES, and telling them apart is the whole difficulty.
@@ -361,9 +507,14 @@ function lastEventCellText(
     if (!info) return { text: '…', title: 'Asking Temporal for this run’s most recent event.' };
     if (info.error) return { text: '!', title: info.error };
     if (!info.lastEvent) return { text: '—', title: 'Temporal returned no events for this run.' };
+    // MEASURED FROM THE READING, NOT FROM NOW — info.observedAtMs, never
+    // options.nowMs. This is the difference between "the newest event was 3m 00s old
+    // when we asked, at 12:04:31" and a number that climbs on its own while nothing
+    // is being fetched. It also makes this cell's text a pure function of the answer,
+    // so a pass with no new answer writes nothing at all (rule 2 at the top).
     return {
-        text: `${formatAge(info.lastEvent.timeMs, options.nowMs)} · ${info.lastEvent.eventType}`,
-        title: lastEventTitle(info.lastEvent, options.nowMs),
+        text: `${formatAgePrecise(info.lastEvent.timeMs, info.observedAtMs)} · ${info.lastEvent.eventType}`,
+        title: lastEventTitle(info.lastEvent, info.observedAtMs),
     };
 }
 
@@ -414,27 +565,54 @@ export function syncDeepLinks(
     // WORKFLOW-SCOPED TEMPLATES ONLY. A template that mentions an activity token
     // has nothing to fill from a table row — there is no activity in a list row —
     // so its button belongs on a single workflow's own page and is drawn there by
-    // detailCard.ts. Rendering it here would produce a link with an unresolved
+    // detailLinks.ts. Rendering it here would produce a link with an unresolved
     // token in it on every row. See "TWO SCOPES, ONE VOCABULARY" in deepLink.ts.
     const wanted: DeepLinkTemplate[] =
         options.linksEnabled && placement ? templatesInScope(options.links, 'workflow') : [];
-    const existing = Array.from(cell.querySelectorAll<HTMLAnchorElement>(`:scope > .${LINK_CLASS}`));
+    syncLinkAnchors(
+        cell,
+        wanted.map((template) => ({
+            template,
+            context: { namespace: options.namespace, row: placement!.row, nowMs: options.nowMs },
+        })),
+    );
+}
+
+// One template, expanded against one context, plus anything the caller wants said
+// in the anchor's title beyond what the expansion itself reports.
+export interface LinkPlacement {
+    template: DeepLinkTemplate;
+    context: DeepLinkContext;
+    // Appended to the title after the built-in notes. detailLinks.ts uses it to
+    // disclose HOW an activity was matched, which is a fact about the link's
+    // accuracy and belongs on the link rather than in a doc.
+    notes?: string[];
+}
+
+// Writes a list of link anchors as the direct `.tuis-link` children of one
+// container, reusing the ones already there.
+//
+// THE SAME WRITER FOR BOTH PAGES, and that is the point of it being here rather
+// than duplicated in detailLinks.ts: the table's links and a workflow page's links
+// must be styled the same, carry the same three hardening attributes, report an
+// unopenable URL the same way, and — hardest to keep in step by eye — be idempotent
+// in the same way. Two copies of this agreed for exactly as long as it took to add
+// one field to one of them.
+export function syncLinkAnchors(container: HTMLElement, wanted: LinkPlacement[]): void {
+    const existing = Array.from(container.querySelectorAll<HTMLAnchorElement>(`:scope > .${LINK_CLASS}`));
 
     if (wanted.length === 0) {
         for (const node of existing) node.remove();
         return;
     }
 
-    wanted.forEach((template, index) => {
-        const { url, href, unknownTokens } = expandTemplate(template.urlTemplate, {
-            namespace: options.namespace,
-            row: placement!.row,
-            nowMs: options.nowMs,
-        });
+    wanted.forEach((placement, index) => {
+        const { template } = placement;
+        const { url, href, unknownTokens } = expandTemplate(template.urlTemplate, placement.context);
 
         let anchor = existing[index];
         if (!anchor) {
-            anchor = cell.ownerDocument.createElement('a');
+            anchor = container.ownerDocument.createElement('a');
             anchor.className = LINK_CLASS;
             anchor.target = '_blank';
             // noopener/noreferrer: the destination is a third-party tool, and
@@ -444,7 +622,7 @@ export function syncDeepLinks(
             // to that third party on every click. The URL is what the user chose
             // to send; the referrer is not.
             anchor.referrerPolicy = 'no-referrer';
-            cell.appendChild(anchor);
+            container.appendChild(anchor);
         }
         // Compare-then-write throughout (rule 2).
         if (anchor.textContent !== template.label) anchor.textContent = template.label;
@@ -467,7 +645,11 @@ export function syncDeepLinks(
         if (href === null) {
             notes.push('Not opened: a link must be an absolute http:// or https:// URL.');
         }
+        // On a workflow's own page the likeliest cause is a field Temporal has not
+        // filled — a pending activity has no attempt count and no close time in the
+        // history — so the title names the token rather than saying "something".
         if (unknownTokens.length > 0) notes.push(`Unknown tokens: ${unknownTokens.join(' ')}`);
+        notes.push(...(placement.notes ?? []));
         const title = notes.length > 0 ? `${url}\n\n${notes.join('\n')}` : url;
         if (anchor.title !== title) anchor.title = title;
     });
@@ -483,13 +665,14 @@ export function removeAllDecoration(root: ParentNode = document): void {
         `.${PREFIX_CLASS}`,
         `.${LINK_CLASS}`,
         `.${RETRY_CLASS}`,
-        // The card is in this list even though it lives on <body> and not in a row:
-        // "off" has to mean off, and it is the most visible thing this extension
-        // draws, so leaving one behind is the clearest possible way to look like the
-        // master switch does nothing — which is exactly what makes a security
-        // reviewer stop believing the rest of the claims. detailCard.ts rebuilds it
-        // on demand.
-        `.${CARD_CLASS}`,
+        // The workflow page's two link sites are in this list even though neither
+        // lives in a row: "off" has to mean off, and they are the most visible thing
+        // this extension draws, so leaving one behind is the clearest possible way to
+        // look like the master switch does nothing — which is exactly what makes a
+        // security reviewer stop believing the rest of the claims. detailLinks.ts
+        // rebuilds them on demand.
+        `.${LINK_BAR_CLASS}`,
+        `.${ACTIVITY_LINKS_CLASS}`,
         // Both halves of the added column. Leaving the <th> behind would shift
         // every header label one cell to the left of its data.
         `.${LAST_EVENT_CLASS}`,
