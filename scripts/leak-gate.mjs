@@ -4,7 +4,7 @@
 //
 // WHY THIS EXISTS, AND WHY IT RUNS FROM COMMIT #1
 //
-// This extension was extracted from an internal one that runs inside a bank.
+// This extension reimplements, clean-room, an internal one that runs inside a bank.
 // The dangerous direction is not "someone reads the code" — it is a hostname,
 // an internal namespace, a ticket key, or a token that rides along in a commit
 // nobody re-reads. Redaction after the fact needs an exhaustive list of what to

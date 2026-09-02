@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildTree, countFamilies } from '../../src/tree';
-import { normalizeExecutions } from '../../src/rows';
+import { buildTree, countFamilies } from '../../src/family/tree';
+import { normalizeExecutions } from '../../src/family/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
 
 const ids = (rows: { workflowId: string }[]) => rows.map((r) => r.workflowId);

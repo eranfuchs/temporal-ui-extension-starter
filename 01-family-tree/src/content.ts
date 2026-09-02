@@ -8,7 +8,7 @@
 // storage, no messaging, no popup to answer. That is why its manifest asks for
 // no permissions at all — see 01-family-tree/README.md.
 
-import { buildTree, countFamilies } from './tree';
+import { buildTree, countFamilies } from './family/tree';
 import {
     emptyPlacementIndex,
     findPlacement,
@@ -16,7 +16,7 @@ import {
     judgeListResponse,
     normalizeExecutions,
     type PlacementIndex,
-} from './rows';
+} from './family/rows';
 import { applyToTable, findWorkflowTbody, namespaceFromLocation, type Placement } from './render';
 import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
 

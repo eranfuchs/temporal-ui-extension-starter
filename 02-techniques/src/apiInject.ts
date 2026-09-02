@@ -12,10 +12,10 @@
 // message came from this page rather than an iframe, and every script in this page
 // passes it. The gate is in pageApi.ts.
 
-import { installDetailWatch } from './detailWatch';
-import { TAG } from './pageApi';
-import { isRowInfoRequest } from './rowInfo';
-import { serveRowInfo } from './rowInfoServe';
+import { installDetailWatch } from './detail/detailWatch';
+import { TAG } from './page/pageApi';
+import { isRowInfoRequest } from './rowInfo/rowInfo';
+import { serveRowInfo } from './rowInfo/rowInfoServe';
 
 window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== window) return;

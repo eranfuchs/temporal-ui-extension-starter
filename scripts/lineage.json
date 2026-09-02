@@ -18,11 +18,11 @@
             "why": "The shapes crossing the postMessage boundary, mirroring the API response. A project that needed fewer fields would still receive them, so trimming buys nothing and costs the identity."
         },
         {
-            "path": "src/rows.ts",
+            "path": "src/family/rows.ts",
             "why": "API response to a flat row shape. Pure, and identical in every project."
         },
         {
-            "path": "src/tree.ts",
+            "path": "src/family/tree.ts",
             "why": "The feature as a pure function. This is the file a reader is most likely to copy out; it must be the same file in every project that has it."
         },
         {
@@ -31,11 +31,11 @@
         },
         {
             "path": "tests/unit/tree.spec.ts",
-            "why": "Pins the ordering and connector rules for the shared src/tree.ts."
+            "why": "Pins the ordering and connector rules for the shared src/family/tree.ts."
         },
         {
             "path": "tests/unit/rows.spec.ts",
-            "why": "Pins the shared src/rows.ts."
+            "why": "Pins the shared src/family/rows.ts."
         },
         {
             "path": "tests/unit/inject.spec.ts",
@@ -46,60 +46,60 @@
             "why": "Same test policy everywhere, including allowOnly: false."
         },
         {
-            "path": "src/temporalApi.ts",
+            "path": "src/page/temporalApi.ts",
             "why": "Every URL this extension builds, in one file. A project that built its own would be the project whose requests are not the ones the others were reviewed for — and the forward/reverse history distinction here is exactly the sort of detail that drifts silently once copied."
         },
         {
-            "path": "src/deepLink.ts",
+            "path": "src/links/deepLink.ts",
             "why": "Pure template expansion, including the rule that an expansion which is not an absolute http(s) URL is not opened. Identical wherever the feature exists."
         },
         {
-            "path": "src/detail.ts",
+            "path": "src/detail/detail.ts",
             "why": "The pure folds behind the links on a single workflow's page, including which activity an id found on the page resolves to. It reads responses the page fetched for itself and touches neither credentials nor the ledger, so nothing about a later stage gives it a reason to differ."
         },
         {
-            "path": "src/detailLinks.ts",
+            "path": "src/detail/detailLinks.ts",
             "why": "Where the detail-page links are allowed to sit in the UI's own layout, and how an id read off the page becomes one activity. Same file, same decision."
         },
         {
-            "path": "src/detailWatch.ts",
+            "path": "src/detail/detailWatch.ts",
             "why": "The seam that hands the page's own history and describe responses to the detail-page links. Deliberately separate from the request path, and the same in every project that has it."
         },
         {
-            "path": "src/rowInfo.ts",
+            "path": "src/rowInfo/rowInfo.ts",
             "why": "The message shapes for the per-row questions and the guards that validate them to the leaves. Both sides of a postMessage boundary read this file; a fork would be a protocol fork."
         },
         {
-            "path": "src/rowInfoClient.ts",
-            "why": "The isolated-world half of the per-row questions: batching, the cache, and the correlation check on the answer. 03 adds a second client of the same pattern (src/tooltip.ts) rather than changing this one."
+            "path": "src/rowInfo/rowInfoClient.ts",
+            "why": "The isolated-world half of the per-row questions: batching, the cache, and the correlation check on the answer. 03 adds a second client of the same pattern (src/payloads/tooltip.ts) rather than changing this one."
         },
         {
-            "path": "src/pacer.ts",
-            "why": "The GENERIC pacing machinery, with the clock and the sleep injected — which is why it can be identical while its INSTANCE is not. 02 keeps that instance inline in the one file that issues requests; 03 moves it to src/requestPacing.ts because a second feature issues them too. The testable part must not fork, or the two projects' concurrency arguments become incomparable."
+            "path": "src/page/pacer.ts",
+            "why": "The GENERIC pacing machinery, with the clock and the sleep injected — which is why it can be identical while its INSTANCE is not. 02 keeps that instance inline in the one file that issues requests; 03 moves it to src/page/requestPacing.ts because a second feature issues them too. The testable part must not fork, or the two projects' concurrency arguments become incomparable."
         },
         {
             "path": "tests/unit/temporalApi.spec.ts",
-            "why": "Pins the shared src/temporalApi.ts."
+            "why": "Pins the shared src/page/temporalApi.ts."
         },
         {
             "path": "tests/unit/deepLink.spec.ts",
-            "why": "Pins the shared src/deepLink.ts, including every template that must NOT be opened."
+            "why": "Pins the shared src/links/deepLink.ts, including every template that must NOT be opened."
         },
         {
             "path": "tests/unit/detail.spec.ts",
-            "why": "Pins the shared src/detail.ts."
+            "why": "Pins the shared src/detail/detail.ts."
         },
         {
             "path": "tests/unit/detailLinks.spec.ts",
-            "why": "Pins the shared src/detailLinks.ts — both anchors, the idempotency of a second pass, and the fact that an unresolvable id gets no link at all."
+            "why": "Pins the shared src/detail/detailLinks.ts — both anchors, the idempotency of a second pass, and the fact that an unresolvable id gets no link at all."
         },
         {
             "path": "tests/unit/rowInfo.spec.ts",
-            "why": "Pins the shared src/rowInfo.ts guards — the truth table for what crosses the message boundary, which is the file both worlds trust."
+            "why": "Pins the shared src/rowInfo/rowInfo.ts guards — the truth table for what crosses the message boundary, which is the file both worlds trust."
         },
         {
             "path": "tests/unit/rowInfoClient.spec.ts",
-            "why": "Pins the shared src/rowInfoClient.ts."
+            "why": "Pins the shared src/rowInfo/rowInfoClient.ts."
         },
         {
             "path": "tests/unit/settings.spec.ts",
@@ -107,7 +107,15 @@
         },
         {
             "path": "tests/unit/pacer.spec.ts",
-            "why": "Pins the shared src/pacer.ts with a fake clock and no network: a slot held across a backoff, the longest overlapping Retry-After winning, and a success during a block not resetting the doubling. None of those is observable from a feature test, in either project."
+            "why": "Pins the shared src/page/pacer.ts with a fake clock and no network: a slot held across a backoff, the longest overlapping Retry-After winning, and a success during a block not resetting the doubling. None of those is observable from a feature test, in either project."
+        },
+        {
+            "path": "tests/unit/renderLinks.spec.ts",
+            "why": "Pins the deep-link buttons on the workflow LIST, over the shared src/links/deepLink.ts expansion. Half of it is about a URL that must NOT be clickable, including the case that only a re-render can produce: an anchor has to LOSE an href it was already given when the template is edited into something unsafe. 02 and 03 draw these buttons from the same code path, so the spec is byte-identical."
+        },
+        {
+            "path": "tests/unit/renderRowInfo.spec.ts",
+            "why": "Pins the two columns that cost a request — the “Last event” cell and the retrying-activity badge — including the four different meanings an empty cell can have, the refresh control's cooldown, and the fact that a render pass must never act as though the control were pressed. 02 introduces both features and 03 changes neither, so the spec is byte-identical; its one forward-looking note is worded to be true in both stages."
         }
     ],
     "forks": [
@@ -141,7 +149,7 @@
         },
         {
             "path": "tests/unit/render.spec.ts",
-            "why": "Follows src/render.ts. 01's copy drops the deep-link, last-event-column, retry-badge, off-switch and removeAllDecoration blocks, and 03's adds the payload button — including the assertion that the button carries no row identity on any attribute, which is what keeps a hover addressable only through the row it is in. The shared assertions (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each project proves them on its own code."
+            "why": "Follows src/render.ts, and holds only the table itself: finding it, reading a row out of it, drawing the tree into it, and the master switch that has to take every decoration away again. The per-feature blocks live beside it — renderLinks, renderRowInfo and 03's renderPayloadButton — and the first two are byte-identical and declared shared. 01's copy drops visibleRows and removeAllDecoration, which are about features it has not got; 03's differs from 02's by one line, the payloadsEnabled it hands the master-switch spec. The assertions every project keeps (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each proves them on its own code."
         },
         {
             "path": "public/content.css",
@@ -164,7 +172,7 @@
             "why": "Entry points differ: 01 builds inject + content; 02 and 03 also build the popup and src/apiInject.ts — a second MAIN-world bundle, which 01 has no use for because it never issues a request."
         },
         {
-            "path": "src/pageApi.ts",
+            "path": "src/page/pageApi.ts",
             "why": "The trust boundary, and the one file where a stage difference is a SECURITY difference. Both copies own the same ledger and the same fetchForListedRun(), the only route to the page's Authorization header. 03 adds a second exported fetch, fetchFromPageWorld(), for the codec call: a caller-chosen origin, carrying no credential of ours. The two must never converge — one chooses the origin and spends the bearer, the other takes the origin from a message and spends nothing — and keeping them in a declared fork is what makes that diff readable rather than a refactor nobody re-reviewed."
         },
         {
@@ -172,8 +180,8 @@
             "why": "The list of messages this extension accepts from the page, which is the list a reviewer enumerates. 02 accepts one; 03 accepts two, and the second names an outbound host of its own. That count is the whole point of the file, so it cannot be shared."
         },
         {
-            "path": "src/rowInfoServe.ts",
-            "why": "Identical logic, different OWNER of the pacer. 02 builds the instance here, because this is the only file that issues requests and the concurrency argument is checkable by reading it. 03 imports it from src/requestPacing.ts, because the payload path issues them too and a second makePacer() call would have given the extension two independent caps of four while both files still looked correct. The diff between these two copies is that lesson."
+            "path": "src/rowInfo/rowInfoServe.ts",
+            "why": "Identical logic, different OWNER of the pacer. 02 builds the instance here, because this is the only file that issues requests and the concurrency argument is checkable by reading it. 03 imports it from src/page/requestPacing.ts, because the payload path issues them too and a second makePacer() call would have given the extension two independent caps of four while both files still looked correct. The diff between these two copies is that lesson."
         },
         {
             "path": "src/settings.ts",
@@ -188,8 +196,20 @@
             "why": "The popup is where a user is told what leaves their machine, so it cannot be shared between a project where nothing does and one where something can. 03 adds the Payloads section and the Codec server section — including the sentence that there is no option to pass an access token, and the footer line that payload data leaves the browser only if a codec server is named."
         },
         {
+            "path": "tests/renderHarness.ts",
+            "why": "The render fixtures the spec files within each project share: the family, the placement lookup over it, a RenderOptions with every feature off, and the helpers that give a table a <thead> and press the column's refresh control. Forked by ONE line — 03's OPTIONS carries payloadsEnabled and 02's RenderOptions has no such field, the same difference src/render.ts is forked for. Everything else is byte-identical on purpose, because the two projects' render assertions are meant to be comparable. 01 has no copy: its render specs are a single short file with one fixture block and nothing to share."
+        },
+        {
             "path": "tests/unit/apiInject.spec.ts",
-            "why": "Follows src/apiInject.ts. Both copies pin the ledger from the attacker's side and the survival of a later window.fetch wrapper; 03 adds the codec block — what left the browser, what did not, and that no request can attach the page's bearer to it — which is the only egress claim in this repository and has nothing to assert in 02."
+            "why": "Follows src/apiInject.ts, and holds the trust boundary only: what has to be learned from the page, what may be fetched with it, and the survival of a window.fetch wrapper the page installs later. The per-row questions are in tests/unit/apiInjectRowInfo.spec.ts and the egress path in 03's tests/unit/apiInjectCodec.spec.ts, both over the shared tests/apiInjectHarness.ts. Forked by ONE test: 03 asks the ledger to refuse a payload hover as well as a row question, which is how 'one gate, not one per feature' is asserted for the second feature that reaches the network. 02 has no second feature to assert it with."
+        },
+        {
+            "path": "tests/unit/apiInjectRowInfo.spec.ts",
+            "why": "Follows src/rowInfo/rowInfoServe.ts: one question per running row, its answer, and the request counting that keeps the cost of those questions from being a claim in a comment. Forked by TWO lines, both of them real — the pacer's warning names what it paused, and 03 shares that pacer across the row questions and the payload hover, so it says 'pausing requests' where 02 says 'pausing row info'; and the section banner says which of the stage's features are piggybacks, which differs because 03 has one more. 01 has no copy: it makes no requests of its own at all."
+        },
+        {
+            "path": "tests/apiInjectHarness.ts",
+            "why": "The fake network the apiInject spec files share, plus the helper that imports the two MAIN-world scripts in the manifest's order and the install/teardown pair without which listeners accumulate across tests. Forked because 03's is a strict SUPERSET: the forward-history body a payload hover reads, the encrypted fixture that is the only thing a codec server is reached for, a decoding endpoint in the fake network, and the two extra Seen fields — the request BODY and `credentials` — that let a spec assert what left the browser rather than only where it went. Sharing it would mean 02 carrying fixtures for a feature it does not have. 01 has no copy."
         }
     ]
 }

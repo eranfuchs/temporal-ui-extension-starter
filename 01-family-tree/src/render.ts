@@ -7,7 +7,7 @@
 // notice by eye (see tests/unit/render.spec.ts).
 //
 // Three rules govern this file. Each was learned the hard way in the internal
-// extension this starter was extracted from.
+// extension this starter reimplements.
 //
 //  1. ANCHOR TO MEANING, NOT POSITION.
 //     Rows are found by `a[href*="/workflows/"]`, never by column index or CSS

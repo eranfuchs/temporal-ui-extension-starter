@@ -253,7 +253,7 @@ td:has(a[href*="/workflows/"]) {
 }
 
 /* Disabled for as long as pressing it again would be refused anyway — see
- * FRESH_FLOOR_MS in src/rowInfo.ts. Dimmer and with the pointer taken away, because
+ * FRESH_FLOOR_MS in src/rowInfo/rowInfo.ts. Dimmer and with the pointer taken away, because
  * a button that accepts the click and does nothing is the version of this that gets
  * reported as a bug. */
 .tuis-col-refresh:disabled {
@@ -281,7 +281,7 @@ td:has(a[href*="/workflows/"]) {
     max-height: 60vh;
     overflow: auto;
     /* Reaching the bottom of the panel must not hand the rest of the wheel gesture to
-     * the page behind it: a page scroll closes the panel (see src/tooltip.ts), so
+     * the page behind it: a page scroll closes the panel (see src/payloads/tooltip.ts), so
      * scroll chaining would dismiss the panel at the exact moment the reader got to
      * the end of a long payload. */
     overscroll-behavior: contain;
@@ -333,7 +333,7 @@ td:has(a[href*="/workflows/"]) {
         SFMono-Regular,
         monospace;
     /* Selecting a value out of here is most of the point, so the panel must not be
-     * dismissed by the drag — see rule 3 in src/tooltip.ts. */
+     * dismissed by the drag — see rule 3 in src/payloads/tooltip.ts. */
     user-select: text;
 }
 
@@ -341,7 +341,7 @@ td:has(a[href*="/workflows/"]) {
  * page's own tabs.
  *
  * Almost no styling on purpose. This bar sits INSIDE the UI's layout — see the note
- * at the top of src/detailLinks.ts for why that replaced a floating card — so it
+ * at the top of src/detail/detailLinks.ts for why that replaced a floating card — so it
  * inherits the surrounding font and colour, and the less it declares the less there
  * is to clash with the UI's next redesign. Nothing here positions it: where it goes
  * is decided in the DOM, not in CSS. */
@@ -355,7 +355,7 @@ td:has(a[href*="/workflows/"]) {
 
 /* The one case where it could not find the page's own layout, parked where it can be
  * SEEN rather than left at the top-left of <body> behind the app's chrome — the
- * failure described at the top of src/detailLinks.ts. Every pass looks for the real
+ * failure described at the top of src/detail/detailLinks.ts. Every pass looks for the real
  * anchor again, so this styling is meant to be temporary on screen as well as in the
  * code.
  *

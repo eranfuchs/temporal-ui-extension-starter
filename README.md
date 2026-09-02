@@ -149,7 +149,7 @@ The cards are not maintained by good intentions:
 | `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a runtime dependency, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
 | `npm run lineage` | a file duplicated across projects that has drifted, or that nobody has decided may drift — see [`scripts/lineage.json`](scripts/lineage.json) |
 | `npm run leak:gate` | private IPs, key material, bearer tokens, JWTs, and URLs pointing at hosts that are not on a short public allowlist |
-| `npm run doc:paths` | a link, a cited file path, or an `npm run …` command in any Markdown file that does not exist |
+| `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves |
 
 Every gate ships with a self-test — `npm run surface:selftest`,
 `npm run lineage:selftest`, `npm run leak:selftest`, `npm run doc:selftest` —
@@ -211,7 +211,7 @@ Run at the **repository root**; each one runs in every project.
 | `npm run surface` | The permission budget, sinks, dependencies, binaries |
 | `npm run lineage` | Files duplicated across projects |
 | `npm run leak:gate` | Scan tracked files for anything that should not be published |
-| `npm run doc:paths` | Every path, link and command the docs name still exists |
+| `npm run doc:paths` | Every path, link and command the docs name still exists — in Markdown and in source comments — and every quoted spec block is cited beside the spec that holds it |
 | `npm run icons` | Regenerate every project's icons from arithmetic — each carries its own number and hue, derived from its directory name |
 | `npm run package` | Preflight, then zip a project's `dist/` |
 
@@ -238,9 +238,11 @@ Specific about which parts are proven:
   [`01-family-tree/README.md`](01-family-tree/README.md) for exactly what was
   and was not covered.
 - **Proven in production, elsewhere** — the mechanism. The piggyback, the
-  `window.fetch` getter lock and the render loop are extracted from an internal
-  extension that has run against Temporal Cloud daily for months. This repository
-  is a clean-room rewrite of them, not a copy.
+  `window.fetch` getter lock and the render loop are **proven in** an internal
+  extension that has run against Temporal Cloud daily for months. What crossed over
+  is the set of lessons, written down here and implemented again from scratch: this
+  repository is a clean-room reimplementation, not a copy, and nothing in it was
+  taken from that codebase.
 - **Partly verified on live Temporal Cloud** — `02-techniques`. What was driven on
   a tenant is the plumbing every feature here stands on: the fetch piggyback, the
   API-prefix derivation, the bearer capture, the ledger check and one real history

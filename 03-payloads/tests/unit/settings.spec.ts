@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { templateScope } from '../../src/deepLink';
+import { templateScope } from '../../src/links/deepLink';
 import { DEFAULT_ACTIVITY_LINK, withActivityScope } from '../../src/settings';
 
 const WORKFLOW_LINK = { label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' };

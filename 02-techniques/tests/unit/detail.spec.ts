@@ -22,8 +22,8 @@ import {
     rowFromFacts,
     type DetailActivity,
     type DetailFacts,
-} from '../../src/detail';
-import { expandTemplate } from '../../src/deepLink';
+} from '../../src/detail/detail';
+import { expandTemplate } from '../../src/links/deepLink';
 import { fakeRunId } from '../helpers';
 import { MESSAGE_SOURCE } from '../../src/types';
 
@@ -203,7 +203,7 @@ describe('readHistoryFacts', () => {
                 // read off the scheduling event and the terminal event. It is what lets
                 // a link about an activity be a link about an activity rather than
                 // about every execution of its type — see the note on closedAtMs in
-                // src/detail.ts.
+                // src/detail/detail.ts.
                 closedAtMs: Date.parse('2026-01-01T10:00:07Z'),
                 outcome: 'completed',
                 pending: false,
@@ -307,7 +307,7 @@ describe('readDescribeFacts', () => {
                 scheduledEventId: '5',
                 scheduledTime: '2026-01-01T11:00:00Z',
                 // The reason this feature exists next to a rule about not reading
-                // it. See the note at the top of src/rowInfo.ts.
+                // it. See the note at the top of src/rowInfo/rowInfo.ts.
                 lastFailure: { message: 'card ending 4321 declined for customer 55123' },
             },
         ],
@@ -500,7 +500,7 @@ describe('linkableActivities', () => {
 // ── Resolving one panel on the page to one activity ──────────────────────────
 //
 // The lookup behind every per-activity link. What it is for is stated at its
-// definition in src/detail.ts; these specs pin the two decisions that a reader of
+// definition in src/detail/detail.ts; these specs pin the two decisions that a reader of
 // the call site cannot see: which key wins, and what happens when the key is not
 // unique after all.
 describe('activityByPanelId', () => {

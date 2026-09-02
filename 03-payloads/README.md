@@ -59,19 +59,59 @@ readable at that point; most self-hosted setups never encrypt them at all.
 Three projects loaded at once are distinguishable by their icons — each carries its
 own number and hue.
 
+## Read these files in order
+
+This project is the largest in the repository, and reading it front to back is not
+the way in. To answer **"what can this thing send, and who decides?"** — the only
+question that changes between 02 and 03 — read four files in this order:
+
+| # | File | The question it answers |
+|---|---|---|
+| 1 | [`src/apiInject.ts`](src/apiInject.ts) | Which messages this extension accepts from the page at all. Two, and the list is the file. |
+| 2 | [`src/payloads/payloadServe.ts`](src/payloads/payloadServe.ts) | Whether a request happens: the ledger gate, one history event, and the decision that a payload needs a server. |
+| 3 | [`src/payloads/codec.ts`](src/payloads/codec.ts) | What the request *is* — destination, headers, body — and what is deliberately not in it. Pure, so the tests are cheap, and short on purpose: it is the whole answer to "what can this send, and where?". |
+| 4 | [`src/page/pageApi.ts`](src/page/pageApi.ts) | Where authority is enforced: two exported fetches, one spending the page's bearer on an origin it picks, one carrying no credential to an origin the caller picks. |
+
+Then the panel, which is two files: [`src/payloads/tooltip.ts`](src/payloads/tooltip.ts) for the
+element, the pointer and the five rules about *when* to ask, and
+[`src/payloads/payloadClient.ts`](src/payloads/payloadClient.ts) for the four invariants about *which
+answer may be believed*. Then two spec files, in this order:
+[`tests/unit/codec.spec.ts`](tests/unit/codec.spec.ts) for the endpoint policy and the
+request as pure values, and
+[`tests/unit/apiInjectCodec.spec.ts`](tests/unit/apiInjectCodec.spec.ts) for every egress
+claim asserted from the attacker's side — a hostile page trying to make the extension
+send somewhere it should not.
+
+**`src/payloads/` is not the whole diff from 02, and skipping the rest is how the
+interesting part gets missed.** The files below are ones 02 already had, *changed* to
+accommodate this stage, and each change is a decision worth reading:
+
+| Changed file | What this stage did to it |
+|---|---|
+| [`src/apiInject.ts`](src/apiInject.ts) | Installs a second server, so the enumerable list of accepted messages goes from one to two. This is the trust-boundary diff. |
+| [`src/page/pageApi.ts`](src/page/pageApi.ts) | Gains `fetchFromPageWorld()` — a second exported fetch that carries **no** credential to an origin the caller names, beside the one that spends the bearer on an origin it picks itself. Keeping those two from converging is the security argument of the stage. |
+| [`src/rowInfo/rowInfoServe.ts`](src/rowInfo/rowInfoServe.ts) | Stops building its own pacer and imports the shared instance instead. One line; see `src/page/requestPacing.ts` for why a second `makePacer()` would have looked correct in both places. |
+| [`src/render.ts`](src/render.ts) | Adds the per-row `{ }` button, which deliberately carries no row identity on any attribute, and the cleanup when a row's payload is no longer current. |
+| [`src/content.ts`](src/content.ts) | Drops the decoded-payload cache when the master switch goes off or the codec setting changes. |
+| [`src/settings.ts`](src/settings.ts) | One new field, and it is the one that names a host. |
+| [`src/popup.ts`](src/popup.ts) | The endpoint input and the codec verdict line — the only place an endpoint can be set. |
+
+Everything else is 02 byte-for-byte, which `npm run lineage` enforces rather than
+claims; to see the set yourself, `cmp` the two `src/` trees.
+
 ## What one hover costs
 
 | Rule | Why |
 |---|---|
-| **Nothing is fetched on render** | A hundred-row list costs zero requests. The only entry points are `pointerover`, `focusin` and `click`; there is no code path from a render pass to a request. Rule 1 in `src/tooltip.ts`. This matters more here than the wording suggests: the Temporal UI re-renders its own list on its own schedule, and every one of those passes runs this extension's render again, so anything a render pass fetched would be fetched by the tableful, all day, with nobody touching the keyboard. |
+| **Nothing is fetched on render** | A hundred-row list costs zero requests. The only entry points are `pointerover`, `focusin` and `click`; there is no code path from a render pass to a request. Rule 1 in `src/payloads/tooltip.ts`. This matters more here than the wording suggests: the Temporal UI re-renders its own list on its own schedule, and every one of those passes runs this extension's render again, so anything a render pass fetched would be fetched by the tableful, all day, with nobody touching the keyboard. |
 | **The header's `⟳` does not refresh payloads** | It re-asks the two per-row questions the `Last event` column and the retry badge need — event metadata, no payloads, no codec server. A refresh that also re-decoded every row on screen would push a table's worth of decoded personal data through the codec host for one click. The thing that refreshes a payload is hovering the row again, one row at a time, which is the shape the rest of this table describes. |
-| **A traverse costs nothing** | `HOVER_DELAY_MS` in `src/tooltip.ts`: moving the pointer across the table passes over many rows, and a short delay before asking means only the row you stopped on is asked about. |
+| **A traverse costs nothing** | `HOVER_DELAY_MS` in `src/payloads/tooltip.ts`: moving the pointer across the table passes over many rows, and a short delay before asking means only the row you stopped on is asked about. |
 | **One history event per question** | `maximumPageSize=1`, so a hover on a workflow with a hundred thousand events costs what a three-event one costs. Input is the **first** event (`direction: 'forward'`); the outcome is the **last** (`'reverse'` — the same route the `Last event` column uses). A hover on a **closed** row asks two questions and therefore fetches two events. |
 | **A running row costs one, not two** | It has no close event to fetch, so the result section says *"Still running."* without asking anything. |
-| **One question is one request** | Rule 6 in `src/tooltip.ts`. A click on the button fires `focusin` **and** `click`, and both open the panel; the cache cannot help, because it still says "no" while the first request is in flight. So a question already in flight is *joined* rather than asked again — otherwise one click is two history events and, with a codec server configured, two copies of the same payload leaving the machine. |
+| **One question is one request** | Invariant 2 in `src/payloads/payloadClient.ts`. A click on the button fires `focusin` **and** `click`, and both open the panel; the cache cannot help, because it still says "no" while the first request is in flight. So a question already in flight is *joined* rather than asked again — otherwise one click is two history events and, with a codec server configured, two copies of the same payload leaving the machine. |
 | **Answers are cached** per `(namespace, workflowId, runId, kind)` | A pointer moving back and forth between two rows is very common. Errors are **not** cached — they are usually a setting the user is about to fix. |
-| **The cache is bounded and evictable** | `MAX_CACHED_PAYLOADS` in `src/tooltip.ts`. This one is not a memory rule: its values are decoded payloads, so an unbounded cache is a tab quietly retaining every customer record its owner glanced at all afternoon. |
-| **It shares ONE pacer with the per-row questions** | `src/requestPacing.ts` — four **Temporal** requests in flight for the whole extension, 429/503 backoff honouring `Retry-After`. The codec POST is deliberately *outside* that slot: it happens after the history fetch has released it, so a slow decoder cannot occupy the cap that exists to be polite to Temporal. See below; this file is the most quietly important change between 02 and 03. |
+| **The cache is bounded and evictable** | `MAX_CACHED_PAYLOADS` in `src/payloads/payloadClient.ts`. This one is not a memory rule: its values are decoded payloads, so an unbounded cache is a tab quietly retaining every customer record its owner glanced at all afternoon. |
+| **It shares ONE pacer with the per-row questions** | `src/page/requestPacing.ts` — four **Temporal** requests in flight for the whole extension, 429/503 backoff honouring `Retry-After`. The codec POST is deliberately *outside* that slot: it happens after the history fetch has released it, so a slow decoder cannot occupy the cap that exists to be polite to Temporal. See below; this file is the most quietly important change between 02 and 03. |
 | **A question that is never answered gives up** | `REQUEST_TIMEOUT_MS`, with a message saying to reload the tab, so a missing MAIN-world script cannot leave a section reading `Loading…` for the life of the page. |
 
 ### The pacer moved, and that is not a feature
@@ -85,14 +125,14 @@ independent limits of four**, so hovering rows while a hundred-row list filled i
 `Last event` column would have put eight requests in the air against a cap this
 README calls four. Neither file would have looked wrong on its own.
 
-So the instance is a module-level `const` in `src/requestPacing.ts`, imported by
+So the instance is a module-level `const` in `src/page/requestPacing.ts`, imported by
 both servers: four at a time is a property of the **extension**, not of a feature.
 The cap covers requests to **Temporal** — every history, list and describe call, and
 there is no way to reach the API without going through it. The codec POST is
 deliberately outside it: a decoder's 429 is its own business, and a slow codec server
 holding one of four Temporal slots would make the page's own columns wait on someone's
 laptop.
-The generic machinery is still the shared, clock-injected `src/pacer.ts`, which is
+The generic machinery is still the shared, clock-injected `src/page/pacer.ts`, which is
 why it can stay byte-identical with 02 while its instance does not
 ([`../scripts/lineage.json`](../scripts/lineage.json) records that as a declared
 fork, with this as the reason).
@@ -107,7 +147,7 @@ browser and **never sent anywhere**. Everything else — `binary/encrypted` abov
 decoding it needs the message descriptor, which this extension does not have and a
 codec server usually does.
 
-Two details in `src/payloads.ts` are worth stealing:
+Two details in `src/payloads/payloads.ts` are worth stealing:
 
 - **Match on the attributes key, not on `eventType`.** The same event comes back as
   `WorkflowExecutionStarted` from one Temporal version and
@@ -164,9 +204,11 @@ What bounds it, all of it visible from outside the extension:
   An endpoint that fails the check is treated as no endpoint at all, and the popup
   says so before anything is hovered.
 - **No credential of any kind is reachable on that path, and there is no option to
-  add one.** `credentials: 'omit'` is written as a literal, and neither an
-  `Authorization` header nor a cookie switch exists to be turned on. See the next
-  section: this is a deletion, not a default.
+  add one.** The `credentials: 'omit'` literal is in `fetchFromPageWorld()` in
+  `src/page/pageApi.ts` — the function that *spends* the request — and not in the code that
+  describes it, which is the point: a caller cannot opt out of something its parameter
+  type has no field for. Neither an `Authorization` header nor a cookie switch exists
+  to be turned on. See the next section: this is a deletion, not a default.
 - **The host is named in the panel**, every hover, beside the heading — because
   "decoded" on its own reads as if the extension did it locally, and a payload that
   was sent to a server deserves to say so on screen rather than only in a README.
@@ -194,9 +236,15 @@ choosing would be honoured. With the token that is the page's live bearer; with 
 cookie it is whatever the browser holds for the attacker's chosen host, sent
 cross-origin to it on the user's behalf.
 
-So there is no flag to forge. `codecDecodeCall()` writes `credentials: 'omit'` as a
-literal and `CodecConfig` has exactly one field, so an extra key in a forged message
-is not merely ignored — there is no code that can read it. **The limitation is stated
+So there is no flag to forge, and the two halves of that sentence live in two
+different files on purpose. `codecDecodeCall()` in `src/payloads/codec.ts` *describes* the
+request — method, headers, body — and its return type has no `credentials` field to
+set; `fetchFromPageWorld()` in `src/page/pageApi.ts` *spends* it, writing
+`credentials: 'omit'` as a literal and refusing an `Authorization`, `Cookie` or
+`Proxy-Authorization` header outright. Enforcement sits at the boundary rather than in
+the description, so a second caller added later inherits it instead of having to
+remember it. `CodecConfig` then has exactly one field, so an extra key in a forged
+message is not merely ignored — there is no code that can read it. **The limitation is stated
 plainly rather than worked around: a codec server that requires authentication cannot
 be used from this extension.** A 401 or 403 is the expected answer from one, and the
 panel says so in those words.
@@ -223,13 +271,20 @@ still declares no `host_permissions`.
 
 ## The hover panel
 
-Seven rules in `src/tooltip.ts`. Every one of them except rule 5 is a bug that
-happened first: the earlier ones in the internal extension this was rewritten from,
-and rules 2, 6 and 7 in *this* code, found in review after the suite was green. Three
-of them were in the code written to uphold another rule — two inside rule 3's own
-implementation and one inside rule 2's — because a rule's implementation turns out to
-be a place its own violations like to live. Rule 5 is the exception: it was never a bug
-here, and was carried across from a review of the per-row questions.
+The panel is two files, and so are its rules: **five rules** in `src/payloads/tooltip.ts` about
+the element and the gesture, and **four invariants** in `src/payloads/payloadClient.ts` about
+which answer may be believed. They are numbered separately, and named differently, so
+that a citation says which of the two files it means.
+
+Every one of them except invariant 1 is a bug that happened first: the earlier ones in
+the internal extension this was rewritten from, and rules 2 and 5 and invariant 2 in
+*this* code, found in review after the suite was green. Three of them were in the code
+written to uphold another rule — two inside rule 3's own implementation and one inside
+rule 2's — because a rule's implementation turns out to be a place its own violations
+like to live. Invariant 1 is the exception: it was never a bug here, and was carried
+across from a review of the per-row questions.
+
+### Five rules about the element and the gesture — `src/payloads/tooltip.ts`
 
 1. **Nothing is fetched on render.** Above; it is a security property as much as a
    cost one, because a render-triggered fetch would decode payloads nobody asked to
@@ -241,7 +296,7 @@ here, and was carried across from a review of the per-row questions.
    any button entered while it was still pending was ignored — so pointing at row A
    and moving to row B within the delay opened B's panel and filled it with **A's
    payload**. Traversing a table is exactly how that happens, which made rule 2's own
-   implementation the thing that broke rule 5. The fix is not "cancel and re-arm
+   implementation the thing that broke invariant 1. The fix is not "cancel and re-arm
    every time" either: `pointerover` fires for every element entered and a button has
    children, so an unconditional re-arm pushes the opening one delay further away on
    every event and the panel never opens at all. Same button, leave the timer alone;
@@ -261,11 +316,28 @@ here, and was carried across from a review of the per-row questions.
    scroller too, so reading a long payload dismissed the thing being read. Neither
    is the kind of bug a unit test is written for in advance; both are pinned by one
    now.
-4. **The answer may be stale by the time it arrives.** Two hovers are two requests
-   in flight and they can answer in either order, so every fill is stamped with the
-   generation of the hover that asked for it and a late answer to a closed panel is
-   dropped.
-5. **An answer has to name the question it answers.** Carried across from a review
+4. **A late answer does not paint into the panel that replaced it.** Two hovers are
+   two requests in flight and they can answer in either order, so every fill is
+   stamped with the generation of the hover that asked for it, and an answer whose
+   hover is over is dropped rather than painted. Opening the next panel takes the next
+   generation and closing one moves past it, so both of those make an answer still in
+   flight undeliverable — which is what lets `close()` do double duty in the reset path
+   below.
+5. **Switching it off takes the node, the reference and the text.** The `{ }` buttons
+   are in the table, so the render pass stops drawing them. The panel is on `<body>`,
+   where no render pass looks — so turning the payload switch off while a panel was
+   open left a decoded payload sitting on screen underneath a switch that said the
+   feature was off, with its text still in the cache behind it. Off means the node is
+   gone, the module's reference to it is gone, the painted text is erased, and the
+   cache is empty.
+
+   What it cannot mean is a revocation. A history event fetched a moment ago was
+   fetched, and a payload already POSTed to a codec server is already there. Switching
+   off stops the next question, and the popup does not claim otherwise.
+
+### Four invariants about which answer may be believed — `src/payloads/payloadClient.ts`
+
+1. **An answer has to name the question it answers.** Carried across from a review
    of the per-row questions rather than learned here. The request id is a small
    integer starting at 1 in every tab, so "it carries id 3" is something a forged
    message gets right by accident; the namespace, workflow id, run id and kind all
@@ -282,7 +354,7 @@ here, and was carried across from a review of the per-row questions.
    the wrong run must not settle — or cancel — the question it collided with. The
    real answer, or the timeout, does that. So the worst a forged answer achieves is
    nothing at all.
-6. **One question is one request.** Three entry points reach the same row — a hover
+2. **One question is one request.** Three entry points reach the same row — a hover
    opens the panel, Tab focuses the button, and a *click* on the button fires
    `focusin` **and** `click` — and each of them found an empty cache and posted its
    own message, because the cache only knows the answers that have already arrived.
@@ -290,16 +362,22 @@ here, and was carried across from a review of the per-row questions.
    the same payload leaving the machine for one glance. A question already in flight
    is joined; the second caller is still handed the answer, because dropping it would
    leave that section reading `Loading…` for ever, which is the worse bug.
-7. **Switching it off takes it away.** The `{ }` buttons are in the table, so the
-   render pass stops drawing them. The panel is on `<body>`, where no render pass
-   looks — so turning the payload switch off while a panel was open left a decoded
-   payload sitting on screen underneath a switch that said the feature was off, with
-   its text still in the cache behind it. Off means the node is gone, the module's
-   reference to it is gone, and the cache is empty.
+3. **An answer never outlives the setting it was decoded under.** Change the codec
+   endpoint and the cache is emptied — and on its own that is not enough, because a
+   request asked under the old setting settles a moment later and refills the map it
+   was invalidated out of. So every request remembers the epoch it was asked under,
+   and an answer from a passed epoch is still handed to its caller but never cached.
 
-   What it cannot mean is a revocation. A history event fetched a moment ago was
-   fetched, and a payload already POSTed to a codec server is already there. Switching
-   off stops the next question, and the popup does not claim otherwise.
+   That covers three of the four places a stale answer can hide: the cache, a request
+   in flight, and a late answer still allowed to paint. The fourth is the text already
+   on screen, which only the panel can reach — rule 5 above, and
+   [`docs/design-notes.md`](../docs/design-notes.md) under "A late answer, and the four
+   places one can hide".
+4. **A request that never comes back still answers.** `REQUEST_TIMEOUT_MS`. The
+   MAIN-world script can be absent entirely — an older build, a page it never ran on —
+   and a section reading `Loading…` for the life of the page is not an answer. The
+   timeout resolves as a well-formed result carrying `error`, saying to reload the tab,
+   because rendering `error` is the panel's only way to say "this did not work".
 
 The button carries **no row identity** — no workflow id, no run id, not even a title
 that names one. That is what makes it correct under `<tr>` recycling: there is
@@ -352,9 +430,11 @@ argument that it is nonetheless a bounded step:
   the code path does not exist. That is the one setting in this repository that
   defaults to off for a reason other than cost.
 
-Every clause above is asserted from **outside** the extension, in the
-`sending an encrypted payload to the codec server in the popup` block of
-`tests/unit/apiInject.spec.ts`, against a fake network that records the URL, the
+Every clause above is asserted from **outside** the extension, in
+`tests/unit/apiInjectCodec.spec.ts` — the `sending an encrypted payload to the codec
+server in the popup` block, which is a file of its own precisely so that "what can
+this send, and where?" has one spec file to read as well as one source file — against
+a fake network that records the URL, the
 headers and the **body** of everything that reached it. That last part is what makes
 the claims non-vacuous: "only the payloads it cannot read left the browser" is a
 statement about bytes, not about a destination, so the plaintext payload is searched
@@ -407,7 +487,7 @@ Three things narrow it, and none of them is a shape check:
   into the half that *renders*, so `isPayloadResult` validates every field to the
   leaves — before that it did not, and `{text: {}}` reached `textContent` as
   `"[object Object]"` while an `error` of `0` rendered as a panel with no error and
-  no body. Then rule 5 above drops anything that does not name the question this
+  no body. Then the correlation check above drops anything that does not name the question this
   side asked.
 
 **What is left, stated at its real width rather than at its most flattering.** Either
@@ -465,7 +545,7 @@ only numbers.
 
 **This section is the one place that argument is written out in full**, and that is
 deliberate: it was briefly written out three times — here, in the header of
-`src/payloadServe.ts`, and in this project's entry in
+`src/payloads/payloadServe.ts`, and in this project's entry in
 [`../scripts/surface.json`](../scripts/surface.json) — which is three copies to keep
 true, and reads as anxiety rather than as a bound. Both of the others now carry the
 short form and point here. The budget file keeps the part only it can enforce: a
@@ -533,18 +613,21 @@ instead of quietly omitted, because an unmentioned gap reads as a gap nobody saw
 Each of these is a real limitation, small, and known.
 
 - **`prettyJson` guards long integers only, not every number JSON cannot round-trip.**
-  `LONG_INTEGER` in `src/payloads.ts` catches the case that actually happens to
+  `LONG_INTEGER` in `src/payloads/payloads.ts` catches the case that actually happens to
   account numbers and transaction ids — a 16-digit-or-longer integer literal — and
   shows the server's own formatting untouched. It does not catch a high-precision
   decimal (`1.0000000000000000001` prints as `1`) or an exponent past double range
   (`1e400` prints as `null`, because `JSON.stringify(Infinity)` is `"null"`). A
   production build would parse with a lossless reviver, or not re-serialise at all.
   Verify any claim like this the way these three were: run it, do not reason about it.
-- **`safeCodecEndpoint` checks the scheme and the host, and ignores the rest of the
-  URL.** An endpoint carrying userinfo, a query string or a fragment is accepted and
-  passed through to `${endpoint}/decode`, which is a strange-looking request rather
-  than a dangerous one — the scheme rule that keeps decrypted data off the wire still
-  holds. A production build would reject them, or rebuild the URL from its parts.
+- **`safeCodecEndpoint` returns the string you typed, rather than rebuilding the URL
+  from its parts.** It rejects anything that would stop `${endpoint}/decode` from
+  being a path join — userinfo, a query, a fragment, and, since the round-trip check
+  replaced a truthiness test, a *bare* `?` or `#`, which the URL API reports
+  identically to having none at all. What it still passes through is a relative
+  segment: `https://codec.example.com/base/../other` is accepted and posts to
+  `/other/decode`, because that is what the URL resolves to. Surprising, same origin,
+  and not a leak. A production build would return the normalised `href`.
 - **`readCodecResponse` validates the array and its length, not each payload.** A
   codec server that returns the right number of wrong-shaped objects gets them merged
   in, and the panel then renders whatever `encodingOf` makes of them. The response
@@ -557,7 +640,7 @@ Each of these is a real limitation, small, and known.
   once. That is deliberate — a slow decoder must not occupy the cap that exists to be
   polite to Temporal — but a second, separate cap per codec destination is what a
   production build would add.
-- **Switching off is not a revocation.** Covered in rule 7 above and repeated here
+- **Switching off is not a revocation.** Covered in rule 5 above and repeated here
   because it is the one on this list a user could be surprised by: a payload already
   POSTed to a codec server is already there.
 
@@ -610,36 +693,60 @@ before that template existed keeps it out permanently; `withActivityScope` in
 
 ## Layout
 
+`src/` is grouped by lesson. Its root holds the bundle entry points — the three the
+manifest loads plus the popup's, which is the list in `esbuild.mjs` — and the modules
+every lesson touches; each directory below them is one thing the extension does. `src/payloads/` is new here and `src/page/requestPacing.ts` is the
+one file the next paragraph is about; the rest of the directories are 02's, though
+**several individual files inside them changed** — the table in
+[Read these files in order](#read-these-files-in-order) enumerates them, and
+`npm run lineage` is what keeps the unchanged ones honest.
+
 ```
 src/
   inject.ts         MAIN world — wraps window.fetch, posts the list rows it sees
-  pageApi.ts        MAIN world — the bearer, the ledger, the response-watcher seam,
-                    and the two exported fetches: one spends the page's credential
-                    on an origin IT picks, the other carries none to an origin the
-                    caller picks. They must never converge
   apiInject.ts      MAIN world — every message accepted from the page, in one switch
-  rowInfoServe.ts   MAIN world — answers the per-row questions: cache, then the pacer
-  payloadServe.ts   MAIN world — answers one payload hover: history, then the codec
-  requestPacing.ts  the ONE pacer instance and the refusal decoder, shared by both
-  pacer.ts          concurrency cap + 429/503 backoff, with the clock injected
-  detailWatch.ts    MAIN world — folds a single workflow's own responses, fetches nothing
-  types.ts          the shapes crossing the postMessage boundary
-  rows.ts           API response → a flat row shape
-  tree.ts           the feature, as a pure function: rows → ordered rows
-  payloads.ts       pure: what a payload is, what can be read here, and what a
-                    codec request looks like — including what is NOT sent
-  tooltip.ts        the hover panel: when to ask, and the seven rules
-  rowInfo.ts        pure: the questions, the answers, and what a badge may say
-  rowInfoClient.ts  which rows are worth asking about, and what came back
-  detail.ts         pure: URL rules, the folds behind the detail-page links, and
-                    which activity an id on the page resolves to
-  deepLink.ts       URL templates: tokens, offsets, scope, and what may become an href
-  temporalApi.ts    pure: the API prefix and the two route builders
-  render.ts         everything that writes to the table
-  detailLinks.ts    the links on a single workflow's page, in the UI's own layout
   content.ts        ISOLATED world — wiring, and nothing else
-  settings.ts       chrome.storage.sync — including the one field that names a host
   popup.ts          the toolbar popup, including the codec verdict line
+  render.ts         everything that writes to the table
+  settings.ts       chrome.storage.sync — including the one field that names a host
+  types.ts          the shapes crossing the postMessage boundary
+  page/             the boundary with the page's own Temporal API
+    pageApi.ts      the bearer, the ledger, the response-watcher seam, and the two
+                    exported fetches: one spends the page's credential on an origin
+                    IT picks, the other carries none to an origin the caller picks.
+                    They must never converge
+    temporalApi.ts  pure: the API prefix and the two route builders
+    pacer.ts        concurrency cap + 429/503 backoff, with the clock injected
+    requestPacing.ts  the ONE pacer instance and the refusal decoder, shared by both
+                    features that make requests. The one change here that is not a
+                    feature — see above
+  family/           the tree, as pure functions — stage 01, unchanged
+    rows.ts         API response → a flat row shape
+    tree.ts         rows → ordered rows, each with its connector
+  rowInfo/          the two columns that cost a request
+    rowInfo.ts      pure: the questions, the answers, and what a badge may say
+    rowInfoClient.ts  ISOLATED world — which rows are worth asking about, and what
+                    came back
+    rowInfoServe.ts MAIN world — answers them: cache, then the pacer
+  links/
+    deepLink.ts     URL templates: tokens, offsets, scope, and what may become an href
+  detail/           one workflow's own page
+    detail.ts       pure: URL rules, the folds behind the links, and which activity
+                    an id on the page resolves to
+    detailWatch.ts  MAIN world — folds the page's own responses, fetches nothing
+    detailLinks.ts  the links themselves, in the UI's own layout
+  payloads/         this stage — the panel, and the only egress in the repository
+    payloadMessages.ts  the two payload messages and their guards — the protocol alone
+    payloads.ts     pure: what a payload is, what can be read in the browser, and how
+                    it is formatted for the panel. Fetches nothing
+    codec.ts        pure: what a codec request looks like — destination, headers, body
+                    — and what is deliberately NOT in it
+    valueGuards.ts  the two narrowings the payload path shares
+    tooltip.ts      ISOLATED world — the hover panel: the element, the gesture, and
+                    the five rules
+    payloadClient.ts  ISOLATED world — one hover's question, and the four invariants
+                    on its answer
+    payloadServe.ts MAIN world — answers one hover: history, then the codec
 public/
   manifest.json     one permission: storage — the same as 02
   popup.html        the settings pane (no inline script — MV3 forbids it)
@@ -649,30 +756,42 @@ tests/              the ordering rules, the DOM bugs that cost the most, the req
                     gate, and every egress claim — from the attacker's side
 ```
 
-`wc -l src/*.ts` prints the size.
+`find src -name '*.ts' | xargs wc -l` prints the size.
 
-The split is what makes the security card checkable: `payloads.ts` is pure and
-therefore testable, `pageApi.ts` is the only file that issues a request, and
-`render.ts`, `detailLinks.ts` and `tooltip.ts` are the only ones that touch the page.
-Reviewing "what can this thing send" still means reading one file.
+The split is what makes the security card checkable: `src/payloads/payloads.ts` and
+`src/payloads/codec.ts` are pure and therefore testable, `src/page/pageApi.ts` is the
+only file that issues a request, and `render.ts`, `src/detail/detailLinks.ts` and
+`src/payloads/tooltip.ts` are the only ones that touch the page.
+
+**Reviewing "what can this thing send" means reading four files, not one** — an
+earlier draft of this line said one, which was the claim a reviewer had to disprove
+by reading the other three. `pageApi.ts` *executes* the fetch and constrains it (no
+credential, ever), but it does not decide that the fetch happens: `apiInject.ts` says
+which messages are accepted at all, `payloadServe.ts` decides whether a payload is
+unreadable enough to need a server and gates it on the ledger, and `codec.ts`
+determines the destination, the headers and the body. One file is where the authority
+is enforced; four is what the review actually costs. The reading order is at the top
+of this README.
 
 ## What it deliberately does not do
 
 - **It does not put payload data anywhere but the panel.** No copy button, no
   download, no export, no proxy of ours. Every one of those is a second egress path
   with its own redaction question, and the panel is the feature.
-- **It does not search or filter inside payloads.** The internal extension this came
-  from has a whole filter view for that; it is a large amount of UI and it teaches
-  nothing about the trust boundary, which is what this repository is for.
+- **It does not search or filter inside payloads.** The internal extension behind
+  this starter has a whole filter view for that; it is a large amount of UI and it
+  teaches nothing about the trust boundary, which is what this repository is for.
 - **It still writes nothing to Temporal.** No signal, no terminate, no reset, no
   update — anywhere in any project here.
 - **It does not read the codec endpoint out of the Temporal UI's own settings.** An
   earlier version did, so that a page already decoding these payloads did not have
   to be told where its server is. It is a nicer first run and it is not what a
   starter kit is for: it added a second trust question, a resolution order that has
-  to stay in step with the UI's own and did change between releases, and about a
-  third of `payloads.ts` — for a convenience. The deleted-code note in that file
-  says what to read if you want it in a fork.
+  to stay in step with the UI's own and did change between releases, and a large
+  fraction of the codec path — for a convenience. `safeCodecEndpoint` in
+  `src/payloads/codec.ts` carries the note, and "The endpoint used to come from the page" in
+  [`docs/design-notes.md`](../docs/design-notes.md) says what to read if you want it
+  in a fork.
 
 Column reorder, a larger page size, a cross-workflow activity finder and
 expand-to-families are stage 04's conveniences; none of them changes what the

@@ -1,6 +1,6 @@
 {
     "name": "temporal-ui-starter-01-family-tree",
-    "version": "0.2.2",
+    "version": "0.2.4",
     "private": true,
     "type": "module",
     "description": "The smallest useful thing: parent/child workflow families in the Temporal UI, with zero permissions.",

@@ -6,8 +6,8 @@
 // does nothing". Showing rows-seen, rows-matched and families-found separates
 // those three cases in one glance.
 
-import { KNOWN_TOKENS, templateIsSafe, templatesInScope, type DeepLinkTemplate } from './deepLink';
-import { MAX_ACTIVITIES } from './detail';
+import { KNOWN_TOKENS, templateIsSafe, templatesInScope, type DeepLinkTemplate } from './links/deepLink';
+import { MAX_ACTIVITIES } from './detail/detail';
 import { loadSettings, saveSettings, type Settings } from './settings';
 
 interface PageStats {
@@ -31,7 +31,7 @@ interface PageStats {
     activityPanelsLinked: number;
     // The bar could not find the page's own layout and is parked in a corner. The
     // one state that otherwise looks like nothing at all — see the note at the top
-    // of src/detailLinks.ts, where a stale anchor cost two diagnoses.
+    // of src/detail/detailLinks.ts, where a stale anchor cost two diagnoses.
     linksAdrift: boolean;
 }
 

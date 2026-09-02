@@ -4,8 +4,8 @@
 // tree, and hands the result to render.ts. Every DOM write lives there, so this
 // file stays small enough to read in one sitting.
 
-import { detailLinkStats, installDetailLinks, syncDetailLinks } from './detailLinks';
-import { buildTree, countFamilies } from './tree';
+import { detailLinkStats, installDetailLinks, syncDetailLinks } from './detail/detailLinks';
+import { buildTree, countFamilies } from './family/tree';
 import {
     emptyPlacementIndex,
     findPlacement,
@@ -13,7 +13,7 @@ import {
     judgeListResponse,
     normalizeExecutions,
     type PlacementIndex,
-} from './rows';
+} from './family/rows';
 import { loadSettings, onSettingsChanged, type Settings } from './settings';
 import {
     applyToTable,
@@ -25,8 +25,8 @@ import {
     type Placement,
     type RenderStats,
 } from './render';
-import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo';
-import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfoClient';
+import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo/rowInfo';
+import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfo/rowInfoClient';
 import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
 
 const TAG = '[temporal-ui-starter]';

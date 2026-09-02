@@ -11,7 +11,7 @@
 // Retry-After elapsed?" is a question with an exact answer rather than a flaky one.
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { advisedWaitMs, makePacer, type Pacer, type PacerClock } from '../../src/pacer';
+import { advisedWaitMs, makePacer, type Pacer, type PacerClock } from '../../src/page/pacer';
 
 interface FakeClock extends PacerClock {
     advance(ms: number): Promise<void>;

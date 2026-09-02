@@ -5,8 +5,8 @@
 //
 // It DOES make requests. Most of them go to the API the page is already talking to,
 // from inside the page, with the page's own session, and only for runs that page was
-// already handed: see src/pageApi.ts for the ledger that enforces the last part, and
-// src/requestPacing.ts for what keeps the volume down.
+// already handed: see src/page/pageApi.ts for the ledger that enforces the last part, and
+// src/page/requestPacing.ts for what keeps the volume down.
 //
 // AND ONE FIELD HERE IS DIFFERENT FROM EVERY OTHER SETTING IN THIS REPOSITORY.
 // `codecEndpoint` is the only one that names a host, and therefore the only one that
@@ -15,7 +15,7 @@
 // leaves your browser unless you fill this in" is checkable rather than a promise.
 // Read the note on the field itself before widening what it accepts.
 
-import { templateScope, type DeepLinkTemplate } from './deepLink';
+import { templateScope, type DeepLinkTemplate } from './links/deepLink';
 
 export interface Settings {
     // Master switch. Off = the extension writes nothing to the page.
@@ -57,8 +57,8 @@ export interface Settings {
     // beside a host from an untrusted channel is a credential someone else can aim.
     // Defaulting such a flag to off would not have fixed it, because the value that
     // reaches the fetch comes from the message and not from here. See the CodecConfig
-    // note in payloads.ts, which is longer than this one because a deletion leaves
-    // nothing behind to read.
+    // note in payloadMessages.ts, which is longer than this one because a deletion
+    // leaves nothing behind to read.
     //
     // Not a feature — a migration marker. True once a human has edited the link list,
     // after which their choices are taken literally and no scope is filled in for
@@ -76,7 +76,7 @@ export interface Settings {
 // template and printing a line on the page telling the reader to add an activity
 // token if they wanted the other kind — which is a feature explaining how to
 // configure itself on the page where it could simply have worked. See the note at the
-// top of src/detailLinks.ts.
+// top of src/detail/detailLinks.ts.
 //
 // The activity template is also the worked example of the identity rule in
 // deepLink.ts: it is keyed on `{activityId}`, NOT on `{activityType}` — a type

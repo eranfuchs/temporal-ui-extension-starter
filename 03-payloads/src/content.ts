@@ -4,8 +4,8 @@
 // tree, and hands the result to render.ts. Every DOM write lives there, so this
 // file stays small enough to read in one sitting.
 
-import { detailLinkStats, installDetailLinks, syncDetailLinks } from './detailLinks';
-import { buildTree, countFamilies } from './tree';
+import { detailLinkStats, installDetailLinks, syncDetailLinks } from './detail/detailLinks';
+import { buildTree, countFamilies } from './family/tree';
 import {
     emptyPlacementIndex,
     findPlacement,
@@ -13,7 +13,7 @@ import {
     judgeListResponse,
     normalizeExecutions,
     type PlacementIndex,
-} from './rows';
+} from './family/rows';
 import { loadSettings, onSettingsChanged, type Settings } from './settings';
 import {
     applyToTable,
@@ -26,9 +26,9 @@ import {
     type Placement,
     type RenderStats,
 } from './render';
-import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo';
-import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfoClient';
-import { installPayloadTooltip, removePayloadTooltip, resetPayloadState } from './tooltip';
+import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo/rowInfo';
+import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfo/rowInfoClient';
+import { installPayloadTooltip, removePayloadTooltip, resetPayloadState } from './payloads/tooltip';
 import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
 
 const TAG = '[temporal-ui-starter]';
@@ -282,7 +282,7 @@ async function start(): Promise<void> {
         // It also closes an open panel, which is the point of its name: what is on
         // screen was decoded under the setting that just changed.
         if (codecChanged) resetPayloadState();
-        // Rule 7 in tooltip.ts. The render pass takes the `{ }` buttons away because
+        // Rule 5 in tooltip.ts. The render pass takes the `{ }` buttons away because
         // they are in the table; the panel is on <body> and would otherwise stay
         // exactly where it was, showing a decoded payload under a switch that now
         // says off.
@@ -317,8 +317,8 @@ async function start(): Promise<void> {
             return ids ? (lookup(ids.workflowId, ids.runId)?.row ?? null) : null;
         },
         namespace: () => namespaceFromLocation(location.pathname) ?? '',
-        // One field, and it is the only one there is. See CodecConfig in payloads.ts
-        // for why there is no credential switch beside it.
+        // One field, and it is the only one there is. See CodecConfig in
+        // payloadMessages.ts for why there is no credential switch beside it.
         codec: () => ({ endpoint: settings.codecEndpoint }),
     });
 

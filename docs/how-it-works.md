@@ -18,6 +18,8 @@ The Temporal UI already asks the server for the data we want to draw. So instead
 of authenticating and asking for it again, we watch the page make its own call
 and read the answer over its shoulder.
 
+**`01-family-tree` — one direction, and nothing goes back:**
+
 ```
                   ┌─────────────────────── the page's own world (MAIN) ───────┐
   Temporal UI ───▶│ window.fetch  ──▶ /api/v1/namespaces/{ns}/workflows       │
@@ -28,13 +30,53 @@ and read the answer over its shoulder.
                                                  │                           │
                   ┌──────────────────────────────▼─── extension world ──────┐│
                   │ src/content.ts   receives rows                          ││
-                  │   src/rows.ts    API shape → row shape                  ││
-                  │   src/tree.ts    buildTree: order + connectors  (pure)   ││
+                  │   src/family/rows.ts    API shape → row shape                  ││
+                  │   src/family/tree.ts    buildTree: order + connectors  (pure)   ││
                   │   src/render.ts  the only code that writes to the DOM    ││
                   └─────────────────────────────────────────────────────────┘│
                                                                              │
                   the page never sees anything from us ──────────────────────┘
 ```
+
+**That last line, and "the only code that writes to the DOM", are true of `01`
+only.** Both were once written as properties of the repository, which is the sort of
+error this document exists to prevent: worlds, messages and DOM ownership are the
+lesson here, so a diagram that overstates them teaches the wrong model. In `02` and
+`03` the extension world *asks*, and the answers come back:
+
+```
+                  ┌─────────────────────── the page's own world (MAIN) ───────┐
+  Temporal UI ───▶│ window.fetch ─▶ the API            src/inject.ts wraps it │
+                  │                                                           │
+                  │ src/apiInject.ts  installs the servers, and IS the list of │
+                  │                   message types accepted from the page     │
+                  │   src/page/pageApi.ts     the bearer, the ledger, both fetches  │
+                  │   src/rowInfo/rowInfoServe.ts   one history page + one describe    │
+                  │   src/payloads/payloadServe.ts   one history event  (03 only)       │
+                  │                          └──▶ your codec server (03, opt-in)│
+                  └──▲──────────────────────────────────────┬─────────────────┘
+       'row-info-request'                        'row-info-result'
+       'payload-request'  (03)                   'payload-result'  (03)
+                     │                                      ▼
+                  ┌──┴───────────────────────── extension world (ISOLATED) ──┐
+                  │ src/content.ts   wiring                                   │
+                  │   src/render.ts       writes the table                    │
+                  │   src/detail/detailLinks.ts  writes the workflow page's links     │
+                  │   src/payloads/tooltip.ts      writes the hover panel   (03 only)   │
+                  └──────────────────────────────────────────────────────────┘
+```
+
+Two things the `01` diagram does not have to say, and these two rungs do:
+
+- **The page sees our messages, and can send them.** `postMessage` has no
+  unforgeable sender, so every request arriving in MAIN world is treated as
+  attacker-controlled — see the ledger, below, and the weakness section of each
+  project's README.
+- **Three files write to the DOM, not one.** `render.ts` owns the table,
+  `detailLinks.ts` owns the links on a single workflow's page, and `03`'s `tooltip.ts`
+  owns the hover panel. They are separated by *what* they draw, not by whether they
+  are allowed to draw — and all three write into the DOM the page shares with us,
+  which is why `03`'s panel has to erase its text rather than merely hide it.
 
 Why the injected script has to be in the page's **own** world is the crux, and it
 is easy to get backwards. An API call made from page JavaScript needs no
@@ -95,19 +137,19 @@ The first four exist in every project, byte-identical — enforced by
 
 | File | What it is |
 |---|---|
-| `src/inject.ts` | MAIN world, `document_start`. Wraps `window.fetch`, clones matching responses, posts rows. The only file that touches the page's own JavaScript. |
+| `src/inject.ts` | MAIN world, `document_start`. Wraps `window.fetch`, clones matching responses, posts rows. In `01` it is the only file that touches the page's own JavaScript; in `02` and `03` it is the only one that touches the page's **`fetch`**, and `src/apiInject.ts` + `src/page/pageApi.ts` run in that world beside it. |
 | `src/types.ts` | The shapes that cross the `postMessage` boundary. |
-| `src/rows.ts` | API shape → row shape. Pure. |
-| `src/tree.ts` | `buildTree` — the whole feature, as one pure function. Ordering, depth, connector columns. |
+| `src/family/rows.ts` | API shape → row shape. Pure. |
+| `src/family/tree.ts` | `buildTree` — the whole feature, as one pure function. Ordering, depth, connector columns. |
 
 These two differ per project, and the difference is the lesson:
 
 | File | What it is |
 |---|---|
 | `src/content.ts` | ISOLATED world. Wiring: receives messages, drives a `MutationObserver`. No DOM writes. In `01` it uses no `chrome.*` API at all; in `02` and `03` it also loads settings, answers the popup, and holds no repeating timer of any kind — the only one it schedules is a single pass `FRESH_FLOOR_MS` after a `⟳` press, to re-enable that button, because the "last event" ages are frozen at the instant Temporal was read rather than animated against the clock. In `03` it additionally drops the decoded-payload cache when the master switch goes off or the codec setting changes. |
-| `src/render.ts` | Every DOM write in the extension. `01`'s takes no options, because it has no settings to vary. `03`'s adds the per-row `{ }` button, which carries no row identity on any attribute. |
+| `src/render.ts` | Every DOM write **in the workflow table**, which in `01` is every DOM write there is. `01`'s takes no options, because it has no settings to vary. `03`'s adds the per-row `{ }` button, which carries no row identity on any attribute. The other two writers, in the projects that have them, are `src/detail/detailLinks.ts` (a single workflow's own page) and `03`'s `src/payloads/tooltip.ts` (the hover panel) — split by *what* they draw, and each idempotent on its own surface for the reason in trap 2. |
 
-`02-techniques/` and `03-payloads/` add `src/deepLink.ts` (templated per-row links,
+`02-techniques/` and `03-payloads/` add `src/links/deepLink.ts` (templated per-row links,
 pure), `src/settings.ts` (`chrome.storage.sync`) and `src/popup.ts` (the toolbar
 popup, including an honest answer to "is it working?" — rows *seen* reported
 separately from rows *matched*, so the two failure modes are distinguishable).
@@ -119,43 +161,61 @@ pure enough to test.
 
 | File | What it is |
 |---|---|
-| `src/pageApi.ts` | MAIN world. **The only file that issues a request**, and the only code that ever sees the page's `Authorization` header, which never leaves its closure. Holds the ledger, and the seam other features use to read a response the page fetched. |
+| `src/page/pageApi.ts` | MAIN world. **The only file that issues a request**, and the only code that ever sees the page's `Authorization` header, which never leaves its closure. Holds the ledger, and the seam other features use to read a response the page fetched. |
 | `src/apiInject.ts` | MAIN world, the second bundle. The entry point that installs the servers — and therefore the enumerable list of message types this extension accepts from the page: one in `02`, two in `03`. |
-| `src/temporalApi.ts` | Pure. The API prefix, and the two route builders — nothing else may name a URL. |
-| `src/rowInfo.ts` | Pure. The two questions, how to read their answers, and what a badge is allowed to say (see the no-failure-message note at the top of it). |
-| `src/rowInfoServe.ts` | MAIN world. Answers the questions: the TTL cache, the concurrency cap and the backoff. Four times the size of the watcher below, entirely because it asks rather than piggybacks. |
-| `src/rowInfoClient.ts` | ISOLATED world. Which rows are worth asking about — running only, on screen only, once per interval — and what came back. |
-| `src/pacer.ts` | Pure, with the clock and the sleep injected: the concurrency cap and the `Retry-After` backoff, testable without a network. `02` builds its one instance inside `rowInfoServe.ts`; `03` moves the instance to `src/requestPacing.ts` — see below. |
+| `src/page/temporalApi.ts` | Pure. The API prefix, and the two route builders — nothing else may name a URL. |
+| `src/rowInfo/rowInfo.ts` | Pure. The two questions, how to read their answers, and what a badge is allowed to say (see the no-failure-message note at the top of it). |
+| `src/rowInfo/rowInfoServe.ts` | MAIN world. Answers the questions: the TTL cache, the concurrency cap and the backoff. Four times the size of the watcher below, entirely because it asks rather than piggybacks. |
+| `src/rowInfo/rowInfoClient.ts` | ISOLATED world. Which rows are worth asking about — running only, on screen only, once per interval — and what came back. |
+| `src/page/pacer.ts` | Pure, with the clock and the sleep injected: the concurrency cap and the `Retry-After` backoff, testable without a network. `02` builds its one instance inside `rowInfoServe.ts`; `03` moves the instance to `src/page/requestPacing.ts` — see below. |
 
 And the deep links on a single workflow's own page, which fetch nothing at all:
 
 | File | What it is |
 |---|---|
-| `src/detail.ts` | Pure. Which URLs belong to one workflow, and the folds that reduce a history or describe response to ids, type names, timestamps and attempt counts — *before* anything is posted. |
-| `src/detailWatch.ts` | MAIN world. Subscribes to `pageApi.ts`'s watcher seam, folds, posts. No request, no cache, no ledger entry. |
-| `src/detailLinks.ts` | ISOLATED world. The drawing: workflow-scoped links in a bar beside the page's own tabs, activity-scoped links inside the row the UI labels "Activity Id" — resolved to one activity by its id, never by its type. The header of that file records the floating card it replaced, and why the fallback corner is a way-station rather than a design. |
+| `src/detail/detail.ts` | Pure. Which URLs belong to one workflow, and the folds that reduce a history or describe response to ids, type names, timestamps and attempt counts — *before* anything is posted. |
+| `src/detail/detailWatch.ts` | MAIN world. Subscribes to `pageApi.ts`'s watcher seam, folds, posts. No request, no cache, no ledger entry. |
+| `src/detail/detailLinks.ts` | ISOLATED world. The drawing: workflow-scoped links in a bar beside the page's own tabs, activity-scoped links inside the row the UI labels "Activity Id" — resolved to one activity by its id, never by its type. The header of that file records the floating card it replaced, and why the fallback corner is a way-station rather than a design. |
 
-`03-payloads/` adds four files, and the split is the same one: every decision that
-can be made without a network is made in a pure module, and the requests still go
-through `pageApi.ts` — including the one to a host `pageApi.ts` had never heard of
-until a message named it.
+`03-payloads/` adds one directory, `src/payloads/`, and one file inside
+`src/page/`; the split inside it is the same one as above — every decision that can
+be made without a network is made in a pure module, and the requests still go
+through `pageApi.ts`, including the one to a host `pageApi.ts` had never heard of
+until a message named it. The ones below carry the stage's reasoning; for the exact
+set it adds, diff the two listings:
+
+```bash
+comm -13 <(cd 02-techniques/src && find . -name '*.ts' | sort) \
+         <(cd 03-payloads/src && find . -name '*.ts' | sort)
+```
 
 | File | What it is |
 |---|---|
-| `src/payloads.ts` | Pure, and where nearly all of the stage's reasoning lives. Which encodings are readable without any server and which are not; the event's payloads found by its **attributes key** rather than by `eventType`, because the type comes back as `WorkflowExecutionStarted` from one Temporal version and `EVENT_TYPE_WORKFLOW_EXECUTION_STARTED` from another while the attributes key is one string in both; the plan of which payloads to send to a codec and how to re-attach the answers by position; `safeCodecEndpoint`, which accepts `https` or loopback `http` and nothing else; and the formatting, including the rule that a JSON body containing a ≥16-digit integer is shown exactly as the server wrote it, because `JSON.parse` would silently round the id. |
-| `src/payloadServe.ts` | MAIN world. The second server: one history event per question — the *first* event for an input, the *last* for an outcome — and then, only if something came back unreadable and only if you named an endpoint, one POST to it. |
-| `src/tooltip.ts` | ISOLATED world. The hover panel: when to ask, the correlation check on the answer, the bounded cache of decoded payloads, and the pointer/scroll guards that traps 9 and 10 below are about. |
-| `src/requestPacing.ts` | The pacer **instance**, module-level, imported by both servers. `02` did not need this file; read its header for why `03` does, and why a second `makePacer()` call would have been the bug that looked correct in both places. |
+| `src/payloads/payloads.ts` | Pure: what a payload **is**, and how it is shown. Which encodings are readable without any server and which are not; the event's payloads found by its **attributes key** rather than by `eventType`, because the type comes back as `WorkflowExecutionStarted` from one Temporal version and `EVENT_TYPE_WORKFLOW_EXECUTION_STARTED` from another while the attributes key is one string in both; and the formatting, including the rule that a JSON body containing a ≥16-digit integer is shown exactly as the server wrote it, because `JSON.parse` would silently round the id. |
+| `src/payloads/codec.ts` | Pure, and **the file to read for "what can this send, and where?"**. The endpoint policy — `safeCodecEndpoint`, which takes `https` or loopback `http` and refuses anything that would stop `${endpoint}/decode` from being a path join — the plan of which payloads to send and how to re-attach the answers by position, the request itself, and the length check on the reply. Split out of `payloads.ts` so that question has one short answer rather than a section of a long file. |
+| `src/payloads/payloadServe.ts` | MAIN world. The second server: one history event per question — the *first* event for an input, the *last* for an outcome — and then, only if something came back unreadable and only if you named an endpoint, one POST to it. |
+| `src/payloads/tooltip.ts` | ISOLATED world, and **DOM only**: the panel element, the hover/focus gesture, and the pointer/scroll guards that traps 9 and 10 below are about. It asks `payloadClient.ts` a question and draws the answer; it holds no request state. |
+| `src/payloads/payloadClient.ts` | ISOLATED world, and **state only**: one hover's outstanding request, the correlation check that throws away an answer to a question this side did not ask, the bounded cache of decoded payloads, and the invalidation when the master switch or the codec setting changes. Split from `tooltip.ts` for the same reason `codec.ts` was split from `payloads.ts` — the four invariants on an answer are worth reading without the panel's CSS in the way. |
+| `src/payloads/payloadMessages.ts` | The two payload messages and their guards, and nothing else: the protocol as a file, so the trust boundary can be read without either side of it. |
+| `src/payloads/valueGuards.ts` | The two narrowings the payload path shares. |
+| `src/page/requestPacing.ts` | The pacer **instance**, module-level, imported by both servers. `02` did not need this file; read its header for why `03` does, and why a second `makePacer()` call would have been the bug that looked correct in both places. |
 
 The split between `content.ts` and `render.ts` is not tidiness. It is what makes
-the DOM behaviour unit-testable: `tests/unit/render.spec.ts` drives `render.ts`
-against a jsdom table in milliseconds, including the idempotency property that is
-impossible to eyeball and expensive to get wrong.
+the DOM behaviour unit-testable: the render specs drive `render.ts` against a jsdom
+table in milliseconds, including the idempotency property that is impossible to
+eyeball and expensive to get wrong. There are several of them, split by *what is
+being drawn* rather than by which source file draws it — `render.spec.ts` for the tree
+and the shared invariants, then `renderLinks.spec.ts`, `renderRowInfo.spec.ts` and, in
+`03`, `renderPayloadButton.spec.ts`, all sharing one harness so that one file's idea of
+what a row looks like cannot drift from another's. **`render.ts` itself has not been
+split to match, and it is the largest source file in the repository** — the seams are
+already named by those four specs, so it is the obvious next move rather than a
+finished one.
 
 ## Things that will bite you
 
-Each of these cost hours in the internal extension this starter was extracted
-from. They are commented at the site in the code; this is the index.
+Each of these cost hours in the internal extension whose lessons this starter
+reimplements. They are commented at the site in the code; this is the index.
 
 **1. `window.fetch` must be installed behind a getter — and must give the
 assignment back.**
@@ -228,7 +288,7 @@ duplicates rows and breaks the mapping between the tree and the table.
 
 The corollary is about lookups, not storage. A link in the table sometimes gives
 you a workflow id with **no** run id, and if that id appears twice on the page
-there is no correct answer. `src/rows.ts` marks such an id ambiguous and
+there is no correct answer. `src/family/rows.ts` marks such an id ambiguous and
 `findPlacement` returns nothing for it, deliberately — the same refusal
 `buildTree` makes when it cannot identify a parent. Returning the last run that
 happened to be indexed would be a coin toss reported as a fact.
@@ -309,7 +369,7 @@ second observer still sees the list, the tree still gets its rows, and the page'
 own wrapper is still called — because the version that shipped satisfied only the
 middle one.
 
-**Traps 9 and 10 belong to `03-payloads`**, whose `src/tooltip.ts` is the hover
+**Traps 9 and 10 belong to `03-payloads`**, whose `src/payloads/tooltip.ts` is the hover
 panel that shows a workflow's input and result. They are written up here rather than
 in that project's own notes because neither is a fact about payloads: they are facts
 about the pointer and scroll models, and they will bite the first floating panel you
@@ -371,7 +431,7 @@ change them:
    separated from the DOM plumbing, and `tests/unit/tree.spec.ts` shows how to
    pin the result without a browser.
 2. **Deep links to your own tools** — in `02-techniques/` these are settings, not
-   code. `src/deepLink.ts` lists the tokens, and offsets like `{startTimeIso-10m}`
+   code. `src/links/deepLink.ts` lists the tokens, and offsets like `{startTimeIso-10m}`
    exist because the useful log window is never exactly the workflow's own start
    and end. A template has to expand to an absolute `http://` or `https://` URL:
    anything else — `javascript:`, `data:`, `file:` — gets no `href` at all, and
@@ -387,7 +447,7 @@ change them:
    endpoint your Temporal UI is already configured with will do: the request is
    `POST {endpoint}/decode` with an `X-Namespace` header, issued from the page's
    origin, which is the origin such a server already allows (trap 7 again). If your
-   codec speaks a different shape, `src/payloads.ts` is the only file that needs to
+   codec speaks a different shape, `src/payloads/payloads.ts` is the only file that needs to
    know — `codecDecodeCall` builds the request and `readCodecResponse` reads it, both
    pure. What the endpoint is allowed to *be* is deliberately narrow: `https`, or
    `http` on loopback only, because what comes back is decrypted.
@@ -540,9 +600,9 @@ find it. In `01-family-tree` every hit is `window.fetch`, the page's own —
 captured, wrapped, and called on the page's behalf so its result can be handed
 straight back to it. In `02-techniques` most of the hits are comments *about* not
 fetching; the ones that are code are in `src/inject.ts` (the same wrapper as `01`)
-and `src/pageApi.ts`, which captures the page's `fetch` once as `pageFetch` and calls
+and `src/page/pageApi.ts`, which captures the page's `fetch` once as `pageFetch` and calls
 it in exactly two places: to pass the page's own request through untouched, and to ask
-one of the two questions in `src/rowInfo.ts` about a run the ledger has authorised.
+one of the two questions in `src/rowInfo/rowInfo.ts` about a run the ledger has authorised.
 
 `03-payloads` is the same two files — and that is the useful part of the check, since
 the payload feature adds no third holder of the page's `fetch`. `pageApi.ts` there

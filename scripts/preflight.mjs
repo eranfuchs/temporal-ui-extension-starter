@@ -112,7 +112,9 @@ runCheck('surface self-test', NODE, ['scripts/surface.mjs', '--selftest', '--qui
 // projects, and a path in a README rots without any symptom: the sentence still
 // reads fine. Splitting one project into three moved every file at once, so every
 // path in every document was wrong simultaneously and nothing complained.
-runCheck('doc paths (links, cited paths, npm scripts)', NODE, ['scripts/doc-paths.mjs'], { unverifiedExit: 2 });
+runCheck('doc paths (links, cited paths, npm scripts, spec blocks)', NODE, ['scripts/doc-paths.mjs'], {
+    unverifiedExit: 2,
+});
 runCheck('doc paths self-test', NODE, ['scripts/doc-paths.mjs', '--selftest', '--quiet']);
 
 // ── Per project ──────────────────────────────────────────────────────────────
@@ -149,7 +151,7 @@ for (const project of projects) {
     // A stale dist/ is this project's most convincing lie: every manual test loads
     // dist/, so editing source and skipping the build means the browser reports on
     // code that no longer exists. Checking only that the files EXIST is what let
-    // that happen in the extension this starter came from.
+    // that happen in the extension behind this starter.
     checkDist(project);
 }
 

@@ -25,7 +25,7 @@
 //     failure is one devtools glance away.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { namespaceFromApiUrl } from './rows';
+import { namespaceFromApiUrl } from './family/rows';
 import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
 
 (() => {

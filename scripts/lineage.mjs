@@ -9,11 +9,11 @@
 // package, three thin wrappers): a reader who wants the family tree should be
 // able to copy ONE directory and have a working extension, not discover that the
 // interesting part lives two levels up behind an import. The cost is that
-// src/tree.ts exists three times.
+// src/family/tree.ts exists three times.
 //
 // WHAT GOES WRONG WITHOUT A GATE
 //
-// Someone fixes an ordering bug in 03/src/tree.ts. 01 and 02 keep the bug. Now
+// Someone fixes an ordering bug in 03/src/family/tree.ts. 01 and 02 keep the bug. Now
 // the repository teaches three subtly different versions of the same lesson and
 // nobody knows which one is right. That failure is silent — every project still
 // builds, every test still passes, because each project tests its own copy.
@@ -260,11 +260,11 @@ function selftest() {
         const good = makeTree(
             'good',
             {
-                '01-a': { 'src/tree.ts': 'export const same = 1;\n', 'src/content.ts': 'const a = 1;\n' },
-                '02-b': { 'src/tree.ts': 'export const same = 1;\n', 'src/content.ts': 'const b = 2;\n' },
+                '01-a': { 'src/family/tree.ts': 'export const same = 1;\n', 'src/content.ts': 'const a = 1;\n' },
+                '02-b': { 'src/family/tree.ts': 'export const same = 1;\n', 'src/content.ts': 'const b = 2;\n' },
             },
             {
-                shared: [{ path: 'src/tree.ts', why: 'the feature' }],
+                shared: [{ path: 'src/family/tree.ts', why: 'the feature' }],
                 forks: [{ path: 'src/content.ts', why: 'wiring differs by design' }, { path: 'package.json', why: 'per-project name' }],
             },
         );
@@ -276,10 +276,10 @@ function selftest() {
         const drifted = makeTree(
             'drifted',
             {
-                '01-a': { 'src/tree.ts': 'export const same = 1;\n' },
-                '02-b': { 'src/tree.ts': 'export const same = 2;\n' },
+                '01-a': { 'src/family/tree.ts': 'export const same = 1;\n' },
+                '02-b': { 'src/family/tree.ts': 'export const same = 2;\n' },
             },
-            { shared: [{ path: 'src/tree.ts', why: 'the feature' }], forks: [{ path: 'package.json', why: 'per-project name' }] },
+            { shared: [{ path: 'src/family/tree.ts', why: 'the feature' }], forks: [{ path: 'package.json', why: 'per-project name' }] },
         );
         const driftedRun = drive(drifted);
         check(
@@ -294,24 +294,24 @@ function selftest() {
         const unregistered = makeTree(
             'unregistered',
             {
-                '01-a': { 'src/rows.ts': 'export const x = 1;\n' },
-                '02-b': { 'src/rows.ts': 'export const x = 1;\n' },
+                '01-a': { 'src/family/rows.ts': 'export const x = 1;\n' },
+                '02-b': { 'src/family/rows.ts': 'export const x = 1;\n' },
             },
             { shared: [], forks: [{ path: 'package.json', why: 'per-project name' }] },
         );
         const unregisteredRun = drive(unregistered);
         check(
             'rejects a duplicated file that is in neither list',
-            unregisteredRun.status === 1 && unregisteredRun.output.includes('src/rows.ts'),
+            unregisteredRun.status === 1 && unregisteredRun.output.includes('src/family/rows.ts'),
             `exit ${unregisteredRun.status}: ${unregisteredRun.output.trim()}`,
         );
 
         // KNOWN-BAD 3: a registry entry pointing at nothing.
         const stale = makeTree(
             'stale',
-            { '01-a': { 'src/tree.ts': 'a\n' }, '02-b': { 'src/tree.ts': 'a\n' } },
+            { '01-a': { 'src/family/tree.ts': 'a\n' }, '02-b': { 'src/family/tree.ts': 'a\n' } },
             {
-                shared: [{ path: 'src/tree.ts', why: 'the feature' }, { path: 'src/gone.ts', why: 'deleted last week' }],
+                shared: [{ path: 'src/family/tree.ts', why: 'the feature' }, { path: 'src/gone.ts', why: 'deleted last week' }],
                 forks: [{ path: 'package.json', why: 'per-project name' }],
             },
         );
@@ -326,10 +326,10 @@ function selftest() {
         // at once. Reading order would decide which rule applies, silently.
         const both = makeTree(
             'both',
-            { '01-a': { 'src/tree.ts': 'a\n' }, '02-b': { 'src/tree.ts': 'b\n' } },
+            { '01-a': { 'src/family/tree.ts': 'a\n' }, '02-b': { 'src/family/tree.ts': 'b\n' } },
             {
-                shared: [{ path: 'src/tree.ts', why: 'the feature' }],
-                forks: [{ path: 'src/tree.ts', why: 'also a fork, apparently' }, { path: 'package.json', why: 'per-project name' }],
+                shared: [{ path: 'src/family/tree.ts', why: 'the feature' }],
+                forks: [{ path: 'src/family/tree.ts', why: 'also a fork, apparently' }, { path: 'package.json', why: 'per-project name' }],
             },
         );
         const bothRun = drive(both);
@@ -358,8 +358,8 @@ function selftest() {
         // report clean — a single-project tree trivially satisfies every rule.
         const lonely = makeTree(
             'lonely',
-            { '01-a': { 'src/tree.ts': 'a\n' } },
-            { shared: [{ path: 'src/tree.ts', why: 'the feature' }], forks: [] },
+            { '01-a': { 'src/family/tree.ts': 'a\n' } },
+            { shared: [{ path: 'src/family/tree.ts', why: 'the feature' }], forks: [] },
         );
         const lonelyRun = drive(lonely);
         check(
@@ -373,10 +373,10 @@ function selftest() {
         const built = makeTree(
             'built',
             {
-                '01-a': { 'src/tree.ts': 'a\n', 'dist/content.js': 'built from 01\n', 'node_modules/x/i.js': 'dep\n' },
-                '02-b': { 'src/tree.ts': 'a\n', 'dist/content.js': 'built from 02, differently\n', 'node_modules/x/i.js': 'dep\n' },
+                '01-a': { 'src/family/tree.ts': 'a\n', 'dist/content.js': 'built from 01\n', 'node_modules/x/i.js': 'dep\n' },
+                '02-b': { 'src/family/tree.ts': 'a\n', 'dist/content.js': 'built from 02, differently\n', 'node_modules/x/i.js': 'dep\n' },
             },
-            { shared: [{ path: 'src/tree.ts', why: 'the feature' }], forks: [{ path: 'package.json', why: 'per-project name' }] },
+            { shared: [{ path: 'src/family/tree.ts', why: 'the feature' }], forks: [{ path: 'package.json', why: 'per-project name' }] },
         );
         const builtRun = drive(built);
         check(

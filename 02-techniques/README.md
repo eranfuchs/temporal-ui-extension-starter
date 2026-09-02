@@ -125,7 +125,7 @@ kinds the page world accepts is the thing a reviewer counts, and this feature wa
 not worth adding one. Two details are load-bearing:
 
 - **The floor is on the receiving side.** `FRESH_FLOOR_MS` (5s) lives in
-  `src/rowInfoServe.ts`, not in the button, because the button is one `postMessage`
+  `src/rowInfo/rowInfoServe.ts`, not in the button, because the button is one `postMessage`
   away from anything else running in the page: a bound applied by the caller is a
   bound only an honest caller keeps. An answer younger than the floor is left in the
   cache, so a held-down refresh — or a script forging the message in a loop —
@@ -161,7 +161,7 @@ one badge, for the worst of them.
 
 **The badge does not read the failure message, and will not.**
 `pendingActivities[].lastFailure.message` sits directly beside `attempt`, and the
-internal extension this starter was extracted from does show it. Here it is
+internal extension this starter reimplements does show it. Here it is
 declined: a failure message is application data — it routinely carries account
 numbers, customer ids, upstream response bodies — and it would be the one thing on
 screen that a bystander must not read. The attempt count, the activity **type** (a
@@ -178,31 +178,32 @@ is visible rather than merely intended.
 | **Running rows only** | A closed workflow's last event and pending activities cannot change, so the request could never tell anyone anything. A list filtered to `Completed` makes no requests at all — this one filter is usually most of the saving. |
 | **Rows the table is showing**, not the whole response | The page fetches more rows than it draws. |
 | **One field, one call** | The two toggles are separate, so a user who wants only the column pays one request per running row and not two. |
-| **Answers cached 30s** in the page world | Set in `TTL_MS`, `src/rowInfoServe.ts`. |
-| **Asked at most every 35s** per run in the table world | `ASK_INTERVAL_MS`, `src/rowInfoClient.ts`. The cache alone is not enough: a request answered *from* cache is still a `postMessage` per row per render pass, and there are a great many render passes. |
-| **Four requests at a time** | `maxConcurrent`, in `src/pacer.ts`. A hundred-row list becomes a queue, not a burst. |
-| **429/503 backs off**, honouring `Retry-After` | `src/pacer.ts` again: 2s doubling to a 60s ceiling, or the server's own `Retry-After` when it sent one. A rate limiter answered with a retry storm is how one tab degrades the API for a whole team. |
-| **No polling timer, and no heartbeat at all** | Refresh comes from the Temporal UI polling its own list, which re-renders the table, which asks again — and the TTLs decide whether asking turns into fetching. Nothing here polls Temporal on its own, and nothing here holds a repeating timer: freezing the ages (above) is what removed the last one. The two timers left are both one-shots that make no request — the single pass `src/content.ts` schedules `FRESH_FLOOR_MS` after a `⟳` press, purely to re-enable the button, and the backoff sleep in `src/pacer.ts`, which exists to make *fewer* requests. |
-| **A manual refresh is floored at 5s** per run | `FRESH_FLOOR_MS`, `src/rowInfoServe.ts`. The `⟳` in the header bypasses the 30s cache; this is the bound on how far. It is checked in the page world, because the message that asks for it can be posted by anything in the page. |
+| **Answers cached 30s** in the page world | Set in `TTL_MS`, `src/rowInfo/rowInfoServe.ts`. |
+| **Asked at most every 35s** per run in the table world | `ASK_INTERVAL_MS`, `src/rowInfo/rowInfoClient.ts`. The cache alone is not enough: a request answered *from* cache is still a `postMessage` per row per render pass, and there are a great many render passes. |
+| **Four requests at a time** | `maxConcurrent`, in `src/page/pacer.ts`. A hundred-row list becomes a queue, not a burst. |
+| **429/503 backs off**, honouring `Retry-After` | `src/page/pacer.ts` again: 2s doubling to a 60s ceiling, or the server's own `Retry-After` when it sent one. A rate limiter answered with a retry storm is how one tab degrades the API for a whole team. |
+| **No polling timer, and no heartbeat at all** | Refresh comes from the Temporal UI polling its own list, which re-renders the table, which asks again — and the TTLs decide whether asking turns into fetching. Nothing here polls Temporal on its own, and nothing here holds a repeating timer: freezing the ages (above) is what removed the last one. The two timers left are both one-shots that make no request — the single pass `src/content.ts` schedules `FRESH_FLOOR_MS` after a `⟳` press, purely to re-enable the button, and the backoff sleep in `src/page/pacer.ts`, which exists to make *fewer* requests. |
+| **A manual refresh is floored at 5s** per run | `FRESH_FLOOR_MS`, `src/rowInfo/rowInfoServe.ts`. The `⟳` in the header bypasses the 30s cache; this is the bound on how far. It is checked in the page world, because the message that asks for it can be posted by anything in the page. |
 
 Each bound above is asserted somewhere rather than only described here: **which**
 rows are asked about, and how often, in `tests/unit/rowInfoClient.spec.ts`; the
 cache and its **expiry**, many render passes during one slow request collapsing into
 one request, a refusal that is cached without pausing the rows that were not
 refused, the four-at-a-time cap and the `Retry-After` wiring in the *four things
-that keep the per-row questions affordable* block of `tests/unit/apiInject.spec.ts`,
-which counts requests against a fake network; the pacer's own time invariants in
+that keep the per-row questions affordable* block of
+`tests/unit/apiInjectRowInfo.spec.ts`, which counts requests against a fake network
+shared with the trust-boundary specs next door; the pacer's own time invariants in
 `tests/unit/pacer.spec.ts`, with the clock injected; and the refresh path from both
 ends — that a press asks again immediately but does not become a licence to keep
 asking, and that it keeps the answers already on screen, in
 `tests/unit/rowInfoClient.spec.ts`, and that the button greys itself out for exactly
-as long as the receiver would refuse it, in `tests/unit/render.spec.ts`. **The freeze
-is asserted the same way**, because "the number does not move on its own" is a claim
-about a thing that did move on its own until recently: `tests/unit/render.spec.ts`
-renders the same answers ninety seconds apart and asserts the cell still reads
-`3m 00s` and that the pass wrote nothing at all, and `tests/unit/apiInject.spec.ts`
-asserts a cache hit is dated when the *data* was read rather than when the reply was
-sent. A comment claiming a bound and
+as long as the receiver would refuse it, in `tests/unit/renderRowInfo.spec.ts`. **The
+freeze is asserted the same way**, because "the number does not move on its own" is a
+claim about a thing that did move on its own until recently:
+`tests/unit/renderRowInfo.spec.ts` renders the same answers ninety seconds apart and
+asserts the cell still reads `3m 00s` and that the pass wrote nothing at all, and
+`tests/unit/apiInjectRowInfo.spec.ts` asserts a cache hit is dated when the *data* was
+read rather than when the reply was sent. A comment claiming a bound and
 a test counting requests are not the same artefact, and this feature is the one place
 in the repository where the difference is billable.
 
@@ -228,7 +229,7 @@ activity on a workflow's page; everything else is a workflow link. So there is n
 second list to maintain, no scope dropdown, and no way for the two to disagree —
 and a misspelled `{activityTyp}` stays a *visible* unknown token on a
 workflow-scoped link instead of silently moving the whole template to a page you
-were not editing. `templateScope` in `src/deepLink.ts` is the whole of that rule.
+were not editing. `templateScope` in `src/links/deepLink.ts` is the whole of that rule.
 
 A template that expands to something that is not `http(s)` does not become a link;
 it is rendered inert, with the reason in its title.
@@ -242,7 +243,7 @@ Two sites, both **inside the UI's own layout**:
   **"Activity Id"**, in each activity panel the reader has opened.
 
 **It fetches nothing.** Everything comes from the history and describe responses the
-page fetched for itself, folded in the page's world by `src/detailWatch.ts` and
+page fetched for itself, folded in the page's world by `src/detail/detailWatch.ts` and
 posted across. No request, no cache, no pacing — and no ledger check, because a
 ledger entry is authority to spend the page's bearer and this feature never spends
 it.
@@ -257,7 +258,7 @@ Three decisions here are worth stealing:
 - **An activity is identified by its id, never by its type.** A run that calls
   `ChargeCard` three times has three activities of that type, so a link keyed on the
   type opens a search that matches all three — and looks right while doing it.
-  `activityByPanelId` in `src/detail.ts` resolves the id the panel is showing to one
+  `activityByPanelId` in `src/detail/detail.ts` resolves the id the panel is showing to one
   activity: `activityId` first, `scheduledEventId` (which Temporal assigns, so it
   cannot repeat) as the fallback. An id that resolves to nothing gets **no link**,
   rather than a link built from whichever activity happens to be newest. When the id
@@ -269,7 +270,7 @@ Three decisions here are worth stealing:
   applies here as much as in the table: the tab bar is found as "the list containing a
   link to this workflow's history", and the activity row as "the row the UI labelled
   Activity Id" — the UI's own name for the field, not a class name or a position.
-  This *is* the fragile kind of anchoring, and the extension this starter came from
+  This *is* the fragile kind of anchoring, and the extension behind this starter
   paid for it: when the selectors went stale the node was not missing, it was attached
   to `<body>` behind the app's own chrome, and it read as "the feature only appears
   after you toggle it". So a bar that cannot find the layout is parked in a corner
@@ -282,7 +283,7 @@ Three decisions here are worth stealing:
   configure itself, on the page where it could simply have worked, has given up.
 - **Fold before posting, never after.** A raw history event carries `input`,
   `result` and `failure`. Posting the events across for the extension's side to
-  reduce would put all of that on the page's message bus. `src/detail.ts` keeps ids,
+  reduce would put all of that on the page's message bus. `src/detail/detail.ts` keeps ids,
   type names, timestamps and attempt counts, and nothing else. Reduce at the
   boundary.
 
@@ -325,7 +326,7 @@ nonetheless a small step:
   not even on `cloud.temporal.io` — it is on the per-tenant host — so the call is
   cross-origin for the page too, and succeeds only because that host names the
   page's origin. From the extension's world it would fail with any manifest. So the
-  fetch lives in the page's world (`src/pageApi.ts`), where it is indistinguishable
+  fetch lives in the page's world (`src/page/pageApi.ts`), where it is indistinguishable
   from one the UI would have made.
 - **The API prefix is derived, never assumed.** It is cut from a URL the page was
   observed to fetch. Cloud and self-hosted differ here, and a hardcoded convention
@@ -505,7 +506,7 @@ does not own.
   assertion rather than a claim (`tests/unit/pacer.spec.ts`), and the *wiring* — the
   header reaching the pacer, the pause applying to rows the server never refused,
   and the pause lifting rather than sticking — is asserted end-to-end through the
-  fake network in `tests/unit/apiInject.spec.ts`. **No real Temporal rate limiter
+  fake network in `tests/unit/apiInjectRowInfo.spec.ts`. **No real Temporal rate limiter
   has answered any of it**, and a synthetic 429 is exactly as considerate as the
   person who wrote it. Worth saying plainly, because the first version of that code
   was inline in `rowInfoServe.ts`, untested, and wrong: it took its slot *after*
@@ -517,29 +518,40 @@ does not own.
 
 ## Layout
 
+`src/` is grouped by lesson. Its root holds the bundle entry points — the three the
+manifest loads plus the popup's, which is the list in `esbuild.mjs` — and the modules
+every lesson touches; each directory below them is one thing the extension does. `src/family/` is stage 01 unchanged; everything else here
+is new in this stage.
+
 ```
 src/
   inject.ts         MAIN world — wraps window.fetch, posts the list rows it sees
-  pageApi.ts        MAIN world — the bearer, the ledger, the response-watcher seam,
-                    and the ONLY function in this build that issues a request
   apiInject.ts      MAIN world — every message accepted from the page, in one switch
-  rowInfoServe.ts   MAIN world — answers the per-row questions: cache, then the pacer
-  pacer.ts          concurrency cap + 429/503 backoff, with the clock injected
-  detailWatch.ts    MAIN world — folds a single workflow's own responses, fetches nothing
-  types.ts          the shapes crossing the postMessage boundary
-  rows.ts           API response → a flat row shape
-  tree.ts           the feature, as a pure function: rows → ordered rows
-  rowInfo.ts        pure: the questions, the answers, and what a badge may say
-  rowInfoClient.ts  which rows are worth asking about, and what came back
-  detail.ts         pure: URL rules, the folds behind the detail-page links, and
-                    which activity an id on the page resolves to
-  deepLink.ts       URL templates: tokens, offsets, scope, and what may become an href
-  temporalApi.ts    pure: the API prefix and the two route builders
-  render.ts         everything that writes to the table
-  detailLinks.ts    the links on a single workflow's page, in the UI's own layout
   content.ts        ISOLATED world — wiring, and nothing else
-  settings.ts       chrome.storage.sync
   popup.ts          the toolbar popup, including "is it working?"
+  render.ts         everything that writes to the table
+  settings.ts       chrome.storage.sync
+  types.ts          the shapes crossing the postMessage boundary
+  page/             the boundary with the page's own Temporal API
+    pageApi.ts      the bearer, the ledger, the response-watcher seam, and the ONLY
+                    function in this build that issues a request
+    temporalApi.ts  pure: the API prefix and the two route builders
+    pacer.ts        concurrency cap + 429/503 backoff, with the clock injected
+  family/           the tree, as pure functions — stage 01, unchanged
+    rows.ts         API response → a flat row shape
+    tree.ts         rows → ordered rows, each with its connector
+  rowInfo/          the two columns that cost a request
+    rowInfo.ts      pure: the questions, the answers, and what a badge may say
+    rowInfoClient.ts  ISOLATED world — which rows are worth asking about, and what
+                    came back
+    rowInfoServe.ts MAIN world — answers them: cache, then the pacer
+  links/
+    deepLink.ts     URL templates: tokens, offsets, scope, and what may become an href
+  detail/           one workflow's own page
+    detail.ts       pure: URL rules, the folds behind the links, and which activity
+                    an id on the page resolves to
+    detailWatch.ts  MAIN world — folds the page's own responses, fetches nothing
+    detailLinks.ts  the links themselves, in the UI's own layout
 public/
   manifest.json     one permission: storage
   popup.html        the settings pane (no inline script — MV3 forbids it)
@@ -549,13 +561,13 @@ tests/              the ordering rules, the DOM bugs that cost the most, and the
                     request gate — including the cases that fail SILENTLY
 ```
 
-`wc -l src/*.ts` prints the size.
+`find src -name '*.ts' | xargs wc -l` prints the size.
 
 The split around the request path is deliberate, and it is what makes the security
-card checkable: `rowInfo.ts` and `temporalApi.ts` are pure and therefore testable,
-`pageApi.ts` is the only file that issues a request, and `render.ts` and
-`detailLinks.ts` are the only ones that touch the page. Reviewing "what can this
-thing send" means reading one file.
+card checkable: `src/rowInfo/rowInfo.ts` and `src/page/temporalApi.ts` are pure and
+therefore testable, `src/page/pageApi.ts` is the only file that issues a request, and
+`render.ts` and `src/detail/detailLinks.ts` are the only ones that touch the page.
+Reviewing "what can this thing send" means reading one file.
 
 ## What it deliberately does not do
 

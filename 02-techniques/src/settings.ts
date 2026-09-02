@@ -5,11 +5,11 @@
 //
 // It DOES make requests — that is the point of this stage. They go to the API the
 // page is already talking to, from inside the page, with the page's own session,
-// and only for runs that page was already handed: see src/pageApi.ts for the
-// ledger that enforces the last part, and src/pacer.ts for what keeps the volume
+// and only for runs that page was already handed: see src/page/pageApi.ts for the
+// ledger that enforces the last part, and src/page/pacer.ts for what keeps the volume
 // down. Two of the toggles below are what turn those requests on.
 
-import { templateScope, type DeepLinkTemplate } from './deepLink';
+import { templateScope, type DeepLinkTemplate } from './links/deepLink';
 
 export interface Settings {
     // Master switch. Off = the extension writes nothing to the page.
@@ -49,7 +49,7 @@ export interface Settings {
 // template and printing a line on the page telling the reader to add an activity
 // token if they wanted the other kind — which is a feature explaining how to
 // configure itself on the page where it could simply have worked. See the note at the
-// top of src/detailLinks.ts.
+// top of src/detail/detailLinks.ts.
 //
 // The activity template is also the worked example of the identity rule in
 // deepLink.ts: it is keyed on `{activityId}`, NOT on `{activityType}` — a type

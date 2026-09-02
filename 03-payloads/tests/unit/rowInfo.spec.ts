@@ -25,7 +25,7 @@ import {
     retryBadgeLabel,
     retryBadgeTitle,
     type PendingRetry,
-} from '../../src/rowInfo';
+} from '../../src/rowInfo/rowInfo';
 import { MESSAGE_SOURCE } from '../../src/types';
 
 const NOW = Date.parse('2026-01-01T12:00:00Z');

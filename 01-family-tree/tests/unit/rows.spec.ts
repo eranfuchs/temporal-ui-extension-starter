@@ -8,7 +8,7 @@ import {
     normalizeExecutions,
     runKey,
     simplifyStatus,
-} from '../../src/rows';
+} from '../../src/family/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
 import type { TemporalApiWorkflow } from '../../src/types';
 

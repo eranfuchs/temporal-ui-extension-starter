@@ -135,14 +135,20 @@ own failure case is worse than no gate.
 
 ## Layout
 
+`src/` is grouped by lesson: its root holds the bundle entry points — the two in
+`esbuild.mjs`, both named by the manifest — plus the modules every lesson touches, and
+each directory below them is one thing the extension does. The later projects add
+files and directories here; they do not rearrange these.
+
 ```
 src/
   inject.ts     MAIN world — wraps window.fetch, posts what it sees
-  types.ts      the shapes crossing the postMessage boundary
-  rows.ts       API response → a flat row shape
-  tree.ts       the feature, as a pure function: rows → ordered rows
-  render.ts     the only code that writes to the DOM
   content.ts    ISOLATED world — wiring, and nothing else
+  render.ts     the only code that writes to the DOM
+  types.ts      the shapes crossing the postMessage boundary
+  family/       the feature, as pure functions
+    rows.ts     API response → a flat row shape
+    tree.ts     rows → ordered rows, each with its connector
 public/
   manifest.json no permissions
   content.css   the connectors
@@ -150,9 +156,10 @@ public/
 tests/          the ordering rules, and the two DOM bugs that cost the most
 ```
 
-`wc -l src/*.ts` prints the size. `tsconfig.json` sets `"types": []` — this
-project needs no ambient type package, not even `@types/chrome`, and the
-typechecker is where that claim is enforced rather than asserted.
+`find src -name '*.ts' | xargs wc -l` prints the size. `tsconfig.json` sets
+`"types": []` — this project needs no ambient type package, not even
+`@types/chrome`, and the typechecker is where that claim is enforced rather than
+asserted.
 
 ## What it deliberately does not do
 

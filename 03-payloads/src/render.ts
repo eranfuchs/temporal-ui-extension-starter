@@ -12,7 +12,7 @@
 // hardest to notice by eye (see tests/unit/render.spec.ts).
 //
 // Three rules govern this file. Each was learned the hard way in the internal
-// extension this starter was extracted from.
+// extension this starter reimplements.
 //
 //  1. ANCHOR TO MEANING, NOT POSITION.
 //     Rows are found by `a[href*="/workflows/"]`, never by column index or CSS
@@ -30,9 +30,9 @@
 //     The UI re-renders on its own schedule and will throw our nodes away. We
 //     do not try to prevent that. We re-apply, cheaply, after it settles.
 
-import { expandTemplate, templatesInScope, type DeepLinkContext, type DeepLinkTemplate } from './deepLink';
-import { formatAgePrecise, FRESH_FLOOR_MS, lastEventTitle, retryBadgeLabel, retryBadgeTitle } from './rowInfo';
-import type { RowInfo } from './rowInfoClient';
+import { expandTemplate, templatesInScope, type DeepLinkContext, type DeepLinkTemplate } from './links/deepLink';
+import { formatAgePrecise, FRESH_FLOOR_MS, lastEventTitle, retryBadgeLabel, retryBadgeTitle } from './rowInfo/rowInfo';
+import type { RowInfo } from './rowInfo/rowInfoClient';
 import type { SegmentKind, WorkflowRow } from './types';
 
 export const PREFIX_CLASS = 'tuis-prefix';
@@ -458,7 +458,7 @@ function buildColumnHead(headRow: HTMLTableRowElement): HTMLTableCellElement {
     const doc = headRow.ownerDocument;
     const th = doc.createElement('th');
     th.className = COLUMN_HEAD_CLASS;
-    th.title = 'Added by this extension. One history request per running row — see src/rowInfoServe.ts.';
+    th.title = 'Added by this extension. One history request per running row — see src/rowInfo/rowInfoServe.ts.';
 
     const label = doc.createElement('span');
     label.className = COLUMN_LABEL_CLASS;

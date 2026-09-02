@@ -6,7 +6,7 @@
 //   1. Both sites are INSIDE the page's own layout — the bar beside the page's own
 //      tabs, the activity links inside the row the UI labels "Activity Id". The
 //      floating box this file used to test is the failure, not the design; the note
-//      at the top of src/detailLinks.ts says why.
+//      at the top of src/detail/detailLinks.ts says why.
 //   2. When the layout cannot be found the bar is parked somewhere VISIBLE and
 //      returns inline by itself on a later pass. A way-station, not a destination.
 //   3. An activity link is about ONE activity, resolved from the id on screen. An
@@ -26,8 +26,8 @@ import {
     receiveDetailFacts,
     syncDetailLinks,
     type DetailLinksOptions,
-} from '../../src/detailLinks';
-import { MAX_ACTIVITIES, NO_FACTS, type DetailActivity, type DetailFacts } from '../../src/detail';
+} from '../../src/detail/detailLinks';
+import { MAX_ACTIVITIES, NO_FACTS, type DetailActivity, type DetailFacts } from '../../src/detail/detail';
 import { ACTIVITY_LINKS_CLASS, LINK_BAR_CLASS, LINK_BLOCKED_CLASS, LINK_CLASS } from '../../src/render';
 import { fakeRunId } from '../helpers';
 import { MESSAGE_SOURCE } from '../../src/types';
@@ -488,7 +488,7 @@ describe('the activity links', () => {
         expect(groups()[0]!.title).toContain('ChargeCard · ↻ 900 · pending · scheduled 1h ago');
         // The one assertion here about a decision rather than a shape: the fold never
         // carries a failure message, so there is none here to leak. See the note at
-        // the top of src/rowInfo.ts.
+        // the top of src/rowInfo/rowInfo.ts.
         expect(groups()[0]!.title).not.toContain('declined');
     });
 

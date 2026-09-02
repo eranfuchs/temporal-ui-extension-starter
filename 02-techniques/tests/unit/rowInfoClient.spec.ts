@@ -11,15 +11,15 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { isRowInfoRequest, MAX_RUNS_PER_REQUEST, type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo';
+import { isRowInfoRequest, MAX_RUNS_PER_REQUEST, type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo/rowInfo';
 import {
     clearRowInfo,
     installRowInfo,
     MAX_REMEMBERED_RUNS,
     requestRowInfo,
     rowInfoFor,
-} from '../../src/rowInfoClient';
-import { normalizeExecutions } from '../../src/rows';
+} from '../../src/rowInfo/rowInfoClient';
+import { normalizeExecutions } from '../../src/family/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
 import { MESSAGE_SOURCE, type WorkflowRow } from '../../src/types';
 

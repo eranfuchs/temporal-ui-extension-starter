@@ -9,16 +9,35 @@
 // in every document was wrong simultaneously — which is what made a gate cheaper
 // than proofreading.
 //
-// It checks three things, and nothing else:
+// It checks five things, and nothing else:
 //
 //   1. Markdown links — [text](target) — for local targets.
-//   2. Backticked path-looking strings, e.g. `src/tree.ts`, resolved against the
+//   2. Backticked path-looking strings, e.g. `src/family/tree.ts`, resolved against the
 //      document's own directory, the repository root, AND each project directory.
 //      Three bases because docs/how-it-works.md deliberately writes paths
 //      relative to "a project directory": the mechanism is identical in all of
 //      them, so naming one would be misleading.
 //   3. Backticked `npm run <script>` commands, against every package.json in the
 //      repository. A renamed script is the same silent rot as a moved file.
+//   4. The same path citations inside NON-Markdown project files — `public/*.css`
+//      comments above all, and the RESPONSIBILITY headers at the top of every
+//      source file. Checks 1-3 read Markdown only, and that blind spot was not
+//      theoretical: regrouping src/ into lesson directories left eight dead
+//      `src/rowInfo.ts`-style citations in two content.css files, which this gate
+//      reported clean because it never opened them.
+//   5. A quoted spec TITLE against the spec file cited beside it. This is the one
+//      check aimed at a citation that RESOLVES and is still wrong: splitting a
+//      monolithic spec leaves every old filename in place, so the prose keeps
+//      pointing at a real file that no longer holds the claim. Only titles
+//      containing whitespace are checked — see the filter for why a single
+//      identifier cannot be told apart from ordinary prose.
+//
+//      ITS LIMIT, MEASURED RATHER THAN GUESSED: re-introducing the two real
+//      post-split citation errors this repository had, one was caught and one was
+//      not. The one it missed cited a spec and then DESCRIBED it — "which counts
+//      requests against a fake network" — without quoting a block, so there is
+//      nothing to compare a filename against. Check 5 rewards prose that quotes
+//      the block it means; prose that only paraphrases is still on trust.
 //
 // What it deliberately does NOT check: prose. A doc can claim anything about
 // behaviour and this gate will not notice — see `npm run surface` and the unit
@@ -50,19 +69,21 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.vite', '.idea']);
 //   leakgate.local.txt — gitignored by design; a fork may not have one
 const NOT_YET_PRESENT = [/(^|\/)dist(\/|$)/, /(^|\/)leakgate\.local\.txt$/, /(^|\/)node_modules(\/|$)/];
 
-function markdownFiles(root) {
+function filesUnder(root, accept) {
     const found = [];
     const walk = (dir) => {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
             if (SKIP_DIRS.has(entry.name)) continue;
             const full = join(dir, entry.name);
             if (entry.isDirectory()) walk(full);
-            else if (/\.md$/i.test(entry.name)) found.push(full);
+            else if (accept(entry.name)) found.push(full);
         }
     };
     walk(root);
     return found;
 }
+
+const markdownFiles = (root) => filesUnder(root, (name) => /\.md$/i.test(name));
 
 // Temporal payload encodings. They live in a payload's `metadata.encoding` as
 // `type/subtype`, and a doc about a codec server cannot discuss them without
@@ -136,7 +157,7 @@ function main(argv) {
     }
 
     const findings = [];
-    const counted = { links: 0, paths: 0, commands: 0 };
+    const counted = { links: 0, paths: 0, commands: 0, sourcePaths: 0, titles: 0 };
 
     for (const doc of docs) {
         const where = relative(root, doc);
@@ -193,11 +214,127 @@ function main(argv) {
         });
     }
 
+    // 4. Path citations inside non-Markdown project files.
+    //
+    // No backticks to key off here, so the shape has to carry it: a run beginning at
+    // one of the repository's own top-level directory names and ending in an
+    // extension. That is deliberately narrower than looksLikePath() — a CSS file is
+    // full of slashes that are division, and a .ts file is full of import specifiers
+    // and URLs. Anchoring on `src/`, `tests/`, `public/`, `docs/` or `scripts/` costs
+    // the citations written without one of those prefixes and buys a check with no
+    // false positives, which is the trade that makes it runnable in preflight.
+    for (const dir of projectDirs) {
+        for (const file of filesUnder(dir, (name) => /\.(css|html|ts)$/.test(name))) {
+            const where = relative(root, file);
+            const bases = [dir, root, dirname(file)];
+            readFileSync(file, 'utf8')
+                .split('\n')
+                .forEach((line, index) => {
+                    for (const match of line.matchAll(/\b(?:src|tests|public|docs|scripts)\/[\w./-]*\.\w+/g)) {
+                        const path = match[0];
+                        counted.sourcePaths++;
+                        if (isExempt(path)) continue;
+                        if (!bases.some((base) => existsSync(join(base, path)))) {
+                            findings.push(`${where}:${index + 1}: cites a path that exists nowhere: ${path}`);
+                        }
+                    }
+                });
+        }
+    }
+
+    // 5. A quoted spec title against the spec cited beside it.
+    const specTitles = new Map();
+    for (const dir of projectDirs) {
+        for (const spec of filesUnder(dir, (name) => /\.spec\.ts$/.test(name))) {
+            for (const match of readFileSync(spec, 'utf8').matchAll(/\b(?:describe|it)\((['"`])([^'"`]+)\1/g)) {
+                const title = match[2].replace(/\s+/g, ' ').trim();
+                if (!specTitles.has(title)) specTitles.set(title, new Set());
+                specTitles.get(title).add(spec);
+            }
+        }
+    }
+
+    for (const doc of docs) {
+        const where = relative(root, doc);
+        // Paragraphs, because a citation and the title it supports are written in the
+        // same breath but rarely on the same line. Fenced blocks are excluded: a fence
+        // may legitimately SHOW a describe() next to a different path.
+        const paragraphs = [];
+        let current = [];
+        let inFence = false;
+        readFileSync(doc, 'utf8')
+            .split('\n')
+            .forEach((line, index) => {
+                if (/^\s*```/.test(line)) {
+                    inFence = !inFence;
+                    if (current.length) paragraphs.push(current);
+                    current = [];
+                    return;
+                }
+                if (inFence) return;
+                if (line.trim() === '') {
+                    if (current.length) paragraphs.push(current);
+                    current = [];
+                } else {
+                    current.push({ line, no: index + 1 });
+                }
+            });
+        if (current.length) paragraphs.push(current);
+
+        for (const paragraph of paragraphs) {
+            const text = paragraph.map((entry) => entry.line).join('\n');
+
+            // Whitespace-normalised, so a title that WRAPPED across a line still
+            // matches the single-spaced title in the spec. That newline is the entire
+            // reason the first version of this check reported clean on a real mismatch.
+            //
+            // And only titles containing whitespace: `codecDecodeCall` is both a
+            // describe title and the ordinary way prose refers to the function, so a
+            // single identifier cannot be read as a citation of the block. Requiring a
+            // sentence-like title is what removed the only two false positives this
+            // check has ever produced.
+            const quoted = new Set(
+                [...text.matchAll(/`([^`]+)`/g)]
+                    .map((match) => match[1].replace(/\s+/g, ' ').trim())
+                    .filter((title) => specTitles.has(title) && /\s/.test(title)),
+            );
+            if (quoted.size === 0) continue;
+
+            // Resolved to absolute paths, not compared by suffix: several projects
+            // have a `tests/unit/apiInject.spec.ts`, and a suffix match would credit
+            // 03 for a block that only 02's copy contains.
+            const cited = new Set();
+            for (const match of text.matchAll(/[\w./-]*tests\/[\w./-]*\.spec\.ts/g)) {
+                for (const base of [dirname(doc), root, ...projectDirs]) {
+                    const absolute = resolve(base, match[0].replace(/^\.*\//, ''));
+                    if (existsSync(absolute)) {
+                        cited.add(absolute);
+                        break;
+                    }
+                }
+            }
+            if (cited.size === 0) continue;
+
+            for (const title of quoted) {
+                counted.titles++;
+                const holders = [...specTitles.get(title)];
+                if (holders.some((holder) => cited.has(holder))) continue;
+                findings.push(
+                    `${where}:${paragraph[0].no}: quotes the block "${title}", which lives in ` +
+                        `${holders.map((holder) => relative(root, holder)).join(', ')}, beside a citation of ` +
+                        `${[...cited].map((entry) => relative(root, entry)).join(', ')}`,
+                );
+            }
+        }
+    }
+
     if (!quiet) {
         console.log(`doc-paths: read ${docs.length} Markdown file(s) under ${relative(ROOT, root) || '.'}`);
         console.log(`  links checked: ${counted.links}`);
         console.log(`  backticked paths checked: ${counted.paths}`);
         console.log(`  npm commands checked: ${counted.commands}`);
+        console.log(`  paths cited in source files checked: ${counted.sourcePaths}`);
+        console.log(`  quoted spec blocks checked: ${counted.titles} (of ${specTitles.size} known)`);
     }
 
     if (findings.length > 0) {
@@ -209,7 +346,8 @@ function main(argv) {
 
     if (!quiet) {
         console.log(
-            `doc-paths: clean — ${counted.links} link(s), ${counted.paths} path(s), ${counted.commands} command(s)`,
+            `doc-paths: clean — ${counted.links} link(s), ${counted.paths} path(s), ${counted.commands} command(s), ` +
+                `${counted.sourcePaths} source citation(s), ${counted.titles} spec block(s)`,
         );
     }
     return 0;
@@ -225,10 +363,13 @@ function selftest() {
     };
 
     // A tree with one project, one real source file, and one npm script.
-    const makeTree = (name, markdown) => {
+    const makeTree = (name, markdown, extra = {}) => {
         const treeRoot = join(dir, name);
-        mkdirSync(join(treeRoot, '01-a', 'src'), { recursive: true });
-        writeFileSync(join(treeRoot, '01-a', 'src', 'tree.ts'), 'export const x = 1;\n');
+        // Nested under src/family/, so the fixture exercises the same shape the real
+        // projects have: a citation the gate must resolve through a lesson directory
+        // rather than straight off src/.
+        mkdirSync(join(treeRoot, '01-a', 'src', 'family'), { recursive: true });
+        writeFileSync(join(treeRoot, '01-a', 'src', 'family', 'tree.ts'), 'export const x = 1;\n');
         writeFileSync(
             join(treeRoot, '01-a', 'package.json'),
             JSON.stringify({ name: '01-a', version: '0.0.0', scripts: { build: 'true' } }),
@@ -238,6 +379,11 @@ function selftest() {
             JSON.stringify({ name: 'root', version: '0.0.0', scripts: { preflight: 'true' } }),
         );
         writeFileSync(join(treeRoot, 'README.md'), markdown);
+        for (const [path, contents] of Object.entries(extra)) {
+            const full = join(treeRoot, path);
+            mkdirSync(dirname(full), { recursive: true });
+            writeFileSync(full, contents);
+        }
         return treeRoot;
     };
 
@@ -250,7 +396,7 @@ function selftest() {
                 [
                     '# Fixture',
                     '',
-                    'See [the project](01-a/) and `src/tree.ts`, built with `npm run build`.',
+                    'See [the project](01-a/) and `src/family/tree.ts`, built with `npm run build`.',
                     'Root check: `npm run preflight`. Install once: `npm install`.',
                     'Cloud lives at `https://cloud.temporal.io/*` and the API at `/api/v1/namespaces/{ns}/workflows`.',
                     'Sizes: `wc -l src/*.ts`. Load from `chrome://extensions`.',
@@ -278,7 +424,7 @@ function selftest() {
 
         // The reason for the three-base rule: a doc may write a path relative to
         // a project directory rather than to itself.
-        const projectRelative = drive(makeTree('relative', 'Every project has a `src/tree.ts`.\n'));
+        const projectRelative = drive(makeTree('relative', 'Every project has a `src/family/tree.ts`.\n'));
         check(
             'resolves a path written relative to a project directory',
             projectRelative.status === 0,
@@ -320,6 +466,105 @@ function selftest() {
             'ignores external links and anchors',
             external.status === 0,
             `exit ${external.status}: ${external.output.trim()}`,
+        );
+
+        // ── Check 4: citations inside non-Markdown project files ──────────────
+        // The case that motivated it: a CSS comment naming the source file that
+        // styles the element it describes, left behind when src/ was regrouped.
+        const cssGood = drive(
+            makeTree('cssgood', '# Fixture\n', {
+                '01-a/public/content.css': '/* Written by src/family/tree.ts. */\n.x { top: 0; }\n',
+            }),
+        );
+        check('accepts a live path cited in a CSS comment', cssGood.status === 0, cssGood.output.trim());
+
+        const cssDead = drive(
+            makeTree('cssdead', '# Fixture\n', {
+                '01-a/public/content.css': '/* Written by src/rowInfo.ts. */\n.x { top: 0; }\n',
+            }),
+        );
+        check(
+            'rejects a dead path cited in a CSS comment, which no Markdown check reads',
+            cssDead.status === 1 && cssDead.output.includes('src/rowInfo.ts'),
+            `exit ${cssDead.status}: ${cssDead.output.trim()}`,
+        );
+
+        // ── Check 5: a quoted spec block against the spec cited beside it ──────
+        const specs = {
+            '01-a/tests/unit/a.spec.ts': "describe('the shape of one row', () => {});\n",
+            '01-a/tests/unit/b.spec.ts': "describe('the shape of the whole family', () => {});\ndescribe('mergeDecoded', () => {});\n",
+        };
+
+        const titleRight = drive(
+            makeTree(
+                'titleright',
+                [
+                    '# Fixture',
+                    '',
+                    'Asserted in `tests/unit/b.spec.ts` — the `the shape of the whole family`',
+                    'block, from outside.',
+                    '',
+                    'Write a citation like this:',
+                    '',
+                    '```markdown',
+                    'Asserted in `tests/unit/a.spec.ts` — the `the shape of the whole family` block.',
+                    '```',
+                    '',
+                ].join('\n'),
+                specs,
+            ),
+        );
+        check(
+            'accepts a quoted block beside the spec that holds it, and ignores a fenced example',
+            titleRight.status === 0,
+            `exit ${titleRight.status}: ${titleRight.output.trim()}`,
+        );
+
+        // The post-split failure this check exists for: the cited file still EXISTS,
+        // so checks 1-3 pass. The title is wrapped across a line on purpose — that
+        // newline defeated the first version of this check, and without the
+        // whitespace normalisation this case goes green and reports nothing.
+        const titleMoved = drive(
+            makeTree(
+                'titlemoved',
+                [
+                    '# Fixture',
+                    '',
+                    'Asserted in `tests/unit/a.spec.ts` — the `the shape of the whole',
+                    'family` block, from outside.',
+                    '',
+                ].join('\n'),
+                specs,
+            ),
+        );
+        check(
+            'rejects a quoted block cited beside a spec that no longer holds it',
+            titleMoved.status === 1 && titleMoved.output.includes('the shape of the whole family'),
+            `exit ${titleMoved.status}: ${titleMoved.output.trim()}`,
+        );
+
+        // The negative control for the whitespace rule. `mergeDecoded` is a describe
+        // title in b.spec.ts AND the ordinary way prose names the function; treating
+        // it as a citation of the block made this check produce false positives on
+        // two real paragraphs. Prose about one spec may name a function tested in
+        // another.
+        const titleIdentifier = drive(
+            makeTree(
+                'titleidentifier',
+                [
+                    '# Fixture',
+                    '',
+                    'The row rules are in `tests/unit/a.spec.ts`; they call `mergeDecoded`',
+                    'to build the fixture.',
+                    '',
+                ].join('\n'),
+                specs,
+            ),
+        );
+        check(
+            'does not treat a single-identifier block title as a citation',
+            titleIdentifier.status === 0,
+            `exit ${titleIdentifier.status}: ${titleIdentifier.output.trim()}`,
         );
 
         const empty = join(dir, 'empty');

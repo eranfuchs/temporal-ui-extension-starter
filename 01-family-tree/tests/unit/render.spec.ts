@@ -20,8 +20,8 @@ import {
     type Placement,
     type PlacementLookup,
 } from '../../src/render';
-import { buildTree } from '../../src/tree';
-import { normalizeExecutions, runKey } from '../../src/rows';
+import { buildTree } from '../../src/family/tree';
+import { normalizeExecutions, runKey } from '../../src/family/rows';
 import { apiWorkflow, buildWorkflowTable, fakeRunId, rowOrder, workflowLink } from '../helpers';
 import type { TemporalApiWorkflow } from '../../src/types';
 

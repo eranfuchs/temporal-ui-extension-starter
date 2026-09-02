@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { apiPrefixOf, describeWorkflowUrl, historyUrl } from '../../src/temporalApi';
+import { apiPrefixOf, describeWorkflowUrl, historyUrl } from '../../src/page/temporalApi';
 import { fakeRunId } from '../helpers';
 
 const RUN_ID = fakeRunId(1);

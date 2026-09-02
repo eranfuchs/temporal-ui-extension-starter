@@ -9,8 +9,8 @@ import {
     templatesInScope,
     tokensIn,
     type DeepLinkActivity,
-} from '../../src/deepLink';
-import { normalizeExecutions } from '../../src/rows';
+} from '../../src/links/deepLink';
+import { normalizeExecutions } from '../../src/family/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
 import type { WorkflowRow } from '../../src/types';
 
@@ -125,7 +125,7 @@ describe('expandTemplate', () => {
 
     it('identifies ONE execution, not every execution of its type', () => {
         // The rule this vocabulary is built around — see "AN ACTIVITY IS IDENTIFIED BY
-        // ITS ID, NEVER BY ITS TYPE" at the top of src/deepLink.ts. A run that calls
+        // ITS ID, NEVER BY ITS TYPE" at the top of src/links/deepLink.ts. A run that calls
         // ChargeCard three times has three activities with that type; what tells them
         // apart is the id, the scheduled event id, and the window between them.
         const r = row({ workflowId: 'x' });
