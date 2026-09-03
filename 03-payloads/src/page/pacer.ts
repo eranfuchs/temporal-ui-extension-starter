@@ -1,35 +1,50 @@
 // The load control for the only feature in this repository that makes requests of
-// its own volume — and the reason it is a module of its own rather than four
-// variables at the top of rowInfoServe.ts.
+// its own volume: what keeps a screen of rows from becoming a screen of requests,
+// and what happens when the server says "slow down".
 //
-// WHY IT WAS EXTRACTED: the pacer was inline, it was the one piece of this
-// extension a reader is most likely to copy, and it was WRONG in a way no test
-// could have caught, because it had no tests. It read:
+// TWO THINGS LIVE HERE, AND THE SPLIT IS THE POINT.
 //
-//     while (active >= MAX_CONCURRENT) await waitForASlot();
-//     const pause = blockedUntil - Date.now();
-//     if (pause > 0) await sleep(pause);       // ← the slot is NOT held yet
-//     active++;
+//   The slot accounting — "run at most four of these at a time, queue the rest,
+//   start the next one when one finishes" — is p-limit's. It is a generic
+//   algorithm with no Temporal in it, and this file used to contain a hand-written
+//   version that was WRONG in a way no test could catch, because it had no tests:
 //
-// Check, then wait, then reserve. During a backoff nothing is running, so `active`
-// is 0, so EVERY caller passes the check, sleeps, and wakes together: a hundred
-// rows became a hundred simultaneous requests at the exact moment the server had
-// asked for fewer. The concurrency cap held in the only case where it was never
-// needed and failed in the only case where it was.
+//       while (active >= MAX_CONCURRENT) await waitForASlot();
+//       const pause = blockedUntil - Date.now();
+//       if (pause > 0) await sleep(pause);       // ← the slot is NOT held yet
+//       active++;
 //
-// Two rules fix it, and both are properties of this file rather than of its caller:
+//   Check, then wait, then reserve. During a backoff nothing is running, so
+//   `active` is 0, so EVERY caller passed the check, slept, and woke together: a
+//   hundred rows became a hundred simultaneous requests at the exact moment the
+//   server had asked for fewer. The cap held in the only case where it was never
+//   needed and failed in the only case where it was.
 //
-//   1. A SLOT IS RESERVED BEFORE ANY WAITING, and held across it. A backoff
-//      therefore parks at most `maxConcurrent` callers; the rest queue behind them
-//      and drain a slot at a time.
-//   2. THE SLOT IS HANDED OVER, never released into a pool. release() wakes one
-//      waiter WITHOUT decrementing, so there is no window between "a slot is free"
-//      and "I have it" for a second caller to see. A check-then-act race cannot be
-//      written here, because there is no check to lose.
+//   The pacing POLICY is ours, and stays ours, because every line of it is a
+//   decision about a specific server: which Retry-After forms to read, how long a
+//   wait to believe, what to do when the server says slow down without saying how
+//   long for, and which of two overlapping delays wins. No library knows any of
+//   that, and a reader porting this to their own backend changes only this half.
+//
+// INVARIANT: the pacing library supplies slots and nothing else. In particular a
+// server-directed Retry-After is never expressed as a library rate limit.
+// Breaking it: `intervalCap` is a fixed rate WE choose, not a wait the SERVER
+// asked for, and dressing the second as the first buries the half a reader forks.
+// p-queue was measured against p-limit here; see docs/design-notes.md#two-queue-libraries-measured.
+//
+// HOW THE ORIGINAL BUG STAYS FIXED: the backoff sleep happens INSIDE the limited
+// task, so a caller waiting out a Retry-After is holding its slot — p-limit counts
+// it in `activeCount`, not `pendingCount`. A backoff therefore parks at most
+// `maxConcurrent` callers and the rest stay queued behind them, which is both
+// original rules at once: nothing fetches before the block expires, and the expiry
+// cannot release the queue as a burst, because the queue never had more than four
+// callers in it to release.
 //
 // The clock and sleep are injected for one reason: every invariant above is about
 // TIME, and a test that cannot control time can only assert the shape of the code.
-// tests/unit/pacer.spec.ts drives all four with a fake clock and no timers.
+// tests/unit/pacer.spec.ts drives all of them with a fake clock and no timers.
+
+import pLimit from 'p-limit';
 
 export interface PacerClock {
     now(): number;
@@ -58,40 +73,24 @@ export interface Pacer {
     // The server said slow down. Returns the wait it settled on, for the log line.
     noteRateLimit(retryAfterHeader: string | null): number;
     noteSuccess(): void;
-    // Introspection, for tests and for the popup's cost report. `active` counts
-    // slots held, which during a backoff includes callers that are waiting rather
-    // than fetching — that is the point of holding the slot.
+    // Introspection. Nothing in the UI reads these today — the tests do, because
+    // the invariants below are about counts at a moment in time and there is no
+    // other way to observe one. `active` counts slots HELD, which during a backoff
+    // includes callers that are waiting rather than fetching: that is the point of
+    // holding the slot, and it is the difference this whole file turns on.
     active(): number;
     waiting(): number;
     blockedForMs(): number;
 }
 
 export function makePacer(clock: PacerClock, limits: PacerLimits): Pacer {
-    let active = 0;
-    const waiting: (() => void)[] = [];
+    const limit = pLimit(limits.maxConcurrent);
     let blockedUntil = 0;
     let backoffMs = limits.backoffStartMs;
 
-    function acquire(): Promise<void> {
-        if (active < limits.maxConcurrent) {
-            active++;
-            return Promise.resolve();
-        }
-        // Resolving this promise MEANS "you own a slot" — see release().
-        return new Promise<void>((resolve) => waiting.push(resolve));
-    }
-
-    function release(): void {
-        const next = waiting.shift();
-        // Handed over, not returned: `active` deliberately does not change here.
-        if (next) next();
-        else active--;
-    }
-
     return {
-        async run<T>(work: () => Promise<T>): Promise<T> {
-            await acquire();
-            try {
+        run<T>(work: () => Promise<T>): Promise<T> {
+            return limit(async () => {
                 // A loop, not an `if`: another response can EXTEND the block while
                 // this caller is asleep in it, and waking into a still-blocked
                 // window to fetch anyway is the bug this whole file is about.
@@ -100,10 +99,8 @@ export function makePacer(clock: PacerClock, limits: PacerLimits): Pacer {
                     if (pause <= 0) break;
                     await clock.sleep(pause);
                 }
-                return await work();
-            } finally {
-                release();
-            }
+                return work();
+            });
         },
 
         noteRateLimit(retryAfterHeader: string | null): number {
@@ -126,8 +123,12 @@ export function makePacer(clock: PacerClock, limits: PacerLimits): Pacer {
             if (clock.now() >= blockedUntil) backoffMs = limits.backoffStartMs;
         },
 
-        active: () => active,
-        waiting: () => waiting.length,
+        // p-limit's own two counters, which are exactly the two questions worth
+        // asking: `activeCount` is tasks that have STARTED and not finished — a
+        // caller asleep in a backoff is one of them, because it holds its slot —
+        // and `pendingCount` is the ones still queued behind them.
+        active: () => limit.activeCount,
+        waiting: () => limit.pendingCount,
         blockedForMs: () => Math.max(0, blockedUntil - clock.now()),
     };
 }

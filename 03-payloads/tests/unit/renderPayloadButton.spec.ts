@@ -75,7 +75,7 @@ describe('the payload button', () => {
         expect(tbody.querySelectorAll(`.${PAYLOAD_CLASS}`)).toHaveLength(1);
     });
 
-    it('puts the badge, then the button, then the links, whichever toggle was used first', () => {
+    it('puts the badge, then the links, then the button, whichever toggle was used first', () => {
         // The order on screen must not depend on the order the toggles were used in.
         // All three controls are created with appendChild, so this spec fails the
         // moment syncControlOrder stops running — and it fails only in the second
@@ -99,7 +99,7 @@ describe('the payload button', () => {
         };
         // Spelled out rather than derived from CELL_CONTROL_ORDER: a spec that reads
         // the answer out of the source it is checking passes on every order.
-        const wanted = ['retry', 'payload', 'link'];
+        const wanted = ['retry', 'link', 'payload'];
 
         const all = buildWorkflowTable(document, [{ workflowId: 'child-a', runId: CHILD_A_RUN }]);
         applyToTable(all, lookupFor(FAMILY), { ...withBadge, linksEnabled: true, links, payloadsEnabled: true });
@@ -111,9 +111,9 @@ describe('the payload button', () => {
         // Switched on one at a time, in the exact reverse of the wanted order — the
         // append history that used to decide it, and the one that produced the wrong
         // row.
-        applyToTable(later, lookup, { ...OPTIONS, linksEnabled: true, links });
-        applyToTable(later, lookup, { ...OPTIONS, linksEnabled: true, links, payloadsEnabled: true });
-        applyToTable(later, lookup, { ...withBadge, linksEnabled: true, links, payloadsEnabled: true });
+        applyToTable(later, lookup, { ...OPTIONS, payloadsEnabled: true });
+        applyToTable(later, lookup, { ...OPTIONS, payloadsEnabled: true, linksEnabled: true, links });
+        applyToTable(later, lookup, { ...withBadge, payloadsEnabled: true, linksEnabled: true, links });
         expect(order(later)).toEqual(wanted);
     });
 

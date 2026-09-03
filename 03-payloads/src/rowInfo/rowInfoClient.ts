@@ -19,9 +19,11 @@
 // that is 'fresh' below, and it is only ever reached by a user pressing the control
 // in the column header.
 
+import { safeParse } from 'valibot';
+
 import {
-    isRowInfoResult,
     MAX_RUNS_PER_REQUEST,
+    rowInfoResultSchema,
     type LastEvent,
     type PendingRetry,
     type RowInfoField,
@@ -73,10 +75,11 @@ export const MAX_REMEMBERED_RUNS = 2_000;
 export function installRowInfo(onUpdate: () => void): void {
     window.addEventListener('message', (event: MessageEvent) => {
         if (event.source !== window) return;
-        const data: unknown = event.data;
-        // Well-formed to the leaves — see isRowInfoResult, which validates every
+        // Well-formed to the leaves — see rowInfoResultSchema, which describes every
         // nested field for exactly this reason. It is still only a SHAPE check.
-        if (!isRowInfoResult(data)) return;
+        const answer = safeParse(rowInfoResultSchema, event.data);
+        if (!answer.success) return;
+        const data = answer.output;
         const key = askKey(data.namespace, data.workflowId, data.runId);
         // ONLY IF WE ASKED. `postMessage` has no authenticated sender, so this is
         // not authentication and cannot be made into it — anything running in the
@@ -152,7 +155,7 @@ export function requestRowInfo(
     }
     if (runs.length === 0) return 0;
 
-    // Sent in chunks the receiver will accept. isRowInfoRequest caps `runs` —
+    // Sent in chunks the receiver will accept. rowInfoRequestSchema caps `runs` —
     // because anyone in the page can send that message — and a cap is enforced by
     // dropping the WHOLE message, so a table larger than the cap would silently
     // produce no answers at all. Chunking here rather than raising the cap keeps

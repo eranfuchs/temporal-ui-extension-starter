@@ -6,7 +6,9 @@
 // Two of these specs exist because of a failure mode that produces CONFIDENT WRONG
 // OUTPUT rather than an error, which is the only kind worth writing a long test
 // about:
-//   • pretty-printing a long integer silently changes its value;
+//   • pretty-printing a long integer silently changes its value, which is why this
+//     rung does not pretty-print at all — a payload is displayed as the bytes that
+//     arrived, and the spec asserts the round-trip it declines to do;
 //   • matching on eventType instead of the attributes key works on one Temporal
 //     version and quietly finds nothing on the next.
 
@@ -24,7 +26,6 @@ import {
     formatPayloads,
     MAX_DISPLAY_CHARS,
     needsCodec,
-    prettyJson,
 } from '../../src/payloads/payloads';
 import { b64, event, FIXTURE_RUN_ID, payload } from '../payloadFixtures';
 
@@ -71,7 +72,7 @@ describe('extractOutcome', () => {
         ];
         const outcome = extractOutcome({ events })!;
         expect(outcome.label).toBe('Completed');
-        expect(formatPayloads(outcome.payloads)).toContain('"ok": true');
+        expect(formatPayloads(outcome.payloads)).toBe('{"ok":true}');
     });
 
     it('reads a failure as text, innermost cause included', () => {
@@ -143,8 +144,26 @@ describe('describeFailure', () => {
 });
 
 describe('decoding a payload', () => {
-    it('pretty-prints json/plain', () => {
-        expect(decodePayload(payload('json/plain', '{"a":1}'))).toBe('{\n  "a": 1\n}');
+    it('hands back json/plain exactly as it arrived, unformatted', () => {
+        expect(decodePayload(payload('json/plain', '{"a":1}'))).toBe('{"a":1}');
+    });
+
+    it('cannot change an id no round-trip could survive, because it never parses', () => {
+        // THE REASON THIS RUNG DOES NOT FORMAT. The first assertion is the bug that
+        // would exist if it did: the naive round-trip changes the value, and the
+        // result looks exactly like real data. The second is that decodePayload —
+        // the function a reader follows from the panel, base64 then UTF-8 then
+        // display — puts out the same bytes it took in.
+        const text = '{"transactionId":12345678901234567890}';
+        expect(JSON.stringify(JSON.parse(text))).not.toBe(text);
+        expect(decodePayload(payload('json/plain', text))).toBe(text);
+    });
+
+    it('treats every readable encoding the same way', () => {
+        // No encoding gets special display treatment. text/plain that looks like
+        // JSON, and json/plain itself, come out identically — as their own bytes.
+        expect(decodePayload(payload('text/plain', '{"a":1}'))).toBe('{"a":1}');
+        expect(decodePayload(payload('json/plain', '  {"spaced" :  1}  '))).toBe('  {"spaced" :  1}  ');
     });
 
     it('decodes UTF-8, not one character per byte', () => {
@@ -181,24 +200,6 @@ describe('decoding a payload', () => {
         // ends up rendered as mojibake in a tooltip.
         expect(encodingOf({})).toBe('');
         expect(needsCodec({})).toBe(true);
-    });
-});
-
-describe('prettyJson', () => {
-    it('leaves the server’s own formatting alone when a long integer is present', () => {
-        // The assertion below is the reason this function exists: the naive
-        // round-trip CHANGES THE VALUE, and the result looks like real data.
-        const text = '{"transactionId":12345678901234567890}';
-        expect(JSON.stringify(JSON.parse(text))).not.toBe(text);
-        expect(prettyJson(text)).toBe(text);
-    });
-
-    it('still formats ordinary numbers', () => {
-        expect(prettyJson('{"n":42}')).toBe('{\n  "n": 42\n}');
-    });
-
-    it('returns the text unchanged when it is not JSON after all', () => {
-        expect(prettyJson('<html>not json</html>')).toBe('<html>not json</html>');
     });
 });
 

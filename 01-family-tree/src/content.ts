@@ -8,6 +8,8 @@
 // storage, no messaging, no popup to answer. That is why its manifest asks for
 // no permissions at all — see 01-family-tree/README.md.
 
+import { safeParse } from 'valibot';
+
 import { buildTree, countFamilies } from './family/tree';
 import {
     emptyPlacementIndex,
@@ -18,7 +20,7 @@ import {
     type PlacementIndex,
 } from './family/rows';
 import { applyToTable, findWorkflowTbody, namespaceFromLocation, type Placement } from './render';
-import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
+import { workflowsMessageSchema } from './types';
 
 const TAG = '[temporal-family-tree]';
 
@@ -33,12 +35,22 @@ let appliedGeneration = -1;
 // ── Receiving rows ───────────────────────────────────────────────────────────
 
 window.addEventListener('message', (event: MessageEvent) => {
-    // Both checks matter. `event.source !== window` rejects messages from
-    // iframes; the source tag rejects the rest of the page's own postMessage
-    // traffic, and a single-page app does have some.
+    // `event.source !== window` rejects messages from iframes, and it is the only
+    // check here that says anything about WHERE the message came from.
     if (event.source !== window) return;
-    const data = event.data as WorkflowsMessage | undefined;
-    if (data?.source !== MESSAGE_SOURCE || data.type !== 'workflows') return;
+
+    // Everything past this line is about SHAPE, and shape is not provenance: the
+    // schema rejects a message that does not look like ours, but any script in
+    // this window can send one that does. The source tag also does the mundane
+    // job of ignoring the rest of the page's own postMessage traffic, of which a
+    // single-page app has plenty.
+    //
+    // safeParse rather than parse: a stray message must be dropped, not throw
+    // inside an event listener. What we go on to read is `data`, not `event.data`
+    // — narrowed, unknown keys stripped, and never cast.
+    const parsed = safeParse(workflowsMessageSchema, event.data);
+    if (!parsed.success) return;
+    const data = parsed.output;
 
     // Is this answer the newest one, and is it even about this table? Neither
     // question is answerable from the DOM, and getting either wrong looks like a

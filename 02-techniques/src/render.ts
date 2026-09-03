@@ -241,11 +241,14 @@ function decorateRow(
 // It is also the reason the two render modules do not need to know about each
 // other: each appends its own node wherever it likes, and this settles the result.
 //
-// Why this order and not another: the number of deep links is whatever the
-// settings list holds, so anything placed to their right moves when a user adds
-// a link. The badge is the loudest thing drawn here and the one worth finding at
-// a glance, so it gets the fixed position closest to the id, and the
-// variable-length list goes last. This is the row drawn in README.md.
+// Why this order and not another: the badge is the loudest thing drawn here and
+// the one worth finding at a glance, so it gets the position closest to the id,
+// and the links follow it. It matters that the links are the variable-length
+// half — the settings list decides how many there are — so whatever a later
+// stage appends after them shifts when a user adds or removes one. 03 appends
+// its `{ }` button there anyway, with that cost stated where it makes the
+// choice; the point here is that the cost is a property of this order, not a
+// surprise 03 ran into. This is the row drawn in README.md.
 const CELL_CONTROL_ORDER = [RETRY_CLASS, LINK_CLASS];
 
 // Returns whether anything moved, which is also what makes it testable.

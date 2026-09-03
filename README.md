@@ -67,7 +67,7 @@ visible. Three rungs are here; stage 04 is planned:
 | [`01-family-tree/`](01-family-tree/) | the family tree, and nothing else | **none** | **none** | none |
 | [`02-techniques/`](02-techniques/) | deep links to your own log tool (per row, and per activity on a workflow's own page), a settings pane, a "last event" column with a refresh control, a retrying-activity badge | `storage` | up to two per **running** row, to the page's own Temporal API, paced and cached — plus whatever the refresh control is pressed for, floored at one round per run per 5s. Nowhere else | none |
 | [`03-payloads/`](03-payloads/), the **payload stage** | each workflow's input and result on hover, decoded through your own codec server | `storage` — **the same permission surface as 02** | the above, plus one history event per question — one for a running row, two for a closed one — and, only once you have named one, the codec server you typed into the popup | none |
-| stage 04, conveniences — sketched only | column reorder, a larger page size, an activity finder, expand-to-families | `storage` | no new destination | none |
+| stage 04, conveniences — sketched only | column reorder, a larger page size, an activity finder, expand-to-families, and a payload **viewer** — collapsible values, colour per value. 03's panel briefly had a version of this and it was removed; the survey of why is in [`docs/design-notes.md`](docs/design-notes.md#every-json-viewer-wanted-a-parsed-value) | `storage` | no new destination | none |
 
 The "requests" column is there because it is the one cost the manifest does
 **not** show. 02 declares no `host_permissions` and still originates requests: it
@@ -80,7 +80,7 @@ either: **02 never decodes a payload.** Everything it shows is derived from even
 metadata — event types, ids, timestamps, attempt counts, activity type names — so
 there is no codec server, no outbound host, and no way for a workflow's input,
 result or failure message to reach the screen or the wire. 03 crosses that line on
-purpose, which is why the codec server, the first external dependency and the whole
+purpose, which is why the codec server, the first outbound host and the whole
 personal-data question arrive together, in one project, rather than being spread
 across the ladder.
 
@@ -150,17 +150,20 @@ The cards are not maintained by good intentions:
 
 | Gate | Refuses |
 |---|---|
-| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a runtime dependency, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
+| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also refuses a **third-party package inside a bundle that the budget does not name**, which esbuild's own metafile decides rather than `package.json` — see [Dependencies](#dependencies). Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
 | `npm run lineage` | a file duplicated across projects that has drifted, or that nobody has decided may drift — see [`scripts/lineage.json`](scripts/lineage.json) |
 | `npm run leak:gate` | private IPs, key material, bearer tokens, JWTs, and URLs pointing at hosts that are not on a short public allowlist |
 | `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves. And the heading a `#fragment` names, because a wrong anchor does not 404 — GitHub leaves the reader at the top of the page, which reads as "that section was deleted" |
 | `npm run preflight` | an `engines.node` wider than the locked dependencies support, on top of everything below. The declaration is dead text to everyone already working here and live only for a first-time cloner, whose `--engine-strict` install then fails before any gate can explain why |
 
 Every gate ships with a self-test — `npm run surface:selftest`,
-`npm run lineage:selftest`, `npm run leak:selftest`, `npm run doc:selftest` —
-driving it against a case per rule it must reject and a case it must accept. A
-gate that has quietly stopped detecting its own failure case is worse than no
-gate: it converts an unchecked risk into a false assurance.
+`npm run lineage:selftest`, `npm run leak:selftest`, `npm run doc:selftest`,
+`npm run preflight:selftest` — driving it against a case per rule it must reject
+and a case it must accept. A gate that has quietly stopped detecting its own
+failure case is worse than no gate: it converts an unchecked risk into a false
+assurance. The last one on that list is the newest, and it was missing for the
+worst possible reason: `preflight` runs the other four and was the only gate here
+trusted purely on the strength of looking correct.
 
 ### Every feature ships on, except one
 
@@ -182,6 +185,57 @@ If you fork this inside a company, put your own internal terms in a **gitignored
 `leakgate.local.txt` — see [`leakgate.denylist.example`](leakgate.denylist.example).
 A repository that publishes the list of your internal hostnames has already
 leaked it.
+
+## Dependencies
+
+There used to be a rule here saying **no runtime dependencies**, and it read as a
+security property. It was not one. It was a rule about where code was typed, and
+it was paid for in hand-written schema validators, a hand-written promise queue
+and very nearly a hand-written JSON scanner — code with no upstream, no test
+suite but ours, and no reviewers but us. The rule now is a judgement instead:
+
+> **Browser APIs and code in this repository for anything specific to this
+> extension** — the trust boundaries, the authorization decisions, what is allowed
+> to leave the machine. **Mature, maintained libraries for generic algorithms,**
+> where using one makes the example easier to read and harder to get wrong.
+
+**A dependency diff is not a manifest permission diff, but it is still an
+audit-surface diff. The repository budgets and reports both.** A package cannot
+grant itself a permission — the manifest is the only thing that can, and it is
+budgeted separately — but it does run inside the extension's own origin with the
+extension's own privileges, so "which packages, and how did they get in" is a
+question with an answer here rather than an install log.
+
+| | Enters the bundles | Arrives behind another package |
+|---|---|---|
+| [01](01-family-tree/README.md#dependencies) | `valibot` | — |
+| [02](02-techniques/README.md#dependencies) | `valibot`, `p-limit` | `yocto-queue` |
+| [03](03-payloads/README.md#dependencies) | `valibot`, `p-limit`, `jsonc-parser` | `yocto-queue` |
+
+Each project's README carries a **dependency card** with the version, the licence,
+what the package is for, which bundles it is in, and what stayed
+application-owned. `npm run measure` prints what each one currently costs each
+bundle, from the same esbuild metafile the gate reads;
+[`docs/design-notes.md`](docs/design-notes.md#dependencies) records the
+alternatives that were measured and lost, including the two evaluations that ended
+in no dependency at all.
+
+Three limits on that, stated rather than implied:
+
+- **The budget covers the bundles a user loads.** Repository tooling under
+  `scripts/` has its own dependencies — a semver implementation, a Markdown
+  parser, GitHub's slug algorithm — which are `devDependencies` and reach no
+  browser. Lower stakes, not zero: a gate that is wrong in the accepting direction
+  is worse than no gate, which is why each one has a self-test.
+- **This is an audit, not an attestation.** Nothing here verifies a package's
+  contents against its repository, pins by integrity hash beyond what
+  `package-lock.json` already does, or claims that a package that has been fine so
+  far will stay fine. What it does guarantee is that a *new* package appearing in a
+  bundle is a diff someone has to approve, including one that arrives as a
+  dependency of a dependency.
+- **Not one line of it is minified.** Every bundle ships readable with a source
+  map, so what a package contributes can be read in `dist/` rather than taken on
+  trust.
 
 ## Layout
 
@@ -214,6 +268,7 @@ Run at the **repository root**; each one runs in every project.
 | `npm test` | Unit + jsdom specs |
 | `npm run typecheck` | `tsc --noEmit`, over `src/` **and** `tests/` |
 | `npm run surface` | The permission budget, sinks, dependencies, binaries |
+| `npm run measure` | Source, test and bundle sizes per project, and what each third-party package costs each bundle |
 | `npm run lineage` | Files duplicated across projects |
 | `npm run leak:gate` | Scan tracked files for anything that should not be published |
 | `npm run doc:paths` | Every path, link, anchor and command the docs name still exists — in Markdown and in source comments — and every quoted spec block is cited beside the spec that holds it |
@@ -229,52 +284,31 @@ results, quote the UNVERIFIED count too.**
 
 ## Status
 
-Specific about which parts are proven:
+Three projects are built and used; stage 04 is not written. What is worth knowing
+before you copy any of it:
 
-- **Verified by specs** — the ordering and connector rules, the row shaping, and
-  the DOM behaviour including idempotency. `npm run preflight` runs them.
-- **Verified on live Temporal Cloud** — `01-family-tree` only, on 2026-08-31, in
-  Chrome 151, against one tenant and one page of 100 workflows: the fetch
-  piggyback, the URL shape, the row match, the indentation and connectors, the
-  stylesheet, and idempotency, each measured separately — and the number of rows
-  indented compared against the number of parent/child pairs the payload actually
-  contained, rather than against an expectation. One version of Cloud on one
-  tenant is a data point, not a guarantee; see
-  [`01-family-tree/README.md`](01-family-tree/README.md) for exactly what was
-  and was not covered.
-- **Proven in production, elsewhere** — the mechanism. The piggyback, the
-  `window.fetch` getter lock and the render loop are **proven in** an internal
-  extension that has run against Temporal Cloud daily for months. What crossed over
-  is the set of lessons, written down here and implemented again from scratch: this
-  repository is a clean-room reimplementation, not a copy, and nothing in it was
-  taken from that codebase.
-- **Partly verified on live Temporal Cloud** — `02-techniques`. What was driven on
-  a tenant is the plumbing every feature here stands on: the fetch piggyback, the
-  API-prefix derivation, the bearer capture, the ledger check and one real history
-  request answered end to end. It took three rounds, and **each round found a bug a
-  green suite had just missed** — including the one that matters most for anyone
-  copying this: 02 installs a *second* `window.fetch` observer, the page's own
-  wrapper evicted it, the tree went on working, and every per-row question answered
-  "Nothing observed on this page yet" for the life of the tab, silently (trap 8).
-- **Not verified on a tenant** — `02-techniques`' newest features: the **last-event
-  column** (including its refresh control and its frozen, dated ages), the
-  **retrying-activity badge** and the **detail-page links**. They were
-  built after those rounds. Their specs are green, which on this repository's own
-  evidence is not the same thing; treat every claim about how they behave on a real
-  tenant as unverified, and see the "What has not been done" section of
-  [`02-techniques/README.md`](02-techniques/README.md).
-- **Not verified on a tenant, and not against a real codec server** —
-  `03-payloads`, in full. Its specs are green, including every egress claim asserted
-  from the attacker's side against a fake network that records request bodies; no
-  round has been driven on a live tenant, and no real codec server has answered a
-  `/decode`. The panel's own hover behaviour was fixed *because* of a live round on
-  the internal extension it was rewritten from, which is the strongest available
-  argument for not trusting the specs alone. See the "What has not been done"
-  section of [`03-payloads/README.md`](03-payloads/README.md).
-- **Not verified here** — any project against a self-hosted UI holding real
-  workflows; the rate-limit backoff against a real Temporal rate limiter;
-  `sample/` end-to-end, whose dependencies have not been installed on the machine it
-  was written on; and everything about stage 04, which does not exist yet.
+- **The mechanism is proven elsewhere.** The piggyback, the `window.fetch` getter
+  lock and the render loop come from an internal extension that has run against
+  Temporal Cloud daily for months. What crossed over is the set of lessons, written
+  down here and implemented again from scratch: this repository is a clean-room
+  reimplementation, not a copy, and nothing in it was taken from that codebase.
+- **A green suite has missed real bugs here, repeatedly**, and the two worst are
+  worth knowing because they are not this repository's alone. 02 installs a
+  *second* `window.fetch` observer and the page's own wrapper evicted it: the tree
+  went on working while every per-row question answered "Nothing observed on this
+  page yet" for the life of the tab, silently (trap 8). And a payload panel closed
+  the instant the pointer entered it — unusable, and invisible to jsdom, which
+  computes no layout and has no pointer. Both are fixed; neither had a failing test
+  before somebody looked at the screen.
+- **A UI you do not own can move under you.** Everything here reads Temporal's own
+  markup and URLs. A Cloud release can change the list URL, a row's shape or a
+  field's label, and the honest answer is that this code finds out the same way you
+  would. Where a selector is load-bearing, the file says so and the failure is
+  visible rather than silent — the deep-link bar parks itself in the corner and the
+  popup reports it.
+- **Not covered at all**: any project against a self-hosted UI holding real
+  workflows; the rate-limit backoff against a real Temporal rate limiter; and
+  `sample/` end to end, whose dependencies have never been installed.
 
 Expect a self-hosted UI on another hostname to need that hostname adding to the
 project's `public/manifest.json` — and to `scripts/surface.json`, deliberately,

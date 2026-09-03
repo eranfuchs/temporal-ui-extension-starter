@@ -399,9 +399,10 @@ function appendSection(host: HTMLElement): { heading: HTMLElement; body: HTMLEle
     section.className = `${PANEL_CLASS}-section`;
     const heading = document.createElement('div');
     heading.className = `${PANEL_CLASS}-heading`;
-    // <pre>, because a decoded payload is pretty-printed JSON and its
-    // indentation is the only thing making it readable. textContent throughout —
-    // this is data authored by whoever started the workflow.
+    // <pre>, because a payload is shown as the exact bytes that arrived — whatever
+    // whitespace the server chose is the whitespace on screen, and collapsing it
+    // would be this panel editing a value somebody may copy back into a request.
+    // Set via textContent only: this is data authored by whoever started the workflow.
     const body = document.createElement('pre');
     body.className = `${PANEL_CLASS}-body`;
     section.append(heading, body);

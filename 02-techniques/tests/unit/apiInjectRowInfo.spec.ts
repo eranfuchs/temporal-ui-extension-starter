@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo/rowInfo';
+import { MAX_RUNS_PER_REQUEST, type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo/rowInfo';
 import { MESSAGE_SOURCE } from '../../src/types';
 import {
     BEARER,
@@ -295,6 +295,43 @@ describe('the four things that keep the per-row questions affordable', () => {
         } finally {
             clock.mockRestore();
         }
+    });
+
+    it('stops remembering answers once the store is full, instead of growing all afternoon', async () => {
+        // 1b. THE BOUND ON THAT CACHE, which the TTL does not give it. An expired
+        // entry is only overwritten when the SAME run is asked about again, and a run
+        // the user has scrolled past never is — so without this the store holds every
+        // run a long-lived tab has ever displayed. It was missing for a long time
+        // precisely because the TTL made the map look self-limiting.
+        //
+        // Mirrors MAX_CACHED_ANSWERS in src/rowInfo/rowInfoServe.ts, for the reason
+        // given at the top of this describe, and self-detecting in the same way:
+        // change the source constant without changing this and the test goes red.
+        const MAX_CACHED_ANSWERS = 2_000;
+
+        const runs = manyRuns(MAX_CACHED_ANSWERS + 1);
+        fake.listBody = listing(runs);
+        await window.fetch(LIST_URL, { headers: { authorization: BEARER } });
+
+        // One field, so one run is one request and the request count IS the number of
+        // entries written. Chunked because rowInfoRequestSchema caps a message.
+        for (let from = 0; from < runs.length; from += MAX_RUNS_PER_REQUEST) {
+            await askRows({ want: ['lastEvent'], runs: runs.slice(from, from + MAX_RUNS_PER_REQUEST) });
+        }
+        // Bounded rather than `while`: an implementation that stopped draining fails
+        // on the assertion below instead of hanging the suite.
+        for (let round = 0; round < 20 && reverseCalls().length < runs.length; round++) await settle();
+        expect(reverseCalls()).toHaveLength(runs.length);
+
+        // The clock has not moved, so nothing has expired. The FIRST run is the one
+        // the eviction discarded, and an unbounded cache answers it without asking.
+        await askOneRow({ want: ['lastEvent'], runs: [runs[0]!] });
+        expect(reverseCalls()).toHaveLength(runs.length + 1);
+
+        // …while the entry written AFTER the eviction is still a hit, which is the
+        // difference between a bound and a cache that has stopped working.
+        await askOneRow({ want: ['lastEvent'], runs: [runs.at(-1)!] });
+        expect(reverseCalls()).toHaveLength(runs.length + 1);
     });
 
     it('turns many render passes during one slow request into one request', async () => {

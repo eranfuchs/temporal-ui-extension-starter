@@ -15,7 +15,7 @@
         },
         {
             "path": "src/types.ts",
-            "why": "The shapes crossing the postMessage boundary, mirroring the API response. A project that needed fewer fields would still receive them, so trimming buys nothing and costs the identity."
+            "why": "The shapes crossing the postMessage boundary, mirroring the API response — schemas parsed at the boundary, with the TypeScript types inferred from them rather than written twice. A project that needed fewer fields would still receive them, so trimming buys nothing and costs the identity."
         },
         {
             "path": "src/family/rows.ts",
@@ -46,12 +46,16 @@
             "why": "Same test policy everywhere, including allowOnly: false."
         },
         {
+            "path": "esbuild.mjs",
+            "why": "One build script for every project, now that the per-project part — the entry-point list — lives in esbuild.config.mjs. It was a fork while it held both."
+        },
+        {
             "path": "src/page/temporalApi.ts",
             "why": "Every URL this extension builds, in one file. A project that built its own would be the project whose requests are not the ones the others were reviewed for — and the forward/reverse history distinction here is exactly the sort of detail that drifts silently once copied."
         },
         {
             "path": "src/links/deepLink.ts",
-            "why": "Pure template expansion, including the rule that an expansion which is not an absolute http(s) URL is not opened. Identical wherever the feature exists."
+            "why": "Pure template expansion, including the rule that an expansion which is not an absolute http(s) URL is not opened, plus the schema for one stored template — this is the shape each project's settings.ts salvages the stored link list against, entry by entry. Identical wherever the feature exists."
         },
         {
             "path": "src/links/linkRender.ts",
@@ -75,7 +79,7 @@
         },
         {
             "path": "src/rowInfo/rowInfo.ts",
-            "why": "The message shapes for the per-row questions and the guards that validate them to the leaves. Both sides of a postMessage boundary read this file; a fork would be a protocol fork."
+            "why": "The message shapes for the per-row questions, as schemas that validate them to the leaves and as the types inferred from those schemas — one declaration, so the wire and the compiler cannot drift apart. Both sides of a postMessage boundary read this file; a fork would be a protocol fork."
         },
         {
             "path": "src/rowInfo/rowInfoClient.ts",
@@ -103,7 +107,7 @@
         },
         {
             "path": "tests/unit/rowInfo.spec.ts",
-            "why": "Pins the shared src/rowInfo/rowInfo.ts guards — the truth table for what crosses the message boundary, which is the file both worlds trust."
+            "why": "Pins the shared src/rowInfo/rowInfo.ts schemas — the truth table for what crosses the message boundary, which is the file both worlds trust. It asserts the constraints this protocol adds and not the schema library's own primitive semantics, which is the rule every schema spec in the repository follows."
         },
         {
             "path": "tests/unit/rowInfoClient.spec.ts",
@@ -112,6 +116,10 @@
         {
             "path": "tests/unit/settings.spec.ts",
             "why": "Pins withActivityScope, which is identical in both projects even though the rest of settings.ts is not: it is the fix for a stored links array that predates the activity template and therefore silently makes every per-activity link unreachable. The spec deliberately touches nothing else in settings.ts, so it can stay byte-identical across the two."
+        },
+        {
+            "path": "tests/unit/schemas.spec.ts",
+            "why": "Pins the shared src/types.ts boundary schemas: the workflow-list envelope, the partial execution shape the row fold reads, and the message the page world posts. Byte-identical because the schemas are, and because the one property it exists to prove is a property of the composition rather than of any project — a malformed entry costs one row and never the whole list. It asserts no primitive semantics of the schema library itself; that rule is stated in its own header."
         },
         {
             "path": "tests/unit/pacer.spec.ts",
@@ -180,8 +188,8 @@
             "why": "01 sets \"types\": [] — it needs no ambient type package at all, and the typechecker is where that claim is enforced. 02 and 03 set \"types\": [\"chrome\"]."
         },
         {
-            "path": "esbuild.mjs",
-            "why": "Entry points differ: 01 builds inject + content; 02 and 03 also build the popup and src/apiInject.ts — a second MAIN-world bundle, which 01 has no use for because it never issues a request."
+            "path": "esbuild.config.mjs",
+            "why": "Entry points differ: 01 builds inject + content; 02 and 03 also build the popup and src/apiInject.ts — a second MAIN-world bundle, which 01 has no use for because it never issues a request. Only this list differs; everything else about the build is identical, which is why esbuild.mjs moved to \"shared\" when the options came out of it."
         },
         {
             "path": "src/page/pageApi.ts",
@@ -197,7 +205,11 @@
         },
         {
             "path": "src/settings.ts",
-            "why": "One stored shape per project, and defaults are a decision each stage makes for itself. 03 adds the payload toggle plus the one field that names an outbound host, and its default is the empty string — the only setting in this repository that defaults to off for a reason other than cost. It deliberately stores NO credential switch beside that host: a `codecIncludeCredentials` was designed, built and then deleted, because the endpoint arrives over postMessage and a default of off protects only the honest path through the popup."
+            "why": "One stored shape per project, and defaults are a decision each stage makes for itself. 03 adds the payload toggle plus the one field that names an outbound host, and its default is the empty string — the only setting in this repository that defaults to off for a reason other than cost. It deliberately stores NO credential switch beside that host: a `codecIncludeCredentials` was designed, built and then deleted, because the endpoint arrives over postMessage and a default of off protects only the honest path through the popup. Each stored shape is a schema, so the fork is also the reason the deleted field is unreachable rather than merely unread — a key absent from the schema is absent from the parsed object, and 02's copy cannot be handed a codec endpoint through storage at all."
+        },
+        {
+            "path": "tests/unit/settingsLoad.spec.ts",
+            "why": "Follows src/settings.ts, which is itself a fork: the field sets differ, so the spec that reads them back cannot be byte-identical. Each project asserts the same four readings over its own shape — a stored false is off and anything else is the shipped default, one unusable field does not discard the ones beside it, the link list is salvaged entry by entry, and the scope backfill stops at the migration marker — and then the one assertion only its stage can make. 03 pins that a `codecIncludeCredentials` still sitting in somebody's chrome.storage.sync is not in the object the loader returns; 02 pins that a stored codec endpoint is not either, because this build has no such setting. tests/unit/settings.spec.ts stays shared beside it: that one covers the pure withActivityScope and touches nothing stage-specific."
         },
         {
             "path": "src/popup.ts",

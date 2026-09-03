@@ -18,9 +18,16 @@
 // is the per-test half — fake timers, the postMessage spy, the table, and the module
 // state that outlives a test.
 
+import { safeParse } from 'valibot';
 import { expect, vi } from 'vitest';
 
-import { isPayloadRequest, type CodecConfig, type PayloadKind, type PayloadRequest, type PayloadResult } from '../src/payloads/payloadMessages';
+import {
+    payloadRequestSchema,
+    type CodecConfig,
+    type PayloadKind,
+    type PayloadRequest,
+    type PayloadResult,
+} from '../src/payloads/payloadMessages';
 import { installPayloadTooltip, resetPayloadState, type TooltipRow } from '../src/payloads/tooltip';
 import { PANEL_CLASS, PAYLOAD_CLASS } from '../src/decoration';
 import { MESSAGE_SOURCE } from '../src/types';
@@ -191,9 +198,10 @@ export function resetHarness(): void {
     posted.length = 0;
     resetPayloadState();
     vi.spyOn(window, 'postMessage').mockImplementation(((message: unknown) => {
-        // The type guard, not a cast: a message the page world would refuse is a
-        // message that was never sent, and a spec should fail in that case.
-        if (isPayloadRequest(message)) posted.push(message);
+        // Parsed, not cast: a message the page world would refuse is a message that
+        // was never sent, and a spec should fail in that case.
+        const request = safeParse(payloadRequestSchema, message);
+        if (request.success) posted.push(request.output);
     }) as typeof window.postMessage);
     // A table row, because openNow resolves the row through button.closest('tr').
     // Built node by node rather than with innerHTML: `npm run surface` parses the

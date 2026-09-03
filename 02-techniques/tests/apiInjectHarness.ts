@@ -22,9 +22,10 @@
 // never saw test 2's list call, so it answers "nothing observed" beside the correct
 // answer and an assertion reads whichever arrived first.
 
+import { safeParse } from 'valibot';
 import { expect, vi } from 'vitest';
 
-import { isRowInfoResult, type RowInfoRequest, type RowInfoResult } from '../src/rowInfo/rowInfo';
+import { rowInfoResultSchema, type RowInfoRequest, type RowInfoResult } from '../src/rowInfo/rowInfo';
 import { MESSAGE_SOURCE } from '../src/types';
 
 export const NAMESPACE = 'sample-namespace';
@@ -152,8 +153,12 @@ export interface Seen {
 export const reachedNetwork: Seen[] = [];
 export const rowInfoResults: RowInfoResult[] = [];
 
+// Captured through the SAME schema the isolated world parses answers with, so every
+// spec that reads an answer is also asserting the serve emits one the receiving side
+// will accept. A cast here would have let the two sides drift with the specs green.
 const capture = (event: MessageEvent) => {
-    if (isRowInfoResult(event.data)) rowInfoResults.push(event.data);
+    const answer = safeParse(rowInfoResultSchema, event.data);
+    if (answer.success) rowInfoResults.push(answer.output);
 };
 
 export const reverseCalls = () => reachedNetwork.filter((seen) => seen.url.includes('/history-reverse'));

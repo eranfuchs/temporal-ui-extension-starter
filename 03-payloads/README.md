@@ -14,19 +14,19 @@ teams actually came for:
 
 ```
 Workflow ID                                  Last event ⟳                   Status
-order-2601011200-01      { }  Logs           3m 00s · ActivityTaskStarted   Running
- ├─ …-01-payment    ↻ 47 { }  Logs           12s · ActivityTaskFailed       Running
- └─ …-01-fulfilment      { }  Logs                                          Completed
-                          └───────────────────────────────────────────┐
-                          │ order-2601011200-01 · OrderWorkflow · Running
-                          │ INPUT · DECODED BY CODEC.EXAMPLE.COM
-                          │ {
-                          │   "orderId": "2601011200-01",
-                          │   "amount": { "currency": "EUR", "minor": 4999 }
-                          │ }
-                          │ RESULT
-                          │ Still running.
-                          └───────────────────────────────────────────┘
+order-2601011200-01      Logs  { }           3m 00s · ActivityTaskStarted   Running
+ ├─ …-01-payment    ↻ 47 Logs  { }           12s · ActivityTaskFailed       Running
+ └─ …-01-fulfilment      Logs  { }                                          Completed
+                                └───────────────────────────────────────────┐
+                                │ order-2601011200-01 · OrderWorkflow · Running
+                                │ INPUT · DECODED BY CODEC.EXAMPLE.COM
+                                │ {
+                                │   "orderId": "2601011200-01",
+                                │   "amount": { "currency": "EUR", "minor": 4999 }
+                                │ }
+                                │ RESULT
+                                │ Still running.
+                                └───────────────────────────────────────────┘
 ```
 
 **This is the rung where three things arrive at once**, which is why it is a stage
@@ -160,13 +160,18 @@ Two details in `src/payloads/payloads.ts` are worth stealing:
   needs both spellings for every case and silently matches neither when a third
   appears. `workflowExecutionStartedEventAttributes` is one string in both — and it
   is also the only place the payloads can be.
-- **Pretty-printing is not free, and the cost is silent.** `JSON.parse` turns every
-  number into an IEEE double, so an id of `12345678901234567890` comes back as
-  `12345678901234567000` and `JSON.stringify` writes that back out. The value on
-  screen is then simply *wrong*, in a way that looks exactly like real data — and
-  account numbers and transaction ids are precisely the fields long enough for it to
-  happen to. When the text contains a long integer literal, the server's own
-  formatting is shown untouched. Ugly beats wrong.
+- **A payload is shown as the bytes that arrived, and nothing re-formats it.**
+  `JSON.parse` turns every number into an IEEE double, so an id of
+  `12345678901234567890` comes back as `12345678901234567000` and `JSON.stringify`
+  writes that back out — the value on screen is then simply *wrong*, in a way that
+  looks exactly like real data, and account numbers and transaction ids are precisely
+  the fields long enough for it to happen to. `decodePayload` therefore does base64,
+  then UTF-8, then stops. A one-line JSON payload is displayed as one line. That is
+  deliberate and it is a real cost: this rung's job is to get the payload in front of
+  you **unaltered**, and typesetting it safely needs a lossless formatter, which needs
+  a JSON lexer, which needs a dependency — stage 04's trade, with the viewer it
+  belongs to. See
+  [`docs/design-notes.md`](../docs/design-notes.md#every-json-viewer-wanted-a-parsed-value).
 
 A failure is a linked list, so `describeFailure` walks `cause` and joins the chain —
 the useful message is usually the innermost one, and the outermost is "activity task
@@ -392,9 +397,9 @@ created, every later render pass leaves it alone.
 
 Keyboard-reachable (it is a real `<button>`, so Tab opens it and Escape closes it),
 `role="tooltip"`, `aria-live="polite"` because the body arrives after a round trip.
-Every value reaches the DOM through `textContent`, inside a `<pre>` — a decoded
-payload is pretty-printed JSON and its indentation is the only thing making it
-readable.
+Every value reaches the DOM through `textContent`, inside a `<pre>` — a payload is
+shown as the exact bytes that arrived, so whatever whitespace the server chose is the
+whitespace on screen.
 
 ## Security card
 
@@ -414,7 +419,7 @@ projects can be compared line by line.
 | **Payloads it decodes** | yes — that is the feature. `json/plain`, `binary/plain`, `text/plain`, `binary/null` in the browser; anything else through your codec server, or not at all |
 | **Credentials it holds** | none. It stores no token. The page's `Authorization` header is read in the page's world and attached **only** to Temporal's own API — there is no parameter, setting or message field that can attach any credential to a codec request. The token option was never built and the cookie option was deleted; the codec `fetch` says `credentials: 'omit'` as a literal |
 | **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace — the same single ledger, now also gating the hover. A request naming any other run is refused *before* the page's token is spent on it |
-| **Third-party code in the bundle** | none. No runtime dependencies |
+| **Third-party code in the bundle** | four packages — `valibot`, `p-limit`, `jsonc-parser`, and `yocto-queue` behind `p-limit`. None of them is on the egress path: the codec request is built and sent by our own code. Budgeted, and checked against what esbuild actually inlined — see [Dependencies](#dependencies) |
 
 ### The row that matters: data leaves the browser
 
@@ -594,11 +599,18 @@ npm run surface        # from the repository root
 `scripts/surface.mjs` compares this project's manifest against the budget in
 [`../scripts/surface.json`](../scripts/surface.json) and fails on a second
 permission, any `host_permissions` entry, a service worker,
-`web_accessible_resources`, `externally_connectable`, a runtime dependency, a
-content-script match outside the three allowed hosts, and any of the markup/code
-sinks. The budget entry for this project is the same as 02's and says so in
-capitals, because the gate can only enforce the floor: **the audit for this rung is
-the security card above, not the permission list.**
+`web_accessible_resources`, `externally_connectable`, a content-script match
+outside the three allowed hosts, and any of the markup/code sinks. The budget entry
+for this project is the same as 02's and says so in capitals, because the gate can
+only enforce the floor: **the audit for this rung is the security card above, not
+the permission list.**
+
+The one place the budget is *not* the same as 02's is the dependency list, which
+gains `jsonc-parser` — and there the gate reads esbuild's metafile rather than
+`package.json`, so it fails on a package inside a bundle that the budget does not
+name, on a budgeted package no bundle contains, and on an import that resolves only
+because a sibling project installed it. Notably, `innerHTML` was **not** allowlisted
+to bring that package in: see [Dependencies](#dependencies).
 
 The tests are also mutation-audited rather than merely green. A green test proves
 nothing until it has been shown to go red, and one hole was found that way: deleting
@@ -617,14 +629,6 @@ explanation than it bought understanding, it was left out — and written down h
 instead of quietly omitted, because an unmentioned gap reads as a gap nobody saw.
 Each of these is a real limitation, small, and known.
 
-- **`prettyJson` guards long integers only, not every number JSON cannot round-trip.**
-  `LONG_INTEGER` in `src/payloads/payloads.ts` catches the case that actually happens to
-  account numbers and transaction ids — a 16-digit-or-longer integer literal — and
-  shows the server's own formatting untouched. It does not catch a high-precision
-  decimal (`1.0000000000000000001` prints as `1`) or an exponent past double range
-  (`1e400` prints as `null`, because `JSON.stringify(Infinity)` is `"null"`). A
-  production build would parse with a lossless reviver, or not re-serialise at all.
-  Verify any claim like this the way these three were: run it, do not reason about it.
 - **`safeCodecEndpoint` returns the string you typed, rather than rebuilding the URL
   from its parts.** It rejects anything that would stop `${endpoint}/decode` from
   being a path join — userinfo, a query, a fragment, and, since the round-trip check
@@ -658,25 +662,35 @@ type-check, and is exactly the change to refuse in review.
 
 ## What has not been done
 
-- **No third-party security review.** The mechanism comes from an extension used
-  internally, but this code is a clean-room rewrite and nobody outside this
-  repository has audited it.
-- **NOT confirmed against a real codec server on a live tenant.** The unit and jsdom
-  specs are green, including every egress claim above against a fake network — and on
-  this repository's own evidence that is not the same thing. A live round here has
-  found something every single time: one found every per-row question answering
-  *"Nothing observed on this page yet"* because the page's own `window.fetch` wrapper
-  had evicted this extension's second observer, silently, for the life of the tab.
-  Another found this very panel closing the instant the pointer entered it — unusable
-  for its actual purpose, with a green suite behind it minutes earlier. Treat the
-  behaviour of the codec path on a real tenant as **unverified**.
+- **No independent security review.** This is not unreviewed code: every change is
+  reviewed as it is written, the message boundary carries specs that forge a message
+  and assert it is refused, and `npm run preflight` re-runs the banned-sink,
+  permission, dependency and secret-scan gates on every pass. What is missing is an
+  outside pair of eyes. The mechanism comes from an extension used internally, but
+  this code is a clean-room rewrite and nobody outside this repository has audited it.
+- **A green suite proves less here than anywhere else in the repository.** Every
+  egress claim above is asserted against a *fake* network, which is the right way to
+  test them and is not the same as having watched the bytes leave. Two of this
+  project's worst bugs were invisible to a green suite minutes old: one had every
+  per-row question answering *"Nothing observed on this page yet"* because the page's
+  own `window.fetch` wrapper had evicted this extension's second observer, silently,
+  for the life of the tab; another had this very panel closing the instant the
+  pointer entered it — unusable for its actual purpose, and untestable in jsdom,
+  which computes no layout and has no pointer.
 - **Rate-limit behaviour has not been observed in the wild.** The pacer is
   unit-tested against a synthetic 429 with an injected clock, and the wiring is
   asserted end-to-end through the fake network. No real Temporal rate limiter has
   answered any of it, and a synthetic 429 is exactly as considerate as the person who
   wrote it.
 - **No supply-chain attestation.** Build it yourself; the bundle is unminified on
-  purpose, so `dist/*.js` is readable.
+  purpose, so `dist/*.js` is readable, including the four third-party packages
+  inside it. What the repository guarantees is that a package cannot enter a bundle
+  without a reviewed diff; it does not verify any package's contents against its
+  repository, and `package-lock.json` integrity hashes are the only pinning there
+  is. This rung is where that distinction has teeth — it is the one with an egress
+  path — so it is worth being precise: no third-party code touches that path. The
+  codec request is assembled, gated and sent by `src/payloads/codec.ts`, and what
+  `jsonc-parser` sees is a payload that has *already* come back.
 
 One thing here *is* live-verified, and it is worth stating because it was carried over
 by hand. The detail-page links — the workflow bar on the tab row, and the per-activity
@@ -695,6 +709,45 @@ popup's "no answer from this tab" message now leads with. And an activity link i
 built if a configured template names an activity token, so a `links` array stored
 before that template existed keeps it out permanently; `withActivityScope` in
 `src/settings.ts` fills the missing *scope* once, until a human edits the list.
+
+## Dependencies
+
+Four packages reach the browser: three chosen, one a consequence of a choice. The
+repository's dependency policy, and the audit-surface argument behind it, are in the
+[root README](../README.md#dependencies). **None of them is on the egress path** —
+that is the row of the security card this section exists to support.
+
+| | `valibot` |
+|---|---|
+| **Version** | 1.4.2 — MIT |
+| **What it is for** | Runtime schema validation at every boundary, including the two this stage adds: the `postMessage` carrying a decoded payload back from the page world, and the codec server's own response |
+| **Bundles it enters** | all four: `dist/apiInject.js`, `dist/content.js`, `dist/inject.js`, `dist/popup.js` |
+| **Packages it brings with it** | none |
+| **What stays ours** | the schemas, and the four invariants about *which answer may be believed* — a validated envelope is not a correlated one. `src/payloads/payloadClient.ts` still matches request to result itself, because a schema cannot tell a well-formed answer to the wrong question from a right one |
+
+| | `p-limit` |
+|---|---|
+| **Version** | 7.3.2 — MIT |
+| **What it is for** | The concurrency limit on requests to Temporal's API — the same four-in-flight ceiling as 02 |
+| **Bundles it enters** | `dist/apiInject.js` only |
+| **Packages it brings with it** | `yocto-queue` 1.2.2 (MIT), its queue, budgeted by name in [`../scripts/surface.json`](../scripts/surface.json) even though nothing of ours imports it |
+| **What stays ours** | the Temporal policy in `src/page/pacer.ts` — both forms of `Retry-After`, the ceiling on a server-requested wait, the exponential fallback, longest overlapping block wins, no reset on a success mid-block, and no burst on resume. This stage keeps **one** pacer shared by the per-row questions and the payload fetches, which is a decision about fairness rather than about counting, so it is ours |
+
+**03 adds no dependency of its own.** It carries exactly what 02 carries. That is
+worth a sentence rather than silence, because this is the rung where a reader would
+most expect one: it reads payloads, and reading JSON properly is what a library is
+for. It briefly had `jsonc-parser` — for a lossless pretty-printer and, on top of
+that, token colouring — and both went back out, along with the regex-based formatter
+that predated them. **This rung does not format a payload at all**: it decodes base64,
+decodes UTF-8, and shows you the result. Displaying JSON *as* JSON is a job of its
+own, and the ladder puts it at stage 04 with the viewer it belongs to. The survey of
+what that viewer would be built on is in
+[`docs/design-notes.md`](../docs/design-notes.md#every-json-viewer-wanted-a-parsed-value).
+
+`npm run measure` prints what each package currently costs each bundle, from the
+same esbuild metafile the gate reads. The comparisons that chose them, and the three
+evaluations that ended in **no** dependency — an LRU cache, a highlighter, and a JSON
+formatter — are in [`docs/design-notes.md`](../docs/design-notes.md#dependencies).
 
 ## Layout
 

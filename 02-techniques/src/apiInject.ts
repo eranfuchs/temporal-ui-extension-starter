@@ -12,19 +12,24 @@
 // message came from this page rather than an iframe, and every script in this page
 // passes it. The gate is in pageApi.ts.
 
+import { safeParse } from 'valibot';
+
 import { installDetailWatch } from './detail/detailWatch';
 import { TAG } from './page/pageApi';
-import { isRowInfoRequest } from './rowInfo/rowInfo';
+import { rowInfoRequestSchema } from './rowInfo/rowInfo';
 import { serveRowInfo } from './rowInfo/rowInfoServe';
 
 window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== window) return;
-    const data: unknown = event.data;
-    // A shape-only parser: it says the message is well-formed and nothing
-    // whatever about who sent it. There is exactly one accepted message in this
-    // build, and adding a second is the moment to re-read pageApi.ts.
-    if (isRowInfoRequest(data)) {
-        serveRowInfo(data);
+    // Shape only: parsing says the message is well-formed and nothing whatever
+    // about who sent it. There is exactly one accepted message in this build, and
+    // adding a second is the moment to re-read pageApi.ts.
+    //
+    // What is served is the PARSED value, never event.data — narrowed to the
+    // declared fields, with anything else stripped, and never cast.
+    const request = safeParse(rowInfoRequestSchema, event.data);
+    if (request.success) {
+        serveRowInfo(request.output);
         return;
     }
 });

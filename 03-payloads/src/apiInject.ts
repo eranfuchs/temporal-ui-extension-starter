@@ -12,18 +12,21 @@
 // message came from this page rather than an iframe, and every script in this page
 // passes it. The gate is in pageApi.ts.
 
+import { safeParse } from 'valibot';
+
 import { installDetailWatch } from './detail/detailWatch';
 import { TAG } from './page/pageApi';
-import { isPayloadRequest } from './payloads/payloadMessages';
+import { payloadRequestSchema } from './payloads/payloadMessages';
 import { servePayloadRequest } from './payloads/payloadServe';
-import { isRowInfoRequest } from './rowInfo/rowInfo';
+import { rowInfoRequestSchema } from './rowInfo/rowInfo';
 import { serveRowInfo } from './rowInfo/rowInfoServe';
 
 window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== window) return;
     const data: unknown = event.data;
-    // Shape-only parsers, each of which says the message is well-formed and
-    // nothing whatever about who sent it.
+    // Shape only, each of which says the message is well-formed and nothing
+    // whatever about who sent it. What is served is always the PARSED value —
+    // narrowed to the declared fields, anything else stripped, never cast.
     //
     // TWO accepted messages in this build, where 02 had one. The second is the more
     // consequential one and it is the reason the trust-boundary note at the top of
@@ -32,12 +35,14 @@ window.addEventListener('message', (event: MessageEvent) => {
     // where a message can influence WHERE a request goes rather than only what it
     // asks about. What bounds it is written up in payloadServe.ts, including the
     // part that is not closed.
-    if (isPayloadRequest(data)) {
-        void servePayloadRequest(data);
+    const payload = safeParse(payloadRequestSchema, data);
+    if (payload.success) {
+        void servePayloadRequest(payload.output);
         return;
     }
-    if (isRowInfoRequest(data)) {
-        serveRowInfo(data);
+    const rowInfo = safeParse(rowInfoRequestSchema, data);
+    if (rowInfo.success) {
+        serveRowInfo(rowInfo.output);
         return;
     }
 });

@@ -15,56 +15,9 @@
 // leaves your browser unless you fill this in" is checkable rather than a promise.
 // Read the note on the field itself before widening what it accepts.
 
-import { templateScope, type DeepLinkTemplate } from './links/deepLink';
+import * as v from 'valibot';
 
-export interface Settings {
-    // Master switch. Off = the extension writes nothing to the page.
-    enabled: boolean;
-    // Draw parent/child connectors and re-order rows into families.
-    treeEnabled: boolean;
-    // Per-row buttons that open this workflow in your own tools.
-    linksEnabled: boolean;
-    links: DeepLinkTemplate[];
-    // The per-row `{ }` button that shows a workflow's input and result. On by
-    // default and it costs nothing until the panel is opened — hover, or keyboard
-    // focus, or a click. One history event per QUESTION, so a running row costs one
-    // request and a closed row two (input and result are different events); drawing
-    // the button costs none. What it can DISPLAY is personal data, which is why
-    // turning it off closes the panel and drops its cache (see content.ts).
-    payloadsEnabled: boolean;
-    // The two features that make requests of their OWN — one per running row each,
-    // paced and cached in rowInfoServe.ts. Separate switches so the cost is
-    // separately refusable; on by default, because they read no user data at all
-    // (the retry badge deliberately does not read the failure message) and a
-    // feature nobody turns on teaches nobody anything.
-    lastEventEnabled: boolean;
-    retryEnabled: boolean;
-    // A Temporal codec server, for the payloads this extension cannot read on its
-    // own — `binary/encrypted` above all.
-    //
-    // EMPTY BY DEFAULT, AND THAT IS THE WHOLE EGRESS STORY. With this field empty no
-    // payload byte leaves the machine, because this is the only place an endpoint can
-    // come from: nothing is read off the page, and nothing is guessed from the
-    // namespace. It is also the one setting in this repository that defaults to off
-    // for a reason other than cost — see "Every feature ships on, except one" in the
-    // root README.
-    codecEndpoint: string;
-    // AND THAT IS THE WHOLE CODEC CONFIG — one field, no credential switch.
-    //
-    // There is deliberately no "pass my access token" and no "send cookies" setting.
-    // Temporal's own UI has both; this extension had both. The endpoint is chosen
-    // through a channel any script on the page can write to, and a credential flag
-    // beside a host from an untrusted channel is a credential someone else can aim.
-    // Defaulting such a flag to off would not have fixed it, because the value that
-    // reaches the fetch comes from the message and not from here. See the CodecConfig
-    // note in payloadMessages.ts, which is longer than this one because a deletion
-    // leaves nothing behind to read.
-    //
-    // Not a feature — a migration marker. True once a human has edited the link list,
-    // after which their choices are taken literally and no scope is filled in for
-    // them. See withActivityScope below for what it prevents.
-    linkScopesSeeded: boolean;
-}
+import { deepLinkTemplateSchema, templateScope, type DeepLinkTemplate } from './links/deepLink';
 
 // The default links point at example.com on purpose: it is a reserved
 // documentation domain, so they cannot accidentally send a workflow id to someone
@@ -97,24 +50,113 @@ export const DEFAULT_ACTIVITY_LINK: DeepLinkTemplate = {
         'https://example.com/search?q={namespace}+{workflowId}+{activityId}&from={activityScheduledIso-1m}&to={activityClosedIso+1m}',
 };
 
-export const DEFAULT_SETTINGS: Settings = {
-    enabled: true,
-    treeEnabled: true,
-    linksEnabled: true,
-    links: [
-        {
-            label: 'Logs',
-            urlTemplate:
-                'https://example.com/search?q={namespace}+{workflowId}&from={startTimeIso-10m}&to={endTimeIso+10m}',
-        },
-        DEFAULT_ACTIVITY_LINK,
-    ],
-    payloadsEnabled: true,
-    lastEventEnabled: true,
-    retryEnabled: true,
-    codecEndpoint: '',
-    linkScopesSeeded: false,
-};
+export const DEFAULT_LINKS: DeepLinkTemplate[] = [
+    {
+        label: 'Logs',
+        urlTemplate:
+            'https://example.com/search?q={namespace}+{workflowId}&from={startTimeIso-10m}&to={endTimeIso+10m}',
+    },
+    DEFAULT_ACTIVITY_LINK,
+];
+
+// The stored settings, as a schema — because the previous author of this object is an
+// OLDER BUILD OF THIS EXTENSION, which is the one boundary here where the untrusted
+// input is our own past self. chrome.storage.sync keeps whatever that build wrote,
+// including fields since renamed, retyped or deleted for being a bad idea.
+//
+// Every field is a v.fallback(), which is this schema's version of what the loader
+// below used to spell as `stored.enabled !== false`: present and false means off, and
+// anything else — absent, a string, a number an older popup wrote — means the shipped
+// default. Reproducing that reading exactly is the requirement, not an approximation
+// of it: a loader that turned a feature off because a stored value had the wrong type
+// would present as "the feature is broken" with a correct settings screen.
+//
+// UNKNOWN KEYS ARE STRIPPED, and IN THIS BUILD that is the load-bearing half rather
+// than the tidy half, because this is the build where the deleted field was real.
+// `codecIncludeCredentials` was a setting here. Anybody who ran that build has a `true`
+// sitting in chrome.storage.sync to this day, and nothing can delete it from their
+// browser. Three independent things now have to stay true for it to be inert — the
+// message shape has no such field (payloadMessages.ts), the fetch hard-wires
+// `credentials: 'omit'` (apiInject.ts), and this one: the parsed settings object does
+// not have the key at all, so a reader added here in future gets `undefined` rather
+// than somebody's five-year-old `true`.
+const settingsSchema = v.object({
+    // Master switch. Off = the extension writes nothing to the page.
+    enabled: v.fallback(v.boolean(), true),
+    // Draw parent/child connectors and re-order rows into families.
+    treeEnabled: v.fallback(v.boolean(), true),
+    // Per-row buttons that open this workflow in your own tools.
+    linksEnabled: v.fallback(v.boolean(), true),
+    // Salvaged ENTRY BY ENTRY, and never accepted or rejected whole: one malformed
+    // template in a list of five costs that template, not the reader's other four.
+    // A stored value that is not a list at all is the different case, and falls back
+    // to the shipped pair. Same shape and same reasoning as normalizeExecutions() in
+    // src/family/rows.ts, for the same reason — a collection from outside is a
+    // collection of separately trustworthy things.
+    links: v.fallback(
+        v.pipe(
+            v.array(v.unknown()),
+            v.transform((entries) =>
+                entries.flatMap((entry) => {
+                    const link = v.safeParse(deepLinkTemplateSchema, entry);
+                    return link.success ? [link.output] : [];
+                }),
+            ),
+        ),
+        DEFAULT_LINKS,
+    ),
+    // The per-row `{ }` button that shows a workflow's input and result. On by
+    // default and it costs nothing until the panel is opened — hover, or keyboard
+    // focus, or a click. One history event per QUESTION, so a running row costs one
+    // request and a closed row two (input and result are different events); drawing
+    // the button costs none. What it can DISPLAY is personal data, which is why
+    // turning it off closes the panel and drops its cache (see content.ts).
+    payloadsEnabled: v.fallback(v.boolean(), true),
+    // The two features that make requests of their OWN — one per running row each,
+    // paced and cached in rowInfoServe.ts. Separate switches so the cost is
+    // separately refusable; on by default, because they read no user data at all
+    // (the retry badge deliberately does not read the failure message) and a
+    // feature nobody turns on teaches nobody anything.
+    lastEventEnabled: v.fallback(v.boolean(), true),
+    retryEnabled: v.fallback(v.boolean(), true),
+    // A Temporal codec server, for the payloads this extension cannot read on its
+    // own — `binary/encrypted` above all.
+    //
+    // EMPTY BY DEFAULT, AND THAT IS THE WHOLE EGRESS STORY. With this field empty no
+    // payload byte leaves the machine, because this is the only place an endpoint can
+    // come from: nothing is read off the page, and nothing is guessed from the
+    // namespace. It is also the one setting in this repository that defaults to off
+    // for a reason other than cost — see "Every feature ships on, except one" in the
+    // root README.
+    //
+    // The fallback is therefore '' and not "leave it alone": anything stored here that
+    // is not a string becomes the value that sends nothing. The recovery for a
+    // half-written settings object has to be the silent one.
+    codecEndpoint: v.fallback(v.string(), ''),
+    // AND THAT IS THE WHOLE CODEC CONFIG — one field, no credential switch.
+    //
+    // There is deliberately no "pass my access token" and no "send cookies" setting.
+    // Temporal's own UI has both; this extension had both. The endpoint is chosen
+    // through a channel any script on the page can write to, and a credential flag
+    // beside a host from an untrusted channel is a credential someone else can aim.
+    // Defaulting such a flag to off would not have fixed it, because the value that
+    // reaches the fetch comes from the message and not from here. See the CodecConfig
+    // note in payloadMessages.ts, which is longer than this one because a deletion
+    // leaves nothing behind to read.
+    //
+    // Not a feature — a migration marker. True once a human has edited the link list,
+    // after which their choices are taken literally and no scope is filled in for
+    // them. See withActivityScope below for what it prevents.
+    linkScopesSeeded: v.fallback(v.boolean(), false),
+});
+
+export type Settings = v.InferOutput<typeof settingsSchema>;
+
+// The shipped defaults ARE the schema's fallbacks, read out by parsing an empty
+// object. One declaration rather than two, so a default cannot be changed in the
+// schema and missed here — which is the mistake the note under withActivityScope is
+// about, one level down.
+export const DEFAULT_SETTINGS: Settings = v.parse(settingsSchema, {});
 
 // A NEW DEFAULT DOES NOT REACH AN EXISTING USER. This is the bug that made the
 // per-activity links invisible on a live tenant where everything else worked, and it
@@ -146,32 +188,29 @@ export async function loadSettings(): Promise<Settings> {
     // chrome.storage's typings want a plain record for the defaults argument, so
     // the shape is widened here rather than cast at the call site.
     const defaults: Record<string, unknown> = { ...DEFAULT_SETTINGS };
-    const stored = (await chrome.storage.sync.get(defaults)) as Partial<Settings>;
-    // Guard the array shape explicitly: a half-written settings object from an
-    // older build must degrade to the default, not throw inside a render pass
-    // where the only symptom would be "the extension stopped working".
-    const links = Array.isArray(stored.links) ? (stored.links as DeepLinkTemplate[]) : DEFAULT_SETTINGS.links;
-    const usable = links.filter((l) => l && typeof l.label === 'string' && typeof l.urlTemplate === 'string');
+    // Parsed, never cast. The old version of this line asserted `as Partial<Settings>`
+    // over whatever storage returned and then re-derived every field by hand; the
+    // schema does the deriving, and the assertion is gone with it. A stale
+    // `codecIncludeCredentials` in storage is not in the returned object, because it is
+    // not in the schema — see the note there.
+    //
+    // safeParse with an explicit fallback rather than v.parse, because the object
+    // ITSELF can be the wrong thing: every field inside settingsSchema recovers on its
+    // own, but a non-object — which is what a storage read fails to as much as
+    // succeeds to — fails the parse outright, and throwing here would take out a render
+    // pass whose only symptom is "the extension stopped working". Falling back to
+    // DEFAULT_SETTINGS also means the failure mode carries an empty codecEndpoint.
+    const parsed = v.safeParse(settingsSchema, await chrome.storage.sync.get(defaults));
+    const settings = parsed.success ? parsed.output : DEFAULT_SETTINGS;
     return {
-        enabled: stored.enabled !== false,
-        treeEnabled: stored.treeEnabled !== false,
-        linksEnabled: stored.linksEnabled !== false,
-        // See withActivityScope above: a stored array from before the activity
-        // template existed would otherwise make the per-activity links unreachable
-        // for good, with nothing saying so.
-        links: stored.linkScopesSeeded === true ? usable : withActivityScope(usable),
-        linkScopesSeeded: stored.linkScopesSeeded === true,
-        payloadsEnabled: stored.payloadsEnabled !== false,
-        lastEventEnabled: stored.lastEventEnabled !== false,
-        retryEnabled: stored.retryEnabled !== false,
-        // Anything that is not a string becomes the empty string, which means "no
-        // codec server" and therefore no egress. The fallback for a half-written
-        // settings object has to be the one that sends nothing.
-        codecEndpoint: typeof stored.codecEndpoint === 'string' ? stored.codecEndpoint : '',
-        // A `codecIncludeCredentials` left in storage by an older build is not read
-        // here and has nothing to reach: the field is gone from Settings, from the
-        // message shape, and from the fetch. Deleting the reader is what makes a
-        // stale stored `true` inert.
+        ...settings,
+        // NOT a schema default, and this is the distinction worth keeping: a fallback
+        // says what an absent field means, and this says what to do about a field that
+        // is present and complete and predates a feature. See withActivityScope above —
+        // a stored array from before the activity template existed would otherwise make
+        // the per-activity links unreachable for good, with nothing saying so. A
+        // migration is application logic and stays visible as one.
+        links: settings.linkScopesSeeded ? settings.links : withActivityScope(settings.links),
     };
 }
 

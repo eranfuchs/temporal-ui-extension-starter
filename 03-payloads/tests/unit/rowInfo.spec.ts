@@ -10,13 +10,12 @@
 // Every one of them produces a plausible-looking wrong answer rather than an
 // error, which is exactly the kind of bug a unit test is for.
 
+import { safeParse } from 'valibot';
 import { describe, expect, it } from 'vitest';
 
 import {
     formatAge,
     formatAgePrecise,
-    isRowInfoRequest,
-    isRowInfoResult,
     lastEventTitle,
     MAX_RUNS_PER_REQUEST,
     prettyEventType,
@@ -24,9 +23,20 @@ import {
     readPendingRetry,
     retryBadgeLabel,
     retryBadgeTitle,
+    rowInfoRequestSchema,
+    rowInfoResultSchema,
     type PendingRetry,
 } from '../../src/rowInfo/rowInfo';
 import { MESSAGE_SOURCE } from '../../src/types';
+
+// The two questions each schema exists to answer, named as the decision they make.
+// What is NOT asserted below is that v.string() rejects a number or that
+// v.minLength(1) rejects '' — those are the library's own semantics, and pinning
+// them here would pin this repository to one library's internals. What is asserted
+// is the consequence of how the pieces were composed at this boundary: every case
+// where a message that got through would have done something wrong.
+const wouldServe = (value: unknown): boolean => safeParse(rowInfoRequestSchema, value).success;
+const wouldRender = (value: unknown): boolean => safeParse(rowInfoResultSchema, value).success;
 
 const NOW = Date.parse('2026-01-01T12:00:00Z');
 const RUN = { workflowId: 'order-1', runId: '00000000-0000-4000-8000-000000000001' };
@@ -42,37 +52,39 @@ const GOOD_REQUEST = {
     fresh: false,
 };
 
-describe('isRowInfoRequest', () => {
+describe('rowInfoRequestSchema', () => {
     it('accepts a well-formed request', () => {
-        expect(isRowInfoRequest(GOOD_REQUEST)).toBe(true);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, want: ['retry'] })).toBe(true);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: true })).toBe(true);
+        expect(wouldServe(GOOD_REQUEST)).toBe(true);
+        expect(wouldServe({ ...GOOD_REQUEST, want: ['retry'] })).toBe(true);
+        expect(wouldServe({ ...GOOD_REQUEST, fresh: true })).toBe(true);
         // No runs is well-formed and simply asks nothing — a render pass with
         // nothing on screen produces exactly this.
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, runs: [] })).toBe(true);
+        expect(wouldServe({ ...GOOD_REQUEST, runs: [] })).toBe(true);
     });
 
     it('rejects anything that is not one', () => {
-        expect(isRowInfoRequest(null)).toBe(false);
-        expect(isRowInfoRequest('row-info-request')).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, source: 'somebody-else' })).toBe(false);
+        expect(wouldServe(null)).toBe(false);
+        expect(wouldServe('row-info-request')).toBe(false);
+        expect(wouldServe({ ...GOOD_REQUEST, source: 'somebody-else' })).toBe(false);
         // A type this build does not serve. The bus carries the tree's own
         // 'workflows' messages too, and every one of them arrives here first.
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, type: 'workflows' })).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, namespace: '' })).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, want: [] })).toBe(false);
+        expect(wouldServe({ ...GOOD_REQUEST, type: 'workflows' })).toBe(false);
+        expect(wouldServe({ ...GOOD_REQUEST, namespace: '' })).toBe(false);
+        // Asking nothing is not the same as asking about no rows: answerOne() would
+        // have to date a reply about no fields at all.
+        expect(wouldServe({ ...GOOD_REQUEST, want: [] })).toBe(false);
         // A field name nobody serves. Accepting it would mean carrying an unknown
         // string into a switch and hoping every branch of it stayed exhaustive.
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, want: ['lastEvent', 'everything'] })).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, runs: [{ workflowId: 'order-1' }] })).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, runs: [{ workflowId: 'order-1', runId: 7 }] })).toBe(false);
+        expect(wouldServe({ ...GOOD_REQUEST, want: ['lastEvent', 'everything'] })).toBe(false);
+        // Half a run reaches the ledger as a lookup that can never match, and the
+        // reply would name a run nobody can file.
+        expect(wouldServe({ ...GOOD_REQUEST, runs: [{ workflowId: 'order-1' }] })).toBe(false);
         // `fresh` is REQUIRED, not optional, and this is the one field where that
         // matters: it switches the TTL cache off. A message that omits it is a message
         // from a different build, and defaulting it either way would pick a side on
         // behalf of a sender who did not say.
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: undefined })).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: 'yes' })).toBe(false);
-        expect(isRowInfoRequest({ ...GOOD_REQUEST, fresh: 1 })).toBe(false);
+        expect(wouldServe({ ...GOOD_REQUEST, fresh: undefined })).toBe(false);
+        expect(wouldServe({ ...GOOD_REQUEST, fresh: 'yes' })).toBe(false);
     });
 
     it('caps how many runs one message may ask about', () => {
@@ -80,12 +92,35 @@ describe('isRowInfoRequest', () => {
         // build and a ledger lookup. The bound is well above a Temporal list page,
         // so the real caller never meets it.
         const many = (count: number) => ({ ...GOOD_REQUEST, runs: Array.from({ length: count }, () => RUN) });
-        expect(isRowInfoRequest(many(MAX_RUNS_PER_REQUEST))).toBe(true);
-        expect(isRowInfoRequest(many(MAX_RUNS_PER_REQUEST + 1))).toBe(false);
+        expect(wouldServe(many(MAX_RUNS_PER_REQUEST))).toBe(true);
+        expect(wouldServe(many(MAX_RUNS_PER_REQUEST + 1))).toBe(false);
+    });
+
+    it('hands the serve only the fields it declared', () => {
+        // The unknown-key policy at the boundary that leads to the network. Extra
+        // keys do not make the message invalid — refusing them would let one added
+        // field from a future build silently disable the feature — but they are
+        // STRIPPED, so nothing downstream can read a url, an endpoint or a header
+        // out of a message just because somebody put one there.
+        const parsed = safeParse(rowInfoRequestSchema, {
+            ...GOOD_REQUEST,
+            authorization: 'Bearer forged-by-the-page',
+            runs: [{ ...RUN, url: 'https://elsewhere.example.com/' }],
+        });
+        expect(parsed.success).toBe(true);
+        expect(parsed.success && Object.keys(parsed.output).sort()).toEqual([
+            'fresh',
+            'namespace',
+            'runs',
+            'source',
+            'type',
+            'want',
+        ]);
+        expect(parsed.success && parsed.output.runs).toEqual([RUN]);
     });
 });
 
-describe('isRowInfoResult', () => {
+describe('rowInfoResultSchema', () => {
     const GOOD_EVENT = { eventId: '42', eventType: 'ActivityTaskStarted', timeMs: NOW };
     const GOOD_RETRY = {
         activityType: 'ChargeCard',
@@ -109,58 +144,55 @@ describe('isRowInfoResult', () => {
     };
 
     it('accepts an answer and rejects the page’s own traffic', () => {
-        expect(isRowInfoResult(GOOD_ANSWER)).toBe(true);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: GOOD_EVENT, retry: GOOD_RETRY })).toBe(true);
+        expect(wouldRender(GOOD_ANSWER)).toBe(true);
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: GOOD_EVENT, retry: GOOD_RETRY })).toBe(true);
         // Every optional number may be null and only null — that is what "asked,
         // and Temporal did not say" looks like on the wire.
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: null } })).toBe(true);
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: null } })).toBe(true);
         expect(
-            isRowInfoResult({
+            wouldRender({
                 ...GOOD_ANSWER,
                 retry: { ...GOOD_RETRY, maximumAttempts: null, nextRetryAtMs: null, scheduledAtMs: null },
             }),
         ).toBe(true);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, error: 'HTTP 403' })).toBe(true);
+        expect(wouldRender({ ...GOOD_ANSWER, error: 'HTTP 403' })).toBe(true);
 
-        expect(isRowInfoResult({ ...GOOD_ANSWER, type: 'workflows' })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, source: 'temporal-ui' })).toBe(false);
-        expect(isRowInfoResult(undefined)).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, type: 'workflows' })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, source: 'temporal-ui' })).toBe(false);
+        expect(wouldRender(undefined)).toBe(false);
         // The namespace is what the receiving side files the answer under, so an
         // answer that does not name one cannot be filed anywhere.
-        expect(isRowInfoResult({ ...GOOD_ANSWER, namespace: '' })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, namespace: '' })).toBe(false);
         const { namespace: _dropped, ...noNamespace } = GOOD_ANSWER;
-        expect(isRowInfoResult(noNamespace)).toBe(false);
+        expect(wouldRender(noNamespace)).toBe(false);
 
         // `observedAtMs` is required and NOT nullable, unlike every other number in
         // this message. An answer without it would leave the renderer to invent a
         // reference point, and the only one available is Date.now() — the exact
         // behaviour the field was added to remove, arrived at by omission.
         const { observedAtMs: _noWhen, ...undated } = GOOD_ANSWER;
-        expect(isRowInfoResult(undated)).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, observedAtMs: null })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, observedAtMs: '2026-01-01' })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, observedAtMs: NaN })).toBe(false);
+        expect(wouldRender(undated)).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, observedAtMs: null })).toBe(false);
     });
 
-    it('validates the nested objects, not just the envelope', () => {
+    it('describes the nested objects, not just the envelope', () => {
         // The declared type says `LastEvent | null` and the renderer reads
-        // `event.eventType` straight into a template. Before this check the guard
-        // looked at four fields, so `{lastEvent: 42}` type-checked its way through
-        // to a property read on a number — a well-formed envelope is the easy half.
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: 42 })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: {} })).toBe(false);
-        // int64 in the proto, therefore a STRING in JSON. A number here means
-        // somebody re-typed the field and lost precision on the way.
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, eventId: 42 } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, eventType: null } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: '2026-01-01' } })).toBe(false);
-
-        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { attempt: 3 } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, attempt: '3' } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, activityType: 7 } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, scheduledAtMs: 'soon' } })).toBe(false);
-
-        expect(isRowInfoResult({ ...GOOD_ANSWER, error: 404 })).toBe(false);
+        // `event.eventType` straight into a template. A schema that stopped at the
+        // envelope — as the hand-written guard here once did — let `{lastEvent: 42}`
+        // type-check its way through to a property read on a number.
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: 42 })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: {} })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, retry: { attempt: 3 } })).toBe(false);
+        // int64 in the proto, therefore a STRING in JSON, and the reverse for
+        // `attempt`, which is an int32. A field that arrives in the other one's form
+        // means somebody re-typed it — and for the int64 that means digits were lost
+        // on the way, which is not visible in the value that arrives.
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, eventId: 42 } })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, attempt: '3' } })).toBe(false);
+        // A time is milliseconds here, never the ISO string it arrived from Temporal
+        // as: readLastEvent does that conversion, and a date string reaching a
+        // subtraction produces NaN rather than an error.
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: '2026-01-01' } })).toBe(false);
     });
 
     it('rejects NaN and undefined where it declares number | null', () => {
@@ -168,12 +200,13 @@ describe('isRowInfoResult', () => {
         // means "this field was never set", which is a different message from one
         // that says "asked, and there is nothing". Neither can come from our own
         // serve — numberOf and timeToMs return null — so rejecting both is free.
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: NaN } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: undefined } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, attempt: Infinity } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, maximumAttempts: NaN } })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, lastEvent: undefined })).toBe(false);
-        expect(isRowInfoResult({ ...GOOD_ANSWER, error: undefined })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, observedAtMs: NaN })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: NaN } })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: { ...GOOD_EVENT, timeMs: undefined } })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, attempt: Infinity } })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, retry: { ...GOOD_RETRY, maximumAttempts: NaN } })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, lastEvent: undefined })).toBe(false);
+        expect(wouldRender({ ...GOOD_ANSWER, error: undefined })).toBe(false);
     });
 });
 

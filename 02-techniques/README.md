@@ -350,7 +350,7 @@ projects can be compared line by line.
 | **Payloads it decodes** | none. No workflow input, result or failure message is read, decoded or displayed anywhere in this project |
 | **Credentials it holds** | none. It stores no token. The page's `Authorization` header is read in the page's world and re-sent to Temporal's own API only; it is not stored, posted to the extension, or logged — and no setting can change that |
 | **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace. A request naming any other run is refused *before* the page's token is spent on it — see [the weakness](#the-weakness-and-what-closing-most-of-it-took) |
-| **Third-party code in the bundle** | none. No runtime dependencies |
+| **Third-party code in the bundle** | three packages — `valibot`, `p-limit`, and `yocto-queue` behind it. Budgeted, and checked against what esbuild actually inlined — see [Dependencies](#dependencies) |
 
 ### The row that matters: it originates requests
 
@@ -460,12 +460,16 @@ npm run surface        # from the repository root
 `scripts/surface.mjs` compares this project's manifest against the budget in
 [`../scripts/surface.json`](../scripts/surface.json) and fails on a second
 permission, any `host_permissions` entry, a service worker,
-`web_accessible_resources`, `externally_connectable`, a runtime dependency, a
-content-script match outside the three allowed hosts, and any of the markup/code
-sinks (`innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`,
-`new Function`, string `setTimeout`/`setInterval`). Those are found by **parsing**
-each file, so `cell['innerHTML'] = x` and an assignment wrapped over two lines are
-caught, and the sentence you are reading is not mistaken for one.
+`web_accessible_resources`, `externally_connectable`, a content-script match
+outside the three allowed hosts, and any of the markup/code sinks (`innerHTML`,
+`outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`, `new Function`,
+string `setTimeout`/`setInterval`). Those are found by **parsing** each file, so
+`cell['innerHTML'] = x` and an assignment wrapped over two lines are caught, and
+the sentence you are reading is not mistaken for one.
+
+It also fails on a third-party package inside a bundle that the budget does not
+name — including one that arrived as a dependency of a dependency, which is the
+case a `package.json` check cannot see at all. See [Dependencies](#dependencies).
 
 Every value this extension writes reaches the DOM through `textContent`. That
 matters more here than in 01: an activity type name and a workflow id are authored
@@ -474,24 +478,23 @@ does not own.
 
 ### What has not been done
 
-- **No third-party security review.** The mechanism comes from an extension used
-  internally, but this code is a clean-room rewrite and nobody outside this
-  repository has audited it.
-- **The two request-backed features have NOT been confirmed on live Temporal Cloud.**
-  The tree, the deep links and the detail-page links have; the last-event column and
-  the retry badge are newer. Treat every claim above about how those two behave on a
-  real tenant as **unverified** — the unit and jsdom specs are green, which on this
-  project's own evidence is not the same thing. Two of those claims no spec could ever
-  settle: the `⟳`'s 24px hit target and the negative margins meant to keep it from
-  growing the header row are **layout**, and jsdom computes none. Nobody has yet looked
-  at that button in a browser.
+- **No independent security review.** This is not unreviewed code: every change is
+  reviewed as it is written, the message boundary carries specs that forge a message
+  and assert it is refused, and `npm run preflight` re-runs the banned-sink,
+  permission, dependency and secret-scan gates on every pass. What is missing is an
+  outside pair of eyes. The mechanism comes from an extension used internally, but
+  this code is a clean-room rewrite and nobody outside this repository has audited it.
+- **A green suite is not the same thing as a working extension, and this project has
+  the receipts.** jsdom computes no layout, so nothing in the suite can speak to the
+  `⟳`'s 24px hit target or the negative margins that keep it from growing the header
+  row. More to the point, the specs assert against a **hand-written** page: they prove
+  the placement logic, the idempotency and the id resolution, and they cannot prove
+  that the real UI still labels a field the way this code expects. The findings below
+  all came from a real browser, and each is a class of bug the suite could not have
+  produced.
 
-  The detail-page links used to be the weakest claim in that set, and are now the
-  best-evidenced. Both DOM anchors on a workflow's page — the tab bar, and the row
-  labelled "Activity Id" — were asserted only against a **hand-written** jsdom page in
-  `tests/unit/detailLinks.spec.ts`, which proves the placement logic, the idempotency
-  and the id resolution but cannot prove the real page still labels that field the way
-  this code expects. They have now been read off live Cloud 2.53.3, and the markup is:
+  **What the detail page actually looks like.** Both DOM anchors on a workflow's page
+  — the tab bar, and the row labelled "Activity Id" — were read off live Cloud 2.53.3:
 
   ```html
   <div class="flex items-start gap-4">
@@ -503,7 +506,7 @@ does not own.
   The label is a leaf `<p>`, it matches `LABEL_CANDIDATE_SELECTOR`, and its
   `nextElementSibling` holds the id — so the anchor lands, the bar reports
   `adrift: 0`, and the link's tooltip carries the resolved activity's type, status and
-  schedule time. The live page also confirmed the prediction written into
+  schedule time. The real page also confirmed the prediction written into
   `detailLinks.ts` about why `div` is **not** in that selector: the wrapper div's own
   `nextElementSibling` is the *next field's* wrapper, whose text reads
   `Activity Type …`. Had `div` been included, every panel would have grown a link
@@ -513,8 +516,8 @@ does not own.
   and the popup says so — which is the whole reason that state is visible instead of
   silent.
 
-  What the same live round found instead was two ways for the link to be missing while
-  every part of the machinery works, neither of them a selector.
+  The same round turned up two ways for the link to be missing while every part of
+  the machinery works, neither of them a selector.
 
   **The extension arrived too late.** Installed *after* the workflow tab had finished
   loading, the page carried no extension node at all and printed no log line. Chrome
@@ -533,8 +536,7 @@ does not own.
   `src/settings.ts` now treats the *scope* as the default rather than the array, once,
   until a human edits the list. `tests/unit/settings.spec.ts` pins both directions.
 
-  It is not the same thing because a live round here has found something every
-  single time. One found the tree drawing perfectly while every per-row question
+  **Two more, from earlier rounds, both invisible to a suite.** One found the tree drawing perfectly while every per-row question
   answered *"Nothing observed on this page yet"*: this project installs a **second**
   `window.fetch` observer, and the page's own wrapper had evicted it. The tree kept
   working, because `inject.ts` holds the property through a getter — only the second
@@ -559,7 +561,41 @@ does not own.
   once and burst straight past the limit of four. A review found it; no amount of
   reading the surrounding prose would have.
 - **No supply-chain attestation.** Build it yourself; the bundle is unminified on
-  purpose, so `dist/*.js` is readable.
+  purpose, so `dist/*.js` is readable, including the three third-party packages
+  inside it. What the repository guarantees is that a package cannot enter a bundle
+  without a reviewed diff; it does not verify any package's contents against its
+  repository, and `package-lock.json` integrity hashes are the only pinning there
+  is.
+
+## Dependencies
+
+Three packages reach the browser: two chosen, one a consequence of a choice. The
+repository's dependency policy, and the audit-surface argument behind it, are in the
+[root README](../README.md#dependencies).
+
+| | `valibot` |
+|---|---|
+| **Version** | 1.4.2 — MIT |
+| **What it is for** | Runtime schema validation at every boundary — the page's own list, history and describe responses, the `postMessage` in both directions, and each stored settings object read back out of `chrome.storage.sync`. `safeParse` before any field is read, so a shape that changed is an `issues` list handled where it arrived |
+| **Bundles it enters** | all four: `dist/apiInject.js`, `dist/content.js`, `dist/inject.js`, `dist/popup.js` |
+| **Packages it brings with it** | none |
+| **What stays ours** | the schemas, and the fact that validating a message's shape says nothing about who sent it. `src/content.ts` still checks `event.source` itself, and `fetchForListedRun()` in `src/page/pageApi.ts` still decides whose data may be fetched — a schema cannot |
+
+| | `p-limit` |
+|---|---|
+| **Version** | 7.3.2 — MIT |
+| **What it is for** | The concurrency limit under the per-row questions: at most four requests to Temporal's API in flight at once, whatever the page's row count is |
+| **Bundles it enters** | `dist/apiInject.js` only — the page-world script is the only one that fetches |
+| **Packages it brings with it** | `yocto-queue` 1.2.2 (MIT), its queue. It is in the bundle, so it is budgeted by name in [`../scripts/surface.json`](../scripts/surface.json) even though nothing of ours imports it |
+| **What stays ours** | every rule that is about *Temporal* rather than about counting. `src/page/pacer.ts` wraps the limiter and owns the whole policy: both forms of `Retry-After`, the ceiling on how long a server may ask us to wait, the exponential fallback when it asks for nothing, the rule that the longest overlapping block wins, that a success during a block does not reset the doubling, and that resuming is not a burst |
+
+`npm run measure` prints what each one currently costs each bundle, from the same
+esbuild metafile the gate reads. The comparisons that chose them — valibot against
+zod, `p-limit` against `p-queue` — are in
+[`docs/design-notes.md`](../docs/design-notes.md#dependencies), together with the
+one evaluation here that ended in **no** dependency: an LRU cache was weighed
+against the two `Map`s in `src/rowInfo/rowInfoServe.ts` and rejected, and the
+missing entry-count bound it exposed was added by hand instead.
 
 ## Layout
 

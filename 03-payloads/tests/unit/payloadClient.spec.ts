@@ -120,9 +120,9 @@ describe('correlating an answer with its question', () => {
         // the panel skips the error branch and shows a body it does not have. Neither
         // looks like a rejected message; both look like the extension is broken.
         //
-        // isPayloadResult validates to the leaves. This is the spec that says its CALL
+        // payloadResultSchema describes the leaves. This is the spec that says its CALL
         // SITE is load-bearing, and it is asserted through the panel because that is
-        // where the wrong thing would appear. The guard's own truth table is in
+        // where the wrong thing would appear. The schema's own truth table is in
         // tests/unit/payloadMessages.spec.ts.
         openPanel();
         const asked = posted[0]!;

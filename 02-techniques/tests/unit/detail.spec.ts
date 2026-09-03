@@ -5,14 +5,15 @@
 // from Temporal's own API documentation for GetWorkflowExecutionHistory and
 // DescribeWorkflowExecution.
 
+import { safeParse } from 'valibot';
 import { describe, expect, it } from 'vitest';
 
 import {
     acceptFactsFor,
     activityByPanelId,
+    detailFactsMessageSchema,
     detailRefFromApiUrl,
     detailRefFromPath,
-    isDetailFactsMessage,
     linkableActivities,
     MAX_ACTIVITIES,
     mergeFacts,
@@ -619,7 +620,7 @@ describe('rowFromFacts', () => {
 
 // ── The message ──────────────────────────────────────────────────────────────
 
-describe('isDetailFactsMessage', () => {
+describe('detailFactsMessageSchema', () => {
     const good = {
         source: MESSAGE_SOURCE,
         type: 'detail-facts',
@@ -630,28 +631,74 @@ describe('isDetailFactsMessage', () => {
         facts: NO_FACTS,
     };
 
+    // What receiveDetailFacts() would do with it, named for the consequence rather
+    // than for the schema: these specs are about which messages reach the renderer.
+    const wouldRender = (value: unknown): boolean => safeParse(detailFactsMessageSchema, value).success;
+
     it('accepts a well-formed message', () => {
-        expect(isDetailFactsMessage(good)).toBe(true);
-        expect(isDetailFactsMessage({ ...good, from: 'describe', runId: null })).toBe(true);
+        expect(wouldRender(good)).toBe(true);
+        expect(wouldRender({ ...good, from: 'describe', runId: null })).toBe(true);
     });
 
-    it('rejects everything else, including an unbounded activity list', () => {
-        const many = Array.from({ length: MAX_ACTIVITIES + 1 }, (_, i) => ({ scheduledEventId: String(i) }));
+    it('rejects the page\'s own traffic and a message from another build', () => {
         for (const bad of [
-            null,
-            'string',
             { ...good, source: 'someone-else' },
             { ...good, type: 'workflows' },
             { ...good, from: 'guess' },
             { ...good, namespace: '' },
-            { ...good, workflowId: 42 },
-            { ...good, runId: 7 },
             { ...good, facts: null },
-            { ...good, facts: { activities: 'no' } },
-            { ...good, facts: { ...NO_FACTS, activities: [{ noId: true }] } },
-            { ...good, facts: { ...NO_FACTS, activities: many } },
         ]) {
-            expect(isDetailFactsMessage(bad), JSON.stringify(bad)?.slice(0, 60)).toBe(false);
+            expect(wouldRender(bad), JSON.stringify(bad)?.slice(0, 60)).toBe(false);
         }
+    });
+
+    it('refuses an unbounded activity list', () => {
+        // The bound a forged message must not be able to talk its way past. One over
+        // is the case that matters: exactly MAX_ACTIVITIES is what our own fold emits
+        // on a workflow that hit the cap, and it has to keep being accepted.
+        const many = Array.from({ length: MAX_ACTIVITIES }, (_, i) => activity({ scheduledEventId: String(i) }));
+        expect(wouldRender({ ...good, facts: { ...NO_FACTS, activities: many } })).toBe(true);
+        expect(wouldRender({ ...good, facts: { ...NO_FACTS, activities: [...many, activity()] } })).toBe(false);
+    });
+
+    it('describes the activities, not just the envelope', () => {
+        // The guard this replaced checked `scheduledEventId` and nothing else, so every
+        // one of these reached the renderer typed as a DetailActivity. `outcome` is the
+        // sharpest of them: it selects a CSS class and a label, and an unknown value
+        // used to be rendered as itself.
+        expect(wouldRender({ ...good, facts: { ...NO_FACTS, activities: [{ scheduledEventId: '5' }] } })).toBe(false);
+        for (const broken of [
+            { outcome: 'exploded' },
+            { attempt: 'lots' },
+            { scheduledAtMs: Number.NaN },
+            { closedAtMs: Number.POSITIVE_INFINITY },
+            { pending: 'yes' },
+        ]) {
+            const activities = [{ ...activity(), ...broken }];
+            expect(wouldRender({ ...good, facts: { ...NO_FACTS, activities } }), JSON.stringify(broken)).toBe(false);
+        }
+    });
+
+    it('hands the merge only the fields it declared', () => {
+        // Unknown keys do not make the message invalid — the Temporal UI is free to
+        // put whatever it likes on the bus, and this shape is ours, not the server's —
+        // but they are STRIPPED, so nothing downstream can read a url or a header out
+        // of a message just because somebody put one there.
+        const parsed = safeParse(detailFactsMessageSchema, {
+            ...good,
+            authorization: 'Bearer forged-by-the-page',
+            facts: { ...NO_FACTS, activities: [{ ...activity(), href: 'https://elsewhere.example.com/' }] },
+        });
+        expect(parsed.success).toBe(true);
+        expect(parsed.success && Object.keys(parsed.output).sort()).toEqual([
+            'facts',
+            'from',
+            'namespace',
+            'runId',
+            'source',
+            'type',
+            'workflowId',
+        ]);
+        expect(parsed.success && parsed.output.facts.activities).toEqual([activity()]);
     });
 });

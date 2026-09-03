@@ -50,12 +50,19 @@
 // window to the one execution, which is what makes the link exact even on a backend
 // that only ever indexed the type.
 
+import * as v from 'valibot';
+
 import type { WorkflowRow } from '../types';
 
-export interface DeepLinkTemplate {
-    label: string;
-    urlTemplate: string;
-}
+// A schema and not an interface because this shape comes out of chrome.storage, where
+// an older build of this extension is the previous author: settings.ts parses the
+// stored list entry by entry against it. Nothing else in this file validates — a
+// template is a string, and every rule about what a string may expand to is below.
+export const deepLinkTemplateSchema = v.object({
+    label: v.string(),
+    urlTemplate: v.string(),
+});
+export type DeepLinkTemplate = v.InferOutput<typeof deepLinkTemplateSchema>;
 
 // One activity, reduced to the handful of things a link can be built from.
 // Everything here comes out of the workflow's own history — see src/detail/detail.ts,

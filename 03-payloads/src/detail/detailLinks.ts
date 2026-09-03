@@ -34,12 +34,14 @@
 //     and asks for a reload rather than going and fetching the history itself. That
 //     is the trade this stage of the starter kit is demonstrating.
 
+import { safeParse } from 'valibot';
+
 import {
     acceptFactsFor,
     activityByPanelId,
     activityForLink,
+    detailFactsMessageSchema,
     detailRefFromPath,
-    isDetailFactsMessage,
     mergeFacts,
     NO_FACTS,
     rowFromFacts,
@@ -86,16 +88,18 @@ let observed: { ref: DetailRef; facts: DetailFacts } | null = null;
 let lastPass = { panelsLinked: 0, adrift: false };
 
 export function receiveDetailFacts(data: unknown, pathname: string): boolean {
-    if (!isDetailFactsMessage(data)) return false;
+    const message = safeParse(detailFactsMessageSchema, data);
+    if (!message.success) return false;
+    // The PARSED facts, never event.data: validated to the leaves and narrowed to the
+    // declared fields, so what mergeFacts() folds is the shape it says it folds.
+    const { namespace, workflowId, runId, facts } = message.output;
     const page = detailRefFromPath(pathname);
     // Not on a workflow's page (any more). The answer to a request made before the
     // user navigated away arrives after they have, every time.
     if (!page) return false;
-    if (!acceptFactsFor(page, { namespace: data.namespace, workflowId: data.workflowId, runId: data.runId })) {
-        return false;
-    }
+    if (!acceptFactsFor(page, { namespace, workflowId, runId })) return false;
     const base = observed && sameRun(observed.ref, page) ? observed.facts : NO_FACTS;
-    observed = { ref: page, facts: mergeFacts(base, data.facts) };
+    observed = { ref: page, facts: mergeFacts(base, facts) };
     return true;
 }
 

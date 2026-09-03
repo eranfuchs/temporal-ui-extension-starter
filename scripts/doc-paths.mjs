@@ -47,9 +47,10 @@
 //      contents and an anchor in a render.ts comment both left this gate reporting
 //      clean, which is how it came to be written.
 //
-//      Its slugs come from github-slugger, GitHub's own, which means duplicate
-//      headings numbered `-1`, `-2` and letters of every script — see slugOf below
-//      for the one shape it still gets wrong, and which direction it errs in.
+//      Its slugs come from github-slugger, GitHub's own, and its heading text from a
+//      Markdown parser rather than a line regex — so a heading holding a link or
+//      inline code slugs the way GitHub renders it. See anchorsOf below for what each
+//      of those two borrowed pieces is actually for.
 //
 // What it deliberately does NOT check: prose. A doc can claim anything about
 // behaviour and this gate will not notice — see `npm run surface` and the unit
@@ -70,6 +71,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import GithubSlugger from 'github-slugger';
+import { fromMarkdown } from 'mdast-util-from-markdown';
+import { toString } from 'mdast-util-to-string';
 
 import { discoverProjects, ROOT } from './projects.mjs';
 
@@ -140,77 +145,64 @@ function isExempt(path) {
     return NOT_YET_PRESENT.some((re) => re.test(path));
 }
 
-// GitHub's heading slug, which is what a `#fragment` in this repository resolves
-// against — these documents are read on GitHub. Taken from github-slugger 2.0.0, the
-// module GitHub's renderer uses, rather than inferred from the anchors that happen to
-// work today: lowercase, drop every character that is not a Unicode letter, mark or
-// decimal digit, `_`, `-` or a space, then turn each remaining space into a hyphen.
-//
-// Each space, not each RUN of spaces: "a — b" slugs to `a--b`, because the em dash is
-// dropped and both of the spaces around it survive as hyphens. Collapsing runs would
-// produce `a-b` and reject the anchor GitHub actually generates.
-//
-// Letters means letters in ANY script — `é`, `ל`, `日` all survive. The first version
-// used `\w`, which strips them, so it would have rejected a working link to any
-// heading it could not spell. Symbols, emoji and punctuation go, including the
-// backticks around inline code: GitHub's renderer removes those as markup before
-// slugging, and dropping them as characters lands in the same place.
-//
-// KNOWN LIMIT, and it fails LOUD: GitHub slugs the RENDERED text, so a heading holding
-// a Markdown link or raw HTML — `## See [the docs](x)` — slugs to `see-the-docs` there
-// and `see-the-docsx` here. No heading in this repository has that shape. If one
-// appears, this rejects a link that works — a wrong answer someone reads, rather than
-// a silent pass.
-const SLUG_DROP = /[^\p{L}\p{M}\p{Nd}_ -]/gu;
-const slugOf = (heading) => heading.trim().toLowerCase().replace(SLUG_DROP, '').replace(/ /g, '-');
-
 // Every anchor a Markdown file offers. Cached, because check 1 and check 4 both ask,
 // and check 4 asks once per citation.
 //
-// Two things beyond "slug each heading", both of which the first version got wrong:
+// TWO BORROWED PIECES, and neither is here to save typing:
 //
-// DUPLICATES. GitHub gives the first `## Off` the anchor `off`, the second `off-1` and
-// the third `off-2`, skipping any suffix a heading already spells literally. Without
-// that, a valid link to a repeated heading is rejected — and this repository's own
-// convention favours short section names, so repeats are likely rather than exotic.
+// THE SLUG is github-slugger's, the module GitHub's own renderer uses. It lowercases,
+// drops every character that is not a letter, mark, digit, `_`, `-` or space, and
+// hyphenates each remaining SPACE — not each run, so "a — b" is `a--b`, because the em
+// dash goes and both surrounding spaces survive. Letters means any script, so `é`, `ל`
+// and `日` all live. It also owns the DUPLICATE counter: the first `## Off` is `off`,
+// the second `off-1`, and a suffix some heading spells literally is skipped rather than
+// handed out twice. A hand-written version of this got the run-of-spaces rule and the
+// non-ASCII rule wrong in its first draft, and both errors REJECT a working link.
 //
-// FENCED CODE. A `# comment` line inside a ``` block is not a heading, and the README
-// has several. Registering them invents anchors that satisfy this gate and 404 on
-// GitHub — a false PASS, which is the direction that matters.
+// THE HEADINGS are mdast's, and the reason is the shape a line-by-line reader cannot
+// see. GitHub slugs the RENDERED text, so `## See [the docs](x)` is `see-the-docs`
+// there; matching a `^#{1,6}` regex against the raw line yields `see-the-docsx`. The
+// previous version of this file recorded that as a known limit it would fail loudly on.
+// A parser removes the limit instead: `toString` on a heading node gives the text
+// GitHub renders, with links, emphasis and inline code already reduced to their text.
+// It also picks up three heading shapes the regex silently missed — setext (`Title`
+// over `====`), a heading inside a blockquote, and one whose text spans a soft line
+// break — and it is a parser rather than a fence-tracker, so a `# comment` inside a
+// ``` or ~~~ block is code, which is what it renders as. Registering those would
+// INVENT anchors that satisfy this gate and 404 on GitHub: a false pass.
+//
+// Why both were borrowed rather than fixed in place:
+// docs/design-notes.md#two-algorithms-the-gates-had-no-business-owning.
 const anchorCache = new Map();
 function anchorsOf(file) {
     if (anchorCache.has(file)) return anchorCache.get(file);
     const anchors = new Set();
     if (existsSync(file)) {
-        // github-slugger's counter map, keyed by the base slug AND every suffixed form
-        // it has handed out — which is what makes the collision skip work.
-        const taken = new Map();
-        // The marker that opened the fence, so a ~~~ line inside a ``` block does not
-        // close it and turn every heading below into code.
-        let fence = null;
-        for (const line of readFileSync(file, 'utf8').split('\n')) {
-            const marker = /^\s{0,3}(```|~~~)/.exec(line);
-            if (marker && (fence === null || marker[1] === fence)) {
-                fence = fence === null ? marker[1] : null;
-                continue;
-            }
-            if (fence !== null) continue;
-            // The optional closing sequence — `## Foo ##` — is markup, not text.
-            const heading = /^#{1,6}\s+(.*?)(?:\s+#+)?\s*$/.exec(line);
-            if (!heading) continue;
-            const base = slugOf(heading[1]);
-            let slug = base;
-            while (taken.has(slug)) {
-                const next = (taken.get(base) ?? 0) + 1;
-                taken.set(base, next);
-                slug = `${base}-${next}`;
-            }
-            taken.set(slug, 0);
-            anchors.add(slug);
-        }
+        // One slugger per document: the duplicate counter is per page on GitHub too.
+        const slugger = new GithubSlugger();
+        for (const heading of headingsOf(readFileSync(file, 'utf8'))) anchors.add(slugger.slug(heading));
     }
     anchorCache.set(file, anchors);
     return anchors;
+}
+
+// Every heading in the document, in order, depth-first.
+//
+// The recursion is for a heading nested in a blockquote or a list item. Every document
+// here has all of its headings at the top level — nothing in this repository exercises
+// it — and it is written this way because GitHub injects anchors while walking the
+// RENDERED html, where `> ## Foo` is still an `<h2>`. That is the mechanism rather than
+// an observation, so it is the one inference in this function: if it is wrong, the gate
+// offers an anchor GitHub does not, and the failure would be a false pass on a shape no
+// document here has.
+function headingsOf(markdown) {
+    const found = [];
+    const walk = (node) => {
+        if (node.type === 'heading') found.push(toString(node));
+        for (const child of node.children ?? []) walk(child);
+    };
+    walk(fromMarkdown(markdown));
+    return found;
 }
 
 function main(argv) {
@@ -716,6 +708,55 @@ function selftest() {
             'reads a closed ATX heading as its text, not its trailing hashes',
             closingSequence.status === 0,
             `exit ${closingSequence.status}: ${closingSequence.output.trim()}`,
+        );
+
+        // A heading holding a LINK. GitHub slugs what it renders, so the target is not in
+        // the anchor — the case a line regex cannot see, and the reason the headings come
+        // from a parser rather than a `^#` match. It was a known limit of the version
+        // before this one, which would have REJECTED a link that works.
+        //
+        // Deliberately not a case of its own: a heading holding INLINE CODE. It is
+        // checked here in passing, and it cannot discriminate — a slugger that drops the
+        // backticks as characters and one handed the rendered text land on the same slug,
+        // which the previous implementation's own comment said. A test no wrong answer
+        // can fail is decoration.
+        const markupDoc = {
+            'docs/notes.md': '# Notes\n\n## See [the docs](https://example.com) in `slugOf`\n\nBody.\n',
+        };
+        const renderedLink = drive(makeTree('anchorlink', 'See [it](docs/notes.md#see-the-docs-in-slugof).\n', markupDoc));
+        check(
+            'slugs a heading holding a link as its rendered text, without the target',
+            renderedLink.status === 0,
+            `exit ${renderedLink.status}: ${renderedLink.output.trim()}`,
+        );
+
+        const rawLinkAnchor = drive(
+            makeTree('anchorrawlink', 'See [it](docs/notes.md#see-the-docshttpsexamplecom-in-slugof).\n', markupDoc),
+        );
+        check(
+            'rejects the anchor a raw-line slugger would have produced from the link',
+            rawLinkAnchor.status === 1 && rawLinkAnchor.output.includes('#see-the-docshttpsexamplecom'),
+            `exit ${rawLinkAnchor.status}: ${rawLinkAnchor.output.trim()}`,
+        );
+
+        // Setext. `Title` over `=====` is a heading, and invisible to a `^#` regex — so
+        // the regex offered no anchor and rejected a link to a section that exists.
+        const setext = drive(makeTree('anchorsetext', '# Fixture\n\nOlder Style\n===========\n\nSee [it](#older-style).\n'));
+        check(
+            'offers an anchor for a setext heading, which has no leading #',
+            setext.status === 0,
+            `exit ${setext.status}: ${setext.output.trim()}`,
+        );
+
+        // A heading nested in a blockquote. This pins THIS gate's inference — GitHub
+        // injects anchors over the rendered html, where `> ## Foo` is still an `<h2>` —
+        // rather than an observation of github.com, and no document here has the shape.
+        // It is here so that the choice is visible and named if it ever turns out wrong.
+        const nested = drive(makeTree('anchornested', '# Fixture\n\n> ## Quoted Section\n\nSee [it](#quoted-section).\n'));
+        check(
+            'offers an anchor for a heading inside a blockquote',
+            nested.status === 0,
+            `exit ${nested.status}: ${nested.output.trim()}`,
         );
 
         // ── Check 4: citations inside non-Markdown project files ──────────────

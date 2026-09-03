@@ -39,8 +39,10 @@
 // The incidents behind 1–3, and the reason invariant 3 needs a fourth step that
 // lives in tooltip.ts, are in docs/design-notes.md under "The payload panel".
 
+import { safeParse } from 'valibot';
+
 import {
-    isPayloadResult,
+    payloadResultSchema,
     type CodecConfig,
     type PayloadKind,
     type PayloadRequest,
@@ -105,18 +107,22 @@ export function installPayloadClient(dependencies: PayloadClientDeps): void {
 
     window.addEventListener('message', (event: MessageEvent) => {
         if (event.source !== window) return;
-        // Well-formed to the leaves — isPayloadResult validates every field,
-        // including the three run fields this check is about to read.
-        if (!isPayloadResult(event.data)) return;
-        const waiting = pending.get(event.data.id);
+        // Well-formed to the leaves — payloadResultSchema describes every field,
+        // including the three run fields this check is about to read. What is settled
+        // with is the PARSED answer and never event.data, so the panel renders the
+        // declared fields and nothing a sender attached beside them.
+        const answer = safeParse(payloadResultSchema, event.data);
+        if (!answer.success) return;
+        const result = answer.output;
+        const waiting = pending.get(result.id);
         if (!waiting) return;
         // Invariant 1. NOT `pending.delete` on a mismatch: a message that names the
         // wrong run must not settle — or cancel — the question it collided with.
         // Dropping it leaves the real answer (or the timeout) to do that, so the
         // worst a forged answer achieves here is nothing at all.
-        if (!answersTheQuestion(waiting.question, event.data)) return;
-        pending.delete(event.data.id);
-        waiting.settle(event.data);
+        if (!answersTheQuestion(waiting.question, result)) return;
+        pending.delete(result.id);
+        waiting.settle(result);
     });
 }
 

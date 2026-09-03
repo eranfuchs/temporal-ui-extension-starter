@@ -9,9 +9,14 @@
 // therefore resets the module registry and imports it fresh, against a window
 // whose fetch has been put back to a stand-in first.
 
+import { parse, safeParse } from 'valibot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MESSAGE_SOURCE, type WorkflowsMessage } from '../../src/types';
+import {
+    temporalApiWorkflowSchema,
+    workflowsMessageSchema,
+    type WorkflowsMessage,
+} from '../../src/types';
 import { fakeRunId } from '../helpers';
 
 const LIST_URL = '/api/v1/namespaces/sample-namespace/workflows?query=';
@@ -34,9 +39,12 @@ const listBody = (ids: string[]) => ({
 let reachedNetwork: string[] = [];
 let received: WorkflowsMessage[] = [];
 
+// Captured through the SAME schema the real receiver uses, so these tests also
+// prove the sender emits something the receiving side will accept. A cast here
+// would have let the two sides drift apart with every spec still green.
 const capture = (event: MessageEvent) => {
-    const data = event.data as WorkflowsMessage | undefined;
-    if (data?.source === MESSAGE_SOURCE) received.push(data);
+    const parsed = safeParse(workflowsMessageSchema, event.data);
+    if (parsed.success) received.push(parsed.output);
 };
 
 // postMessage is delivered as a task and inject.ts reads the body in a microtask
@@ -105,7 +113,8 @@ describe('the fetch piggyback', () => {
         // Still observed, and observed through the fetch the page installed —
         // the rows came from its answer, and the stub underneath was not called.
         expect(received).toHaveLength(1);
-        expect(received[0]!.executions[0]!.execution.workflowId).toBe('replacement-fetch-answered');
+        const entry = parse(temporalApiWorkflowSchema, received[0]!.executions[0]);
+        expect(entry.execution.workflowId).toBe('replacement-fetch-answered');
         expect(reachedNetwork).toEqual([]);
     });
 

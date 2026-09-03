@@ -10,7 +10,6 @@ import {
     simplifyStatus,
 } from '../../src/family/rows';
 import { apiWorkflow, fakeRunId } from '../helpers';
-import type { TemporalApiWorkflow } from '../../src/types';
 
 describe('runKey', () => {
     it('cannot be confused by punctuation in a workflow id', () => {
@@ -24,12 +23,27 @@ describe('runKey', () => {
 
 describe('normalizeExecutions', () => {
     it('skips a row with no execution id rather than inventing one', () => {
-        const broken = [
-            { execution: { workflowId: '', runId: fakeRunId(1) } },
-            { execution: { workflowId: 'ok', runId: '' } },
-            {},
-        ] as unknown as TemporalApiWorkflow[];
-        expect(normalizeExecutions(broken)).toEqual([]);
+        expect(
+            normalizeExecutions([
+                { execution: { workflowId: '', runId: fakeRunId(1) } },
+                { execution: { workflowId: 'ok', runId: '' } },
+                { execution: { workflowId: 'ok', runId: 42 } },
+                {},
+                null,
+                'a string where an object should be',
+            ]),
+        ).toEqual([]);
+    });
+
+    it('costs one row per malformed entry, not the whole list', () => {
+        // The reason entries are parsed one at a time. Parsing the array as a
+        // whole would make one odd entry blank a page of two hundred workflows.
+        const rows = normalizeExecutions([
+            apiWorkflow({ workflowId: 'first' }),
+            { execution: { workflowId: 'no run id' } },
+            apiWorkflow({ workflowId: 'third' }),
+        ]);
+        expect(rows.map((row) => row.workflowId)).toEqual(['first', 'third']);
     });
 
     it('turns an unparseable time into a usable number instead of NaN', () => {
@@ -37,7 +51,7 @@ describe('normalizeExecutions', () => {
         // the order of the whole table.
         const rows = normalizeExecutions([
             { execution: { workflowId: 'x', runId: fakeRunId(2) }, startTime: 'not a date' },
-        ] as unknown as TemporalApiWorkflow[]);
+        ]);
         expect(rows[0]!.startTimeMs).toBe(0);
         expect(rows[0]!.endTimeMs).toBeNull();
     });
@@ -174,18 +188,13 @@ describe('judgeListResponse', () => {
         ).toBe('accept');
     });
 
-    it('rejects anything malformed, including a message with no generation', () => {
-        // This arrives over postMessage: any script on the page can send it, and
-        // a build of inject.ts older than the generation stamp sends none.
+    it('rejects a url that is a string and still not a list url', () => {
+        // The one malformed case a schema cannot catch. The others — a missing
+        // generation, a NaN one, a url that is not a string at all — are refused
+        // before they get here, by workflowsMessageSchema; see schemas.spec.ts.
         const base = { appliedGeneration: 1, pageNamespace: 'sample-namespace' };
-        expect(judgeListResponse({ ...base, generation: undefined, url: listUrl('sample-namespace') })).toBe(
-            'malformed',
-        );
-        expect(judgeListResponse({ ...base, generation: NaN, url: listUrl('sample-namespace') })).toBe(
-            'malformed',
-        );
-        expect(judgeListResponse({ ...base, generation: 2, url: 42 })).toBe('malformed');
         expect(judgeListResponse({ ...base, generation: 2, url: '/api/v1/namespaces' })).toBe('malformed');
+        expect(judgeListResponse({ ...base, generation: 2, url: '' })).toBe('malformed');
     });
 });
 

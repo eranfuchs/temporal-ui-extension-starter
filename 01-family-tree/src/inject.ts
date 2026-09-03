@@ -25,8 +25,10 @@
 //     failure is one devtools glance away.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { safeParse } from 'valibot';
+
 import { namespaceFromApiUrl } from './family/rows';
-import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
+import { MESSAGE_SOURCE, workflowListEnvelopeSchema, type WorkflowsMessage } from './types';
 
 (() => {
     const TAG = '[temporal-ui-starter]';
@@ -155,15 +157,25 @@ import { MESSAGE_SOURCE, type WorkflowsMessage } from './types';
         const clone = response.clone();
         queueMicrotask(async () => {
             try {
-                const json = JSON.parse(await clone.text());
-                if (!Array.isArray(json?.executions)) return;
-                console.log(TAG, `observed ${json.executions.length} workflows at`, url);
+                // Is this a workflow list at all? The ENTRIES are not looked at
+                // here — they are parsed one at a time on the other side, in
+                // normalizeExecutions() — because this runs in the page's own
+                // world and the body is measured in megabytes: walking every
+                // field of every row twice would be paid for on the page's turn.
+                //
+                // Shape, again, is not provenance. Passing this says the body
+                // looked like a list, not that Temporal sent it — we chose which
+                // response to read, in wrappedFetch, and that is the real basis.
+                const body = safeParse(workflowListEnvelopeSchema, JSON.parse(await clone.text()));
+                if (!body.success) return;
+                const executions = body.output.executions;
+                console.log(TAG, `observed ${executions.length} workflows at`, url);
                 const message: WorkflowsMessage = {
                     source: MESSAGE_SOURCE,
                     type: 'workflows',
                     url,
                     generation: issued,
-                    executions: json.executions,
+                    executions,
                 };
                 // Target the page's own origin, never '*'. With '*' any iframe
                 // on the page could read the rows out of the message.

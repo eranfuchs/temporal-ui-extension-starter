@@ -1,6 +1,8 @@
 // API shape → our row shape. Pure, so it can be unit-tested without a browser.
 
-import type { TemporalApiWorkflow, WorkflowRow } from '../types';
+import { safeParse } from 'valibot';
+
+import { temporalApiWorkflowSchema, type WorkflowRow } from '../types';
 
 // Identity of a single RUN, length-prefixed rather than joined with a separator.
 //
@@ -11,12 +13,24 @@ export function runKey(workflowId: string, runId: string): string {
     return `${workflowId.length}:${workflowId}:${runId}`;
 }
 
-export function normalizeExecutions(executions: TemporalApiWorkflow[]): WorkflowRow[] {
+// `unknown[]` because that is what the caller has: entries out of a JSON body or
+// a postMessage, neither of which anyone here wrote.
+//
+// ONE ENTRY AT A TIME, AND ON PURPOSE. The obvious version parses the whole array
+// against v.array(temporalApiWorkflowSchema), and one malformed entry then costs
+// the WHOLE list — a page of two hundred workflows draws nothing because the two
+// hundred and first was odd. Per entry, a bad one costs one row.
+//
+// Shape is all this proves. That an entry parses says the ids are strings, not
+// that the server ever sent it.
+export function normalizeExecutions(executions: unknown[]): WorkflowRow[] {
     const rows: WorkflowRow[] = [];
-    for (const w of executions) {
-        // A row without an execution id is not something we can place in a
-        // tree or match to a table row; skip rather than invent an id.
-        if (!w?.execution?.workflowId || !w.execution.runId) continue;
+    for (const entry of executions) {
+        // An entry without both ids is not something we can place in a tree or
+        // match to a table row; skip rather than invent an id.
+        const parsed = safeParse(temporalApiWorkflowSchema, entry);
+        if (!parsed.success) continue;
+        const w = parsed.output;
         const startMs = w.startTime ? Date.parse(w.startTime) : NaN;
         const endMs = w.closeTime ? Date.parse(w.closeTime) : NaN;
         rows.push({
@@ -131,21 +145,22 @@ export function namespaceFromApiUrl(url: string): string | null {
 // wrong", which reads as a rendering glitch.
 export type ListResponseVerdict = 'accept' | 'stale' | 'other-namespace' | 'malformed';
 
+// `generation` and `url` arrive over postMessage, where any script on the page
+// can post whatever it likes — but they arrive HAVING BEEN PARSED, against
+// workflowsMessageSchema in types.ts. That is where a non-string url and a
+// non-finite generation are refused, which is why this takes the narrow types and
+// does not re-check them: one description of the shape, at the boundary, rather
+// than a second one here that can drift from it. 'malformed' stays for the thing
+// a schema cannot know — a url that is a string and still not a list url.
 export function judgeListResponse(input: {
-    // `unknown` on purpose: this arrives over postMessage, and any script on the
-    // page can post whatever it likes. A build of inject.ts older than this
-    // function sends no generation at all.
-    generation: unknown;
-    url: unknown;
+    generation: number;
+    url: string;
     appliedGeneration: number;
     // The namespace the page itself is showing, or null when the URL does not
     // name one — in which case there is nothing to compare and the check is
     // skipped rather than guessed at.
     pageNamespace: string | null;
 }): ListResponseVerdict {
-    if (typeof input.url !== 'string') return 'malformed';
-    if (typeof input.generation !== 'number' || !Number.isFinite(input.generation)) return 'malformed';
-
     const responseNamespace = namespaceFromApiUrl(input.url);
     if (responseNamespace === null) return 'malformed';
     if (input.pageNamespace !== null && responseNamespace !== input.pageNamespace) return 'other-namespace';

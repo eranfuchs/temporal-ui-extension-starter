@@ -63,8 +63,18 @@ such a link names a heading that exists.
   - [The age that climbed while the fact stood still](#the-age-that-climbed-while-the-fact-stood-still)
   - [The button that knows nothing](#the-button-that-knows-nothing)
   - [The press that was stamped an hour early](#the-press-that-was-stamped-an-hour-early)
+- [Dependencies](#dependencies)
+  - [Two schema libraries, measured](#two-schema-libraries-measured)
+  - [Two queue libraries, measured](#two-queue-libraries-measured)
+  - [The cache a TTL made look bounded](#the-cache-a-ttl-made-look-bounded)
+  - [The formatter that was fine and the applier that was not](#the-formatter-that-was-fine-and-the-applier-that-was-not)
+  - [The guard that checked the envelope and cast the rest](#the-guard-that-checked-the-envelope-and-cast-the-rest)
+  - [Every JSON viewer wanted a parsed value](#every-json-viewer-wanted-a-parsed-value)
 - [The gates](#the-gates)
   - [A Node range the dependencies never promised](#a-node-range-the-dependencies-never-promised)
+  - [Two algorithms the gates had no business owning](#two-algorithms-the-gates-had-no-business-owning)
+  - [A card nobody was checking](#a-card-nobody-was-checking)
+  - [A hostname with no letters in it](#a-hostname-with-no-letters-in-it)
 
 ## The payload panel
 
@@ -244,8 +254,42 @@ writes that back out. The value on screen is then simply wrong, in a way that
 looks exactly like real data — and account numbers and transaction ids are
 precisely the fields long enough for it to happen to.
 
-So when the text contains a long integer literal, the server's own formatting is
-shown untouched. Ugly beats wrong.
+It is not only the very long integers. `-0.0` serialises as `0`, so a reversal
+becomes nothing; `9007199254740993` becomes `…92`; `0.1000` becomes `0.1` and
+`2.0e+10` becomes `20000000000`, either of which can be the difference between a
+value that pastes back into a request and one that does not. Each of those is
+asserted, with the damaged output written out, in
+`03-payloads/tests/unit/payloads.spec.ts`.
+
+**The fix is not to format.** `decodePayload()` in
+`03-payloads/src/payloads/payloads.ts` does base64, then UTF-8, then stops. A
+single-line JSON payload is displayed as a single line, in a `<pre>`, exactly as the
+server wrote it. There is no `prettyJson`, no encoding-specific display path, and
+nothing in this rung that could rewrite a value.
+
+That is a real cost and it is the point of stating it here rather than hiding it: the
+panel is harder to read than it could be. Three attempts at making it easier all
+failed a test this rung actually cares about.
+
+1. **`JSON.parse`/`JSON.stringify`.** Corrupts long integers. Non-negotiable.
+2. **A regular-expression heuristic** — skip formatting when a 16-digit-or-longer
+   number is present. Never *wrong*, and it shipped for a while. But it gives up on
+   the whole payload, so the financial payloads (the ones most worth reading) are
+   exactly the unformatted ones, and it protects only what the regex knows about:
+   `-0.0` and `0.1000` were still quietly rewritten.
+3. **A lossless formatter over jsonc-parser** — scan, take a list of edits, apply
+   them, every edit replacing whitespace *between* tokens so no token can change. It
+   worked; a 20-digit id came out pretty-printed and byte-identical. It went back out
+   anyway, because it is a **dependency bought for comfort**, and comfort is stage
+   04's department.
+
+The measurements from (3) survive in [The formatter that was fine and the applier
+that was not](#the-formatter-that-was-fine-and-the-applier-that-was-not), and the
+library survey in [Every JSON viewer wanted a parsed
+value](#every-json-viewer-wanted-a-parsed-value). Stage 04 will want both, and will
+be solving a display problem with the payload-fidelity problem already settled here.
+
+Ugly beats wrong, taken all the way: what the server sent is what you see.
 
 ### A query string is not a base URL
 
@@ -544,6 +588,323 @@ The general shape is worth keeping, because it is not specific to a clock: a val
 captured in a render pass and read from an event handler is a value read at the wrong
 time. Anything in a handler that describes *now* has to ask now.
 
+## Dependencies
+
+The policy is in `scripts/surface.json` under `runtime_dependencies`, and it is one
+sentence: **browser APIs and code in this repository for anything specific to this
+extension; mature, maintained libraries for generic algorithms, where using one makes
+the example easier to read and harder to get wrong.** Read that file for what each
+project is budgeted, and `npm run measure` for what each package actually costs the
+bundles a user loads.
+
+This section is the part that does not belong in either: which alternatives were
+measured, and why the one that lost, lost — including the evaluation that ended in no
+dependency at all, and the one that took half a library. Every measurement below is a
+recorded experiment with a date on it, not a live claim: a library's next release can
+change any of these numbers, and the command that prints today's is named above.
+
+### Two schema libraries, measured
+
+Cited from `src/types.ts` in all three projects. Runtime schema validation was
+introduced across every trust boundary in this repository, and the first
+implementation used **zod**, which is the obvious choice and a genuinely excellent
+library. The API difference is small enough that the port between them was
+mechanical.
+
+The bundles were not. Measured 2026-09-03, the same three schemas — the workflow
+entry, the list envelope, the `postMessage` envelope — compiled with exactly the
+options in `02-techniques/esbuild.config.mjs` (`bundle`, `format: 'iife'`,
+`target: 'chrome110'`, **not** minified):
+
+| Library | Version | Third-party bytes in the bundle | Third-party files |
+|---|---|---|---|
+| valibot | 1.4.2 | 13,291 | 1 |
+| zod/mini | 4.5.4 | 36,179 | 12 |
+| arktype | 2.2.3 | 311,628 | 105 |
+| zod | 4.5.4 | 753,678 | 94 |
+
+Two things about that table matter more than the ordering.
+
+The first is **why the numbers are so far apart, and why that is not a criticism of
+zod.** zod's classic API hangs every method off every schema object, so a bundler
+cannot tree-shake a schema's unused methods away; the mini export exists precisely
+to fix that and does. arktype compiles its own type syntax at
+runtime, which means shipping the compiler. None of that is waste in an application
+that uses more of the library than this one does — three envelopes and a handful of
+field checks is close to the smallest possible ask.
+
+The second is **why bundle size is a first-class criterion here specifically, and
+would not be everywhere.** This repository asks a reader to open `dist/content.js`
+and look at it. It ships unminified for that reason (see the comment on `minify` in
+the esbuild config), it prints every third-party file that enters every bundle as
+part of its own audit, and its whole argument is that a reader can account for what
+they loaded. Three quarters of a megabyte of validator, inlined four times over,
+does not make that impossible — but it does make it a thing nobody will actually
+do, which for a teaching repository is the same outcome.
+
+valibot also happens to have no dependencies of its own, so the transitive line in
+every project's budget stays empty on its account. That was not the deciding factor
+and is worth stating as a fact rather than a virtue: zero transitive dependencies is
+one supplier to trust rather than none.
+
+**What the measurement did not decide.** Every semantic this code relies on was
+checked against the library empirically before any schema was written, because two
+of them are surprising: `v.number()` accepts `Infinity` (so every numeric field here
+is `v.pipe(v.number(), v.finite())`), and `v.nullable(x)` accepts `null` but still
+requires the key to be **present**. Those probes are the reason the unknown-key and
+nullability policies in `types.ts` are stated as decisions rather than assumed. A
+library chosen on bytes and adopted on assumption would have shipped a hole.
+
+### Two queue libraries, measured
+
+Cited from `src/page/pacer.ts` in 02 and 03. The pacer's slot accounting — four at a
+time, queue the rest, start the next when one finishes — was hand-written, had no
+tests, and was **wrong**: it checked the slot count, then slept out the backoff, then
+took a slot, so during a backoff every caller passed the check and woke together. The
+full story is at the top of `pacer.ts`; the point here is that this is a generic
+algorithm with no Temporal in it, which is exactly the case the dependency policy
+says to hand to a library.
+
+**p-queue** was evaluated first, being the name people reach for. It works, and the
+thirteen tests in `tests/unit/pacer.spec.ts` pass against it unchanged. It also
+carries priorities, per-task timeouts, task ids, an event emitter, pause/resume and
+an `intervalCap`, none of which this file uses. Measured 2026-09-03 in
+`dist/apiInject.js`, the only bundle either of them enters:
+
+| Library | Version | Packages bundled | Third-party weight added, in the units `npm run measure` prints |
+|---|---|---|---|
+| p-limit | 7.3.2 | 2 (p-limit, yocto-queue) | 2.6kb + 1.2kb |
+| p-queue | 9.3.3 | 3 (p-queue, eventemitter3, p-timeout) | 27.2kb + 6.4kb + 2.2kb |
+
+An order of magnitude, for capability that is not called. `p-limit` also happens to
+be the closer fit on the API: its `activeCount` and `pendingCount` are precisely the
+two numbers the pacer exposes, where p-queue's `pending`/`size` needed the same
+mapping and one more paragraph to explain which was which.
+
+`intervalCap` deserves its own sentence, because it is the feature that looks made
+for this and is not. It is a rate limit **we** choose in advance; Retry-After is a
+wait the **server** asked for. Wiring the second through the first would have made
+the Temporal-specific half of this file — the part a reader forks — read like
+configuration of a library instead of a decision about a server.
+
+**What this cost, honestly.** The change removed about fifteen lines of slot
+accounting and added rather more comment than that explaining the split and the
+rejected alternative, so `npm run measure` reports the stage source getting slightly
+*longer*. That is the trade taken deliberately: the code that had a concurrency bug
+in it is no longer code this repository maintains, and what is left in the file is
+Temporal policy and nothing else.
+
+### The cache a TTL made look bounded
+
+Cited from `src/rowInfo/rowInfoServe.ts` in 02 and 03. This is the third library
+evaluation, and the one that ended in **no dependency** — recorded because the
+reasoning is the same policy applied to a case where it points the other way, and
+because looking for the library found a real bug.
+
+**`lru-cache` was evaluated for the bounded maps and not adopted.** There are four of
+them across 02 and 03: the per-field answer stores here, the paired
+`results`/`askedAt` maps in `rowInfoClient.ts`, the decoded payloads in
+`payloadClient.ts`, and — not a cache at all, but bounded for the same reason — the
+run ledger in `pageApi.ts`. `lru-cache` is mature, does all of this, and would replace
+some counting. Three things decided against it, and the first is the one that matters:
+
+1. **Per-key eviction is the wrong semantics for the paired maps.** `evictIfHuge()`
+   clears `results` and `askedAt` **both or neither**, because dropping the answers
+   while every row still counts as recently asked is precisely the combination that
+   leaves the user staring at an empty column until the ask interval expires. That
+   coupling is the bug fixed in that function; independent per-key eviction across two
+   caches is what would reintroduce it, and it is what an LRU does by design.
+2. **Its TTL runs on a different clock.** `lru-cache`'s internal timestamps come from
+   `performance.now()` where it exists (`defaultPerf` in the package, checked against
+   11.5.2 on 2026-09-03), while every date in this module has to be `Date.now()` —
+   `atMs` becomes `observedAtMs` on the reply and is compared against `FRESH_FLOOR_MS`.
+   The package does expose a documented `perf` option, so `{ perf: Date }` fixes it.
+   That is the point rather than a defence: the fix is a piece of library-specific
+   knowledge a reader now has to hold, forgetting it leaves the module on two clocks
+   whose *origins* differ, and nothing fails loudly — the existing TTL test drives
+   expiry with a single `vi.spyOn(Date, 'now')`, and would simply stop controlling it.
+3. **`fetchMethod` brings more than coalescing.** In-flight deduplication here is one
+   `Map<string, Promise>`; the library's version of it also carries abort signals,
+   `allowStaleOnFetchRejection`, `noDeleteOnFetchRejection` and background refresh.
+   The failure policy at this boundary is one sentence — a failure is cached, with the
+   same TTL, so one 403 does not become a thousand — and it is easier to read as that
+   sentence than as the four options that reproduce it.
+
+For the same reason there is no `p-memoize` plus a TTL package here: two dependencies
+to describe two `Map`s, whose interaction a reader would then have to work out, is
+more explanation surface than the maps.
+
+**What the evaluation found.** Reading the four side by side to price the port showed
+that three had an entry-count bound and this one did not: it had only `TTL_MS`. A TTL
+looks self-limiting and is not. An expired entry is overwritten when the same run is
+asked about again, and a run the user has scrolled past is never asked about again — so
+a tab left open on a busy namespace held an answer for every run it had ever displayed,
+for the life of the page. The fix is the same crude whole-map clear as its siblings,
+which is why the bound is 2,000 and not a policy: the next render pass re-asks for the
+rows that are actually on screen, so being crude costs one extra round for the current
+table.
+
+The bound now has an end-to-end test that counts requests, and the test earns its keep
+the way the others in that file do — removing the eviction line turns it red on a
+request count, not on a size assertion, because the observable consequence of the bug
+is a question the extension no longer needs to ask.
+
+### The formatter that was fine and the applier that was not
+
+**This evaluation is history: 03 no longer depends on `jsonc-parser`, and there is no
+`jsonText.ts`.** It is kept in full because the measurement below is the expensive
+part, it was hard to get, and it is the first input stage 04 will want the day it
+builds a payload viewer. Read it as "what we learned when we tried", not as a
+description of shipped code — the reasons the dependency went back out are in
+[Every JSON viewer wanted a parsed value](#every-json-viewer-wanted-a-parsed-value).
+
+At the time it was the fourth library evaluation, and the only one where the library
+was adopted **in part** — its scanner and formatter yes, its edit applier no.
+
+**Why the dependency, given that the file is 190 lines either way.** What is borrowed
+is not effort, it is correctness in the places a hand-written JSON scanner is wrong
+without looking wrong: string escapes and surrogate pairs, the exact number grammar
+(a leading zero, a lone `-`, `1e`, `.5`), and the offset at which a document stops
+being valid. This module's output is a *value the reader will copy into a request*, so
+a scanner bug here shows a wrong account number rather than a wrong colour — the same
+argument as the schema library, applied to a lexer. jsonc-parser is Microsoft's,
+MIT-licensed, has no dependencies of its own, and is the scanner underneath VS Code's
+JSON support, which is a great deal more input than this repository can generate.
+
+**Why not `applyEdits()`.** `format()` returns a list of edits, and applying them is
+one line of library API. That line rebuilds the whole string once per edit —
+`text.substring(0, offset) + content + text.substring(offset + length)`, in a loop —
+and `format()` emits roughly one edit per token, so the cost is quadratic in the size
+of the payload. Measured against jsonc-parser 3.3.1 on 2026-09-03, on arrays of
+records with 19-digit ids:
+
+| bytes | edits | `applyEdits()` | one pass | identical output |
+|---|---|---|---|---|
+| 1 KB | 191 | 0.8 ms | 0.0 ms | true |
+| 13 KB | 1,901 | 10.4 ms | 0.2 ms | true |
+| 131 KB | 19,001 | 2,431.6 ms | 2.2 ms | true |
+| 526 KB | 76,001 | 18,606.7 ms | 5.2 ms | true |
+
+The last row is measured, not extrapolated. Two things make it worse than the numbers
+suggest: this runs in the **page's** world, on the page's own main thread — 03 formats
+before the text crosses `postMessage`, so an eighteen-second applier freezes Temporal's
+UI, not ours — and half-megabyte payloads are not the exotic case, they are what a
+workflow that carries a batch looks like.
+
+So `applyFormattingEdits()` walks the sorted edits once and joins the pieces. It is
+the same algorithm, expressed the way that does not re-copy; the `identical output`
+column is the claim that matters, and the spec pins it too.
+
+The one thing the single pass has to handle that the library's does not is an
+**overlapping edit**, because `slice(from, to)` with `to < from` returns `''` and
+would silently drop characters — precisely the failure that file existed to prevent.
+`format()` was checked against ten shapes and emits none; the guard was there anyway,
+refusing to format rather than dropping anything, and exported so the spec could
+reach it. A guard that cannot be tested is a comment.
+
+**What 03 does instead, now.** Nothing: `decodePayload()` stops after UTF-8 and the
+panel shows the bytes that arrived. No formatter of any kind, and therefore no
+formatter that can be wrong. That gap is the feature stage 04 buys back, at which
+point the table above says what the applier costs and the survey below says what the
+scanner options are.
+
+### The guard that checked the envelope and cast the rest
+
+Cited from `src/rowInfo/rowInfo.ts` and `src/detail/detail.ts` in 02 and 03. Before
+the schemas, both of those boundaries were guarded by a hand-written predicate, and
+both had the same shape of hole — worth recording once because it is the shape a
+hand-written guard tends to have.
+
+The guard checked the **envelope** and cast the **contents**. `rowInfoResult` verified
+four fields of the message and declared the payload `LastEvent | null`, so a message
+carrying `lastEvent: 42` satisfied the guard and reached a renderer that reads
+`event.eventType` straight into a template. `detail-facts` verified four envelope
+fields plus `scheduledEventId` on each activity, then cast the rest, so a forged
+`outcome: 'exploded'` or `attempt: 'lots'` arrived typed as something it was not.
+
+Neither one broke visibly, and that is the whole problem with a cast: it is an
+assertion with no code behind it, so the failure is a wrong value rendered
+confidently rather than an error anyone sees. The schemas are total — every field, to
+the leaves — for that reason and not for tidiness.
+
+What has to be said in the same breath, and is said at both boundaries in the source:
+**shape validation is not provenance.** `postMessage` carries no authenticated
+sender, so a well-formed forged message is still well-formed. What narrows forged
+traffic is the correlation check — an answer is kept only if this side asked that
+exact question — and what bounds the damage is that neither of these messages can
+reach a credential or start a fetch. A validator that were mistaken for
+authentication would be a worse position than the cast, because it would look like a
+control.
+
+### Every JSON viewer wanted a parsed value
+
+03 briefly coloured the payload panel — a `scanJsonSpans()` in
+a since-deleted `jsonText.ts` module that cut formatted text into `(kind, text)`
+spans, and a wrapper `<span>` per token in `tooltip.ts`. It has been removed, because
+the ladder's own table puts conveniences at stage 04 and this was one: nothing about
+correctness or the trust boundary depended on it. What is worth recording is *why the
+lexing underneath it was ours to begin with*, since that question outlives the feature
+and will come back the day stage 04 grows a real payload viewer.
+
+The obvious way to colour or view a payload is to install a JSON viewer package.
+Surveyed, and the reason each was rejected:
+
+```
+payload as it arrives : {"accountId":12345678901234567890,"name":"Aé","rate":1.0,"big":1e2}
+after JSON.parse+strfy: {"accountId":12345678901234567000,"name":"Aé","rate":1,"big":100}
+```
+
+Four values changed, and one of them is an account number wrong by 890. Every viewer
+package surveyed takes a JavaScript **value** rather than text, so using one puts that
+`JSON.parse` in our code — on the rung whose entire subject is showing a reader what a
+payload actually says.
+
+| Package | Input | Why not |
+|---|---|---|
+| `renderjson` | a parsed value | renders leaves through `JSON.stringify(value)`, so escapes are normalised: not byte-faithful even before the numbers |
+| `json-formatter-js` | a parsed value | its ESM build uses `innerHTML`, which `npm run surface` fails the build on |
+| `@andypf/json-viewer` | text or value, parses internally | `innerHTML` and `JSON.parse` both in its dist, plus a custom element registered in the page |
+| `react-json-view`, `@textea/json-viewer`, `react-json-tree` | a parsed value | peer-depend on React and react-dom (and MUI and emotion, for one of them). The Temporal UI is Svelte |
+
+`lossless-json` is the one library that could parse a payload without rewriting it —
+numbers stay string-backed — and it composes with none of the viewers above:
+`renderjson` decides what a leaf is by testing `constructor` against `Number`,
+`String`, `Boolean` and `Date`, so a `LosslessNumber` falls into the *object* branch
+and renders as a wrapper. Gluing them means writing the renderer anyway, on top of a
+second dependency, having swapped a token stream for a whole value tree in a page that
+may be holding half a megabyte of payload.
+
+**So the lexing was never ours — only the labelling was.** jsonc-parser's scanner does
+string escapes, surrogate pairs, the number grammar and the offset at which a document
+stops being valid; each token comes back as an offset and a length, and every
+character on screen was `text.substr()` of the original. What `scanJsonSpans()` added
+on top was the one fact the scanner does not expose — a key is a string with a colon
+after it — plus a merge of adjacent unstyled runs to cut the DOM node count, and a
+zero-width-token guard whose consequence would have been an endless loop in someone's
+page rather than a wrong colour. None of that made the *parsing* ours; it only chose
+which already-correct span got which class name.
+
+**And then the formatting went too, which is the part worth being honest about.**
+Removing the colouring left `jsonc-parser` in the bundle for one job: pretty-printing
+a payload whose long integers `JSON.parse` would rewrite. That was a real improvement
+in *coverage* over the regex heuristic it replaced — but both are comfort, not
+correctness, and neither is what this rung is about. So the dependency went out,
+`jsonText.ts` with it, and then the heuristic went out too: 03 does not format a
+payload at all. Displaying JSON *as JSON* is one whole job, and it belongs to the rung
+that has time to do it properly rather than to the one whose subject is getting the
+bytes in front of you unaltered.
+
+What that cost and saved, measured: 03's bundles went from 307.3kb to 233.1kb over the
+two removals, the project's declared dependencies from three to two, and 03 now adds
+**no** dependency that 02 does not already carry. What it gave up is a formatted view
+of the long-integer payload.
+
+Stage 04 is where the payload **viewer** belongs — collapsible values, copy-per-value,
+colour per value, and lossless formatting for the ids — built on `lossless-json` or
+jsonc-parser's own `parseTree`. Every choice above will have to be made again there,
+which is why the survey is written down here rather than living only in the commit
+that deleted the code.
+
 ## The gates
 
 `npm run preflight`. There is no CI for this repository, so this is the only thing
@@ -573,12 +934,11 @@ context, at the one moment they have no way to tell a stale promise from a broke
 repository.
 
 `checkEngineRange()` in `scripts/preflight.mjs` compares the declared range against
-every `engines.node` in the lockfile, as interval arithmetic rather than a semver
-dependency — the ranges in the tree are unions of `^X.Y.Z`, `>=X.Y.Z` and bare `X`,
-which is a small enough grammar to do exactly. Anything outside it, including a `^0.x`
-whose real upper bound is not `1.0.0`, is reported as **unchecked**. That direction is
-deliberate: a containment check that guesses wide reports "fits" where it does not,
-which is the failure this whole file exists to avoid.
+every `engines.node` in the lockfile, and a range it cannot read is reported as
+**unchecked** rather than folded into either verdict. That direction is deliberate: a
+containment check that guesses wide reports "fits" where it does not, which is the
+failure this whole file exists to avoid. What the check does *not* own any more is the
+range algebra itself — see below.
 
 Fixing the declaration left the sentences about it wrong, which is the more interesting
 half. The range was correct in five machine-readable places and still false in four
@@ -596,3 +956,154 @@ There is deliberately no gate asserting "every Node range in the documentation m
 that was *not* adopted. A check like that would need an exemption list, and an exemption
 list is where a gate quietly stops checking the thing it is named after. Having one
 statement to keep true is the cheaper answer.
+
+### Two algorithms the gates had no business owning
+
+The dependency policy applies to the tooling too, and it pointed at two places where a
+gate had reimplemented a standard, published algorithm well enough to pass its own
+tests. Neither package reaches a bundle: `scripts/surface.mjs` budgets each project's
+`dependencies`, and these are root `devDependencies`. The stakes are lower here — a
+broken gate cannot ship to a user — but they are not zero, because a gate that is wrong
+in the accepting direction is worse than no gate.
+
+**Semver range containment**, in `scripts/preflight.mjs`. The check above was doing
+interval arithmetic by hand over the grammar it happened to find in the lockfile, and
+declaring anything else unreadable. That was honest, and it was also a standing bet that
+the tree never grows a range shape it had not met. `semver.subset(ours, theirs)` is that
+question, asked of the reference implementation of the specification, with
+`semver.validRange` in front of it so an unreadable range still lands on **unchecked**
+rather than on a guess. Four functions went with it.
+
+The interesting part is what the swap *fixed*. `declaredNodeMajor()` read the lowest
+supported major with `/(\d+)/` — the first number in the string. For
+`^22.22.2 || ^24.15.0 || >=26.0.0` that is 22, which is right, and it is right only
+because the branches happen to be written in ascending order. Nothing requires that.
+Written `>=26.0.0 || ^22.22.2`, the same range would have reported 26, and the DOM-test
+capability probe would have been comparing against a floor the range does not have.
+`semver.minVersion(range).major` answers it for the range rather than for the way it was
+typed, and the self-test drives exactly that reordered string.
+
+**GitHub's heading-slug algorithm**, in `scripts/doc-paths.mjs`. Anchor checking needs
+the anchor GitHub will actually mint, and the copied version got two things wrong in the
+direction that *rejects a link which works* — a run of spaces, and non-ASCII. Both are
+`github-slugger`'s job, and it is the package GitHub's own toolchain uses.
+
+The heading *text* was the larger of the two. The old loop matched `^#{1,6}` per line and
+slugged the raw remainder, which meant a heading holding any inline markup produced an
+anchor GitHub never mints — its own comment recorded this as a KNOWN LIMIT, having
+already cost a correct link a rejection. Once headings come from
+`mdast-util-from-markdown` and their text from `mdast-util-to-string`, three more shapes
+come free that the regex had been silently missing: setext headings, which have no
+leading `#` at all; headings reached through a blockquote or list; and a `#` inside a
+fenced code block, which is code and not a heading. The gate's self-test pins the first
+two.
+
+`marked` was the smaller candidate and lost on the one thing that mattered. Its lexer
+gives a heading token a `.text`, but that text is raw inline markdown: a link arrives
+whole, brackets and target and all, and so does a `**bold**` run. Extracting what a
+reader actually sees would mean hand-writing the inline walker this replacement exists
+to delete. The mdast pair is two packages instead of one and
+pulls a `micromark-*` tree behind it; `npm run measure` prints the current size of the
+dev tree, and none of it is loaded by a browser.
+
+Both changes were mutation-audited, and the audit earned its keep in the usual way: it
+deleted a test. Reusing one slugger across documents, joining raw child `.value`s instead
+of rendered text, and walking only top-level children were each caught — but the second
+mutation failed only one of the two markup cases, which proved the other could not
+discriminate. A slugger that drops backticks as characters and one handed the rendered
+text land on the same slug for a heading holding inline code, exactly as the old
+implementation's comment had said. That case is now a comment instead of a check. A test
+no wrong answer can fail is decoration.
+
+`scripts/preflight.mjs` also acquired the self-test it never had, which is the real
+finding of this exercise. It runs four other gates' self-tests and had none of its own,
+so the one gate here that was trusted purely on the strength of looking correct was the
+one deciding whether anything else ran. Its eight cases cover the range decision and the
+minimum-major reading — not the spawned builds, and deliberately not node-semver's own
+conformance. Two of them exist only to pin the direction of the doubt: an unreadable
+range reports unchecked and never satisfied, and a range that is provably too wide is
+still reported as FAILED even when some *other* dependency's range could not be read at
+all. A fact does not become less of a fact because the tool was uncertain elsewhere.
+
+### A card nobody was checking
+
+Rule 7 of `scripts/surface.mjs` decides whether a package may be inside a bundle. It has
+nothing to say about whether the README still describes the package that **is** inside
+one, and that is the claim which rots on its own: a version bump changes what a reader
+loads and touches nothing a budget looks at. Every other check here stays green while the
+card goes quietly out of date — the same shape as every other entry in this file.
+
+So rule 8 reads each project's `## Dependencies` section and compares it against the
+bundles esbuild has just produced. Four decisions in it are worth recording.
+
+**The version and the licence come from the copy that was inlined, not from
+`package.json`.** The projects declare caret ranges, so their own `package.json` cannot
+answer "which version does a reader load" — and in a tree with two installed copies, only
+the metafile can say which one esbuild actually reached. The check resolves the package
+root out of that metafile and reads *that* directory's `package.json`, using the same
+resolution `scripts/measure.mjs` uses, so the gate and the size report cannot end up
+describing different copies of the same package.
+
+**A direct package gets a card; a transitive one only has to be named, with its version.**
+A direct dependency is a choice somebody made and has to defend, which is what a card is
+for. `yocto-queue` is not a choice: it is in the bundles because `p-limit` is. A card of
+its own would read as a second decision that nobody took, so the rule asks instead that it
+appear inside the card of whatever brought it in — where a reader who has just found the
+name in a bundle will look for it.
+
+**Sizes are deliberately not in the cards.** They are the one figure a reader most wants
+and the one that cannot be written down honestly: `bytesInOutput` is what survived
+tree-shaking, so it moves whenever our own imports move, and a number typed into prose is
+a copy that goes stale with nobody editing it. Each card names `npm run measure` instead.
+A gate comparing card sizes against measured ones would need a tolerance, and a tolerance
+is where a gate quietly stops checking the thing it is named after — the same reason there
+is no gate over the Node ranges in the prose above.
+
+**Not checked is not clean.** When a card's installed `package.json` cannot be read, the
+rule reports that as a finding rather than passing the card. This is not a hypothetical
+direction: while the rule was being written, *every* card in the repository reported
+"could not be read", because the path being joined was wrong — the metafile's package
+roots are relative to the project being built, not to the repository. A rule that shrugged
+at an unreadable package would have printed a count of documented packages and verified
+none of them, which is worse than not having the rule.
+
+That last one is also the mutation audit's contribution. Nine of ten mutations — the rule
+never firing, the section reader running past the next heading, a missing section reading
+as clean, a missing card, a dropped version comparison, a dropped licence comparison, an
+unmentioned transitive, a transitive named without its version, and a card for a package
+no bundle contains — were each caught by exactly the case written for them. The tenth,
+silently skipping a package whose metadata could not be read, survived: there was no case
+for it. There is now.
+
+Writing the cards also found something no check was looking for. `jsonc-parser` reaches
+`dist/popup.js`, which has no payload panel and no JSON to scan, because the popup imports
+`safeCodecEndpoint` from `src/payloads/codec.ts` and the module-level declarations come
+with it. Splitting that file to shed them would trade a coherent "what can this extension
+send, and where?" unit for a smaller popup, so 03's card says so plainly instead. A card
+that has to admit something is a card doing its job.
+
+### A hostname with no letters in it
+
+The leak gate reads every URL it can find and asks whether the host is one this repository
+is allowed to name — `cloud.temporal.io`, `localhost`, `example.com`. Anything else is a
+finding, because an unrecognised hostname is exactly how a private deployment leaks into a
+public example.
+
+Run over the commit messages rather than the working tree, that rule failed on prose. The
+commit that recorded the base-URL decision quotes the endpoint with its middle taken out,
+`https://…/base?`, and the whole host is a single ellipsis character. The gate had never
+heard of it, so it reported a hostname it could not vouch for — and it was right to be
+suspicious in general and wrong here in particular.
+
+The narrowing is one line: a host with no ASCII letter and no digit in it cannot name a
+machine, so it names nothing and is allowed. That is deliberately not a rule about
+ellipses. An elision *inside* a host keeps its alphanumerics and stays checked, which is
+the case that matters — `api…a-real-internal-hostname` is still a leak, and the self-test
+pins both directions so the accepting half can never grow into the flagging half by
+accident.
+
+Worth noting where this was found. `npm run leak:history` had been red since that commit
+was written, which is a run that only happens deliberately; the tree scan the gate runs on
+every preflight was green throughout, because the sentence lives in a commit message and
+not in a file. A gate that is only correct over the inputs somebody looks at every day is
+a gate with a blind spot on a schedule.

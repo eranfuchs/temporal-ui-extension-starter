@@ -44,11 +44,13 @@ sample gets a server to talk to. Install it from
 
 ## Why this is a separate npm project
 
-The extension itself has **zero runtime dependencies** and a handful of dev ones.
-The Temporal SDK is a large dependency tree with native binaries in it, and none
-of it ships in the extension. Keeping it in `sample/` means `npm install` at the
-repository root stays small, and nobody has to install a Rust core bridge to
-build a Chrome extension.
+Each extension bundles a **small, named and budgeted** set of packages — one to
+three of them, listed in that project's README. The Temporal SDK is a different
+kind of dependency: a large tree with native binaries in it, none of which ships in
+an extension. Keeping it in `sample/` means `npm install` at the repository root
+stays small, nobody has to install a Rust core bridge to build a Chrome extension,
+and the dependency budget the [root README](../README.md#dependencies) describes
+stays a statement about what a browser actually loads.
 
 ## It talks to localhost and nothing else
 

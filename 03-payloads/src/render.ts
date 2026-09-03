@@ -245,12 +245,20 @@ function decorateRow(
 // It is also the reason the three render modules do not need to know about each
 // other: each appends its own node wherever it likes, and this settles the result.
 //
-// Why this order and not another: the number of deep links is whatever the
-// settings list holds, so anything placed to their right moves when a user adds
-// a link. The badge is the loudest thing drawn here and the one worth finding at
-// a glance, so it gets the fixed position closest to the id, the button next, and
-// the variable-length list goes last. This is the row drawn in both READMEs.
-const CELL_CONTROL_ORDER = [RETRY_CLASS, PAYLOAD_CLASS, LINK_CLASS];
+// Why this order and not another: the badge is the loudest thing drawn here and
+// the one worth finding at a glance, so it keeps the position closest to the id.
+// The links come next because they are the reason most people install this, and
+// the `{ }` button goes last — it opens a panel that covers part of the row, so
+// it is the one control that reads better away from the id it belongs to.
+//
+// The cost, stated because it is real and it is the argument for the other order:
+// the number of deep links is whatever the settings list holds, so the button sits
+// to the right of a variable-length list and shifts when a user adds or removes a
+// link. Accepted deliberately — 02 draws the same row without the button, so the
+// two projects differ by an append rather than by a rearrangement.
+//
+// This is the row drawn in both READMEs.
+const CELL_CONTROL_ORDER = [RETRY_CLASS, LINK_CLASS, PAYLOAD_CLASS];
 
 // Returns whether anything moved, which is also what makes it testable.
 export function syncControlOrder(cell: HTMLTableCellElement): boolean {

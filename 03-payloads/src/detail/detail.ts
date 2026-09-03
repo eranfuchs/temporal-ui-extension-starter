@@ -37,6 +37,8 @@
 // Everything in this file is pure. src/detail/detailWatch.ts does the observing (MAIN
 // world) and src/detail/detailLinks.ts does the drawing (ISOLATED world).
 
+import * as v from 'valibot';
+
 import { eventsOf } from '../rowInfo/rowInfo';
 import { simplifyStatus } from '../family/rows';
 import type { DeepLinkActivity } from '../links/deepLink';
@@ -83,7 +85,12 @@ export function detailRefFromPath(pathname: string): DetailRef | null {
 // signal not to look at the response — the same shape of decision as
 // namespaceFromApiUrl() in rows.ts, and kept out of the MAIN-world file for the
 // same reason: it is a rule about a URL, so it can be a pure function with tests.
-export type DetailSource = 'history' | 'describe';
+//
+// A schema rather than a bare union because the message at the bottom of this file
+// carries the same two words across a postMessage, and one declaration is what keeps
+// the wire and the reader from drifting apart.
+export const detailSourceSchema = v.picklist(['history', 'describe']);
+export type DetailSource = v.InferOutput<typeof detailSourceSchema>;
 
 export function detailRefFromApiUrl(url: string): (DetailRef & { from: DetailSource }) | null {
     const match = /\/api\/v1\/namespaces\/([^/]+)\/workflows\/([^/?#]+)(\/history-reverse|\/history)?(\?|$)/.exec(url);
@@ -154,47 +161,75 @@ export function acceptFactsFor(page: DetailRef, answer: DetailRef): boolean {
 // 'open' is not "running": it means no terminal event for this activity has been
 // read yet, which on a history page that has not finished loading is the answer
 // for everything near the end of the list.
-export type ActivityOutcome = 'open' | 'completed' | 'failed' | 'timedOut' | 'cancelled';
+export const activityOutcomeSchema = v.picklist(['open', 'completed', 'failed', 'timedOut', 'cancelled']);
+export type ActivityOutcome = v.InferOutput<typeof activityOutcomeSchema>;
 
-export interface DetailActivity {
+// `number | null` throughout, with the key REQUIRED: v.nullable() accepts null and
+// refuses an absent key, which is the distinction the readers rely on — null means
+// "read, and not there", absent means "this came from something that is not us".
+// finite() is spelled out because v.number() accepts both infinities, and an
+// Infinity in a timestamp would format as a date and compare as an eternity.
+const finiteNumber = v.pipe(v.number(), v.finite());
+
+// A schema rather than an interface because this shape is BOTH folded here and
+// received over a postMessage in detailLinks.ts, and one declaration cannot drift
+// from the other. See the note on detailFactsMessageSchema at the bottom of the file
+// for why the leaves are described and not just the envelope.
+export const detailActivitySchema = v.object({
     // The id of the ActivityTaskScheduled event, which is how every later event
     // refers back to this activity, and the number the Temporal UI shows beside
     // it. int64 in the proto, therefore a string in JSON (see rowInfo.ts).
-    scheduledEventId: string;
+    scheduledEventId: v.string(),
     // Empty until the ActivityTaskScheduled event itself has been read. A page of
     // history can carry an activity's later events without its first one, so the
     // entry is kept rather than dropped — dropping it would lose the attempt count
     // when the earlier page arrives. linkableActivities() filters instead.
-    activityId: string;
-    activityType: string;
+    activityId: v.string(),
+    activityType: v.string(),
     // null when unknown, which for a PENDING activity is the normal state: the
     // history has no attempt count for one. Describe supplies it.
-    attempt: number | null;
-    scheduledAtMs: number | null;
+    attempt: v.nullable(finiteNumber),
+    scheduledAtMs: v.nullable(finiteNumber),
     // When the terminal event for this activity was written, null while it is still
     // open. This is what turns a log query into a link about ONE execution of an
     // activity rather than about every execution of its type: the pair
     // (scheduledAtMs, closedAtMs) is a window no other instance shares, even when
     // the workflow ran the same activity type twenty times.
-    closedAtMs: number | null;
-    outcome: ActivityOutcome;
+    closedAtMs: v.nullable(finiteNumber),
+    outcome: activityOutcomeSchema,
     // True when this came from Describe's `pendingActivities` — the activity is
     // pending right now. Shown beside the links, because "attempt 900, pending" and
     // "attempt 900, finished eventually" are different situations.
-    pending: boolean;
-}
+    pending: v.boolean(),
+});
+export type DetailActivity = v.InferOutput<typeof detailActivitySchema>;
 
-export interface DetailFacts {
+// A workflow with a hundred thousand events has thousands of activities, and the map
+// this bounds lives for as long as the tab is on the page. Same reasoning as
+// MAX_LEDGER_ENTRIES in pageApi.ts: the bound is generous, crude and stated.
+// The NEWEST are kept, because they are the ones somebody is looking at.
+//
+// State the cost, because it is paid silently: on a workflow that exceeds this, an
+// OLD activity's panel gets no link, and "no link" looks exactly like a broken
+// selector. Nothing in the panel can say why. The popup therefore says out loud when
+// the cap is in effect — it is the only place a reader can tell an evicted activity
+// from a stale anchor.
+export const MAX_ACTIVITIES = 500;
+
+export const detailFactsSchema = v.object({
     // From WorkflowExecutionStarted, or from Describe. null = not read yet, and
     // the token that needs it is reported unknown rather than guessed.
-    workflowType: string | null;
-    taskQueue: string | null;
-    startTimeMs: number | null;
-    endTimeMs: number | null;
+    workflowType: v.nullable(v.string()),
+    taskQueue: v.nullable(v.string()),
+    startTimeMs: v.nullable(finiteNumber),
+    endTimeMs: v.nullable(finiteNumber),
     // Simplified in the same vocabulary as the list page's rows ("Running",
     // "TimedOut", …) so `{status}` means the same thing in both scopes.
-    status: string | null;
-    activities: DetailActivity[];
+    status: v.nullable(v.string()),
+    // Bounded HERE, on the shape itself, rather than only in capActivities() where
+    // our own fold applies it: this shape also arrives over a postMessage, and a
+    // bound that only the honest producer keeps is not a bound.
+    activities: v.pipe(v.array(detailActivitySchema), v.maxLength(MAX_ACTIVITIES)),
     // The most events any ONE response has carried — a floor, and NOT a running
     // total, which is what this said until it was read against mergeFacts(): that
     // takes Math.max, because the UI re-fetches the same first page on every
@@ -204,8 +239,9 @@ export interface DetailFacts {
     // from. Under-stating is the right direction for a scope disclosure and it is
     // why the wording on the page is "at least" — the UI pages history lazily, so
     // some number has to be shown, and the honest one is a lower bound.
-    eventsSeen: number;
-}
+    eventsSeen: finiteNumber,
+});
+export type DetailFacts = v.InferOutput<typeof detailFactsSchema>;
 
 export const NO_FACTS: DetailFacts = {
     workflowType: null,
@@ -216,18 +252,6 @@ export const NO_FACTS: DetailFacts = {
     activities: [],
     eventsSeen: 0,
 };
-
-// A workflow with a hundred thousand events has thousands of activities, and this
-// map lives for as long as the tab is on the page. Same reasoning as
-// MAX_LEDGER_ENTRIES in pageApi.ts: the bound is generous, crude and stated.
-// The NEWEST are kept, because they are the ones somebody is looking at.
-//
-// State the cost, because it is paid silently: on a workflow that exceeds this, an
-// OLD activity's panel gets no link, and "no link" looks exactly like a broken
-// selector. Nothing in the panel can say why. The popup therefore says out loud when
-// the cap is in effect — it is the only place a reader can tell an evicted activity
-// from a stale anchor.
-export const MAX_ACTIVITIES = 500;
 
 // ── The history fold ─────────────────────────────────────────────────────────
 
@@ -530,19 +554,9 @@ export function rowFromFacts(ref: DetailRef, facts: DetailFacts): WorkflowRow | 
 
 // ── The message ──────────────────────────────────────────────────────────────
 
-export interface DetailFactsMessage {
-    source: typeof MESSAGE_SOURCE;
-    type: 'detail-facts';
-    from: DetailSource;
-    namespace: string;
-    workflowId: string;
-    runId: string | null;
-    facts: DetailFacts;
-}
-
-// SHAPE ONLY, and the same warning as every other guard in this project: it says
-// the message is well-formed and nothing whatever about who sent it. Any script on
-// the page can post one.
+// SHAPE ONLY, and the same warning as every other boundary schema in this project:
+// parsing it says the message is well-formed and nothing whatever about who sent it.
+// Any script on the page can post one.
 //
 // What a forged one can do is worth being precise about, because unlike the
 // row-info request it reaches no credential and starts no fetch — this feature
@@ -553,23 +567,25 @@ export interface DetailFactsMessage {
 // and safeHref() re-checks the result. The honest summary is "a page that is
 // already running script can make these links say something untrue", which is true
 // of every extension that renders page data.
-export function isDetailFactsMessage(value: unknown): value is DetailFactsMessage {
-    const message = asObject(value);
-    if (!message) return false;
-    if (message['source'] !== MESSAGE_SOURCE || message['type'] !== 'detail-facts') return false;
-    if (message['from'] !== 'history' && message['from'] !== 'describe') return false;
-    if (typeof message['namespace'] !== 'string' || !message['namespace']) return false;
-    if (typeof message['workflowId'] !== 'string' || !message['workflowId']) return false;
-    const runId = message['runId'];
-    if (runId !== null && typeof runId !== 'string') return false;
-    const facts = asObject(message['facts']);
-    if (!facts) return false;
-    const activities = facts['activities'];
-    // The cap is the same kind of bound as MAX_RUNS_PER_REQUEST: a forged message
-    // must not be able to hand the renderer an unbounded list.
-    if (!Array.isArray(activities) || activities.length > MAX_ACTIVITIES) return false;
-    return activities.every((activity) => typeof asObject(activity)?.['scheduledEventId'] === 'string');
-}
+//
+// It describes the facts TO THE LEAVES, which the hand-written guard it replaced did
+// not: that one checked four envelope fields and `scheduledEventId` on each activity,
+// then cast the rest, so a forged `outcome: 'exploded'` or `attempt: 'lots'` reached
+// the renderer typed as something it was not. Nothing visibly broke, which is the
+// problem with a cast — see
+// docs/design-notes.md#the-guard-that-checked-the-envelope-and-cast-the-rest.
+export const detailFactsMessageSchema = v.object({
+    source: v.literal(MESSAGE_SOURCE),
+    type: v.literal('detail-facts'),
+    from: detailSourceSchema,
+    namespace: v.pipe(v.string(), v.minLength(1)),
+    workflowId: v.pipe(v.string(), v.minLength(1)),
+    // Present and nullable: a history call that named no run is answering about the
+    // latest one, and acceptFactsFor() treats that differently from a mismatch.
+    runId: v.nullable(v.string()),
+    facts: detailFactsSchema,
+});
+export type DetailFactsMessage = v.InferOutput<typeof detailFactsMessageSchema>;
 
 // ── Small readers ────────────────────────────────────────────────────────────
 //
@@ -580,6 +596,11 @@ export function isDetailFactsMessage(value: unknown): value is DetailFactsMessag
 // are local convenience: "is this an object", "is this a non-empty string". A
 // shared module of untyped readers would make both files depend on a shape neither
 // of them owns, to save a handful of lines.
+//
+// They read a TEMPORAL API RESPONSE, which is why they are not schemas: the folds
+// below walk a shape whose useful parts are three levels down inside a union of
+// event attributes, and pick single fields out of it. A schema for that response
+// would be a transcription of the server's proto, most of it never read.
 
 function asObject(value: unknown): Record<string, unknown> | null {
     return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;

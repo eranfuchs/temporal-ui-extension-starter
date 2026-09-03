@@ -48,6 +48,30 @@
             "one of these, that is an edit to this file plus a written reason, reviewed."
         ]
     },
+    "runtime_dependencies": {
+        "why": [
+            "The policy: browser APIs and code in this repository for anything specific to",
+            "this extension — the page-world technique, the request ledger, what may be sent",
+            "to a codec server, what is rendered as text. Mature, maintained libraries for",
+            "generic algorithms, where using one makes the example easier to read and harder",
+            "to get wrong.",
+            "",
+            "The budget below is per project, and it separates two different things:",
+            "  direct       — packages this project declares and its own source imports.",
+            "  also_bundled — packages that enter a bundle only as a consequence of those,",
+            "                 through a dependency of a dependency.",
+            "",
+            "Both lists are exact. A package in a bundle and not in a list fails; a list",
+            "entry nothing bundles also fails, because a budget line nobody uses is a",
+            "permission nobody reviewed. The point of naming transitive packages is that a",
+            "version bump which starts pulling in something new does not pass unnoticed.",
+            "",
+            "What this is NOT: an attestation. A lockfile and a bundle-input list say what",
+            "code is here, not that the code is trustworthy. A dependency diff is not a",
+            "manifest permission diff — it grants no new capability to the extension — but",
+            "it is still an audit-surface diff, and this repository budgets and reports both."
+        ]
+    },
     "binaries": {
         "allowed": [
             "*/public/icons/icon-*.png"
@@ -73,6 +97,12 @@
             "externally_connectable": false,
             "content_security_policy": false,
             "chrome_api": false,
+            "runtime_dependencies": {
+                "direct": [
+                    "valibot"
+                ],
+                "also_bundled": []
+            },
             "why": "The whole claim of this project is that a useful view costs nothing. No permissions key, no service worker, and no chrome.* call in src/ — enforced here and by tsconfig.json's \"types\": []."
         },
         "02-techniques": {
@@ -84,6 +114,15 @@
             "externally_connectable": false,
             "content_security_policy": false,
             "chrome_api": true,
+            "runtime_dependencies": {
+                "direct": [
+                    "p-limit",
+                    "valibot"
+                ],
+                "also_bundled": [
+                    "yocto-queue"
+                ]
+            },
             "why": "One permission, `storage`, for the user's own deep-link templates and toggles. Still no host_permissions — but read the next sentences, because this project DOES originate requests and no manifest key says so. Two per running row: one history-reverse page of one event for the `Last event` column, and one DescribeWorkflowExecution for the retrying-activity badge (pendingActivities is in no other response, which is the justification for the whole request path). Both are issued from the page's own world, by src/page/pageApi.ts and nothing else, where a host permission would buy nothing: Chrome treats a content-script fetch as cross-origin even with one. There is ONE gate, not one per feature — fetchForListedRun() is the only route to the page's Authorization header and it checks the ledger itself, so a feature added later cannot forget to. There is no other outbound host in this project and no setting that can add one: it decodes no payload, and the retry badge deliberately does not read lastFailure.message, so nothing here reads application data. The deep-link card on a single workflow's page fetches nothing at all — it reads responses the page fetched for itself, through the watcher seam in pageApi.ts, which touches neither the ledger nor the credentials. The codec server, the first external egress and the personal-data question all arrive together in stage 03, the payload stage. A permission diff is not a capability diff; the audit for this project is that security card, not this list alone."
         },
         "03-payloads": {
@@ -95,7 +134,16 @@
             "externally_connectable": false,
             "content_security_policy": false,
             "chrome_api": true,
-            "why": "THE SAME BUDGET AS 02, AND THAT IS THE WARNING THIS ENTRY EXISTS TO CARRY. One permission, `storage`, no host_permissions, no service worker, the same three content-script matches — every capability-bearing key is identical, and a manifest diff against 02 shows the name, the description, the version and the button's tooltip. What changed is the capability: this is the first project that can send data OUT of the browser, the first that decodes payloads at all, and therefore the first whose panel can hold personal or financial data. No manifest key says any of that, and no permission budget can, which is why this entry is the floor and not the audit. The audit is the security card in 03-payloads/README.md, where the egress is described request-for-request, the two credential options are shown as deliberate deletions, and the residual forged-message risk is stated once at full width along with the argument for accepting it. The egress claims are asserted from outside the extension in 03-payloads/tests/unit/apiInjectCodec.spec.ts, and the endpoint policy they rest on in 03-payloads/tests/unit/codec.spec.ts."
+            "runtime_dependencies": {
+                "direct": [
+                    "p-limit",
+                    "valibot"
+                ],
+                "also_bundled": [
+                    "yocto-queue"
+                ]
+            },
+            "why": "THE SAME MANIFEST BUDGET AS 02, AND THAT IS THE WARNING THIS ENTRY EXISTS TO CARRY. One permission, `storage`, no host_permissions, no service worker, the same three content-script matches — every capability-bearing key is identical, and a manifest diff against 02 shows the name, the description, the version and the button's tooltip. (The dependency list above is one package longer, which is the counterpart lesson: a dependency diff is not a manifest permission diff, but it is still an audit-surface diff, and this file budgets both.) What changed is the capability: this is the first project that can send data OUT of the browser, the first that decodes payloads at all, and therefore the first whose panel can hold personal or financial data. No manifest key says any of that, and no permission budget can, which is why this entry is the floor and not the audit. The audit is the security card in 03-payloads/README.md, where the egress is described request-for-request, the two credential options are shown as deliberate deletions, and the residual forged-message risk is stated once at full width along with the argument for accepting it. The egress claims are asserted from outside the extension in 03-payloads/tests/unit/apiInjectCodec.spec.ts, and the endpoint policy they rest on in 03-payloads/tests/unit/codec.spec.ts."
         }
     }
 }

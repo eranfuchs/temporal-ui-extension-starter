@@ -36,24 +36,63 @@
 // world, where the page's own credentials are) and the decision about WHICH rows
 // to ask about is in rowInfoClient.ts (ISOLATED world, where the table is).
 
+import * as v from 'valibot';
+
 import { MESSAGE_SOURCE } from '../types';
 
 // ── What we ask for ──────────────────────────────────────────────────────────
 
+// A forged message can name as many runs as it likes, and each one costs a URL
+// build and a ledger lookup. The bound is deliberately larger than a Temporal
+// list page so the real caller never trips it.
+export const MAX_RUNS_PER_REQUEST = 500;
+
+// The floor under `fresh`. An answer that arrived less than this ago is not
+// re-fetched however many times it is asked for, so the worst a page script can do
+// by posting `fresh` in a loop is one round of requests per run per five seconds —
+// rather than one per message. It is the bound that lets the flag exist at all.
+//
+// Five seconds is short enough that a human who presses refresh gets something they
+// would call fresh, and far enough below the TTL that the button is not decoration.
+// The button disables itself for the same interval, so the rule the receiver
+// enforces is the rule the reader can see.
+export const FRESH_FLOOR_MS = 5_000;
+
+// Every number crossing this boundary, with finite() spelled out rather than left
+// to v.number(). NaN and both infinities are numbers to `typeof`, and all three
+// arrive from JSON as `null` anyway — so a number that survived a round-trip as a
+// number is finite, and one that did not cannot have come from our own serve
+// (numberOf and timeToMs below return null, never NaN). Worth refusing rather
+// than rendering: NaN formats as "NaN" in a tooltip and makes every comparison it
+// touches false, which is a wrong answer instead of an error.
+const finiteNumber = v.pipe(v.number(), v.finite());
+
 // One field = one API call per run. Kept separate so a user who turned on one of
 // the two features pays for one request per row and not two.
-export type RowInfoField = 'lastEvent' | 'retry';
+export const rowInfoFieldSchema = v.picklist(['lastEvent', 'retry']);
+export type RowInfoField = v.InferOutput<typeof rowInfoFieldSchema>;
 
-export interface RowInfoRequest {
-    source: typeof MESSAGE_SOURCE;
-    type: 'row-info-request';
-    namespace: string;
-    want: RowInfoField[];
+// SHAPE ONLY. Parsing this says the message is well-formed and nothing whatever
+// about who sent it — every field of it is published in this repository. What stops
+// a forged message from being answered is the ledger in pageApi.ts, which fetches
+// only for runs the PAGE ITSELF was handed.
+export const rowInfoRequestSchema = v.object({
+    source: v.literal(MESSAGE_SOURCE),
+    type: v.literal('row-info-request'),
+    namespace: v.pipe(v.string(), v.minLength(1)),
+    // A field name nobody serves is refused rather than carried into a switch that
+    // is then hoped to be exhaustive; an empty list is refused because it asks a
+    // question with no answer, and answerOne() would have to invent a reading date
+    // for a reply about nothing.
+    want: v.pipe(v.array(rowInfoFieldSchema), v.minLength(1)),
     // Every run the asker wants answered, in one message. There is no request id:
     // answers are matched by (workflowId, runId), because a run's last event is
     // the same answer no matter which render pass asked for it — and one answer
     // per run means the slow ones do not hold up the fast ones.
-    runs: { workflowId: string; runId: string }[];
+    runs: v.pipe(
+        v.array(v.object({ workflowId: v.string(), runId: v.string() })),
+        v.maxLength(MAX_RUNS_PER_REQUEST),
+    ),
     // "Do not answer these from what you already know." False on every automatic
     // pass; true only when the user pressed the refresh control in the column
     // header.
@@ -62,29 +101,82 @@ export interface RowInfoRequest {
     // that keep this feature from being a load generator (see rowInfoServe.ts) —
     // and anything running in the page can post this message, so a flag that
     // switched it off on request would have switched it off for whoever asked, as
-    // often as they liked. FRESH_FLOOR_MS below is what stops that, enforced by
+    // often as they liked. FRESH_FLOOR_MS above is what stops that, enforced by
     // the receiver rather than promised by the sender.
     //
     // It is a flag on the existing message and NOT a message of its own, which is
     // deliberate: the number of message types this extension accepts from the page
     // is what a reviewer enumerates, and a refresh button is not worth adding one.
-    fresh: boolean;
-}
+    //
+    // v.boolean() and not v.optional(v.boolean(), false): a message that does not
+    // say which mode it is asking for is a message from a different build, and a
+    // default here would pick a side on behalf of a sender who did not say.
+    fresh: v.boolean(),
+});
+export type RowInfoRequest = v.InferOutput<typeof rowInfoRequestSchema>;
 
-export interface RowInfoResult {
-    source: typeof MESSAGE_SOURCE;
-    type: 'row-info-result';
+// ── What comes back ──────────────────────────────────────────────────────────
+
+export const lastEventSchema = v.object({
+    // int64 in the proto, and therefore a STRING in JSON. Kept as one: it is
+    // displayed and compared, never added up. See the note on numberOf below.
+    eventId: v.string(),
+    // Normalised — see prettyEventType.
+    eventType: v.string(),
+    // `null` and only null, never `undefined`, here and in every nullable field
+    // below. An absent field is a different message from one that says "asked, and
+    // there is nothing", and the readers further down already return the explicit
+    // null. v.nullable() requires the key to be present, which is the distinction.
+    timeMs: v.nullable(finiteNumber),
+});
+export type LastEvent = v.InferOutput<typeof lastEventSchema>;
+
+export const pendingRetrySchema = v.object({
+    // activityType.name: a symbol from the workflow's source, not user data.
+    activityType: v.string(),
+    // The attempt now pending. 1 means "running for the first time", which is not
+    // a retry and never produces a badge — see readPendingRetry.
+    attempt: finiteNumber,
+    // 0 in the API means UNLIMITED, and reporting "attempt 900 of 0" is worse
+    // than saying nothing, so it becomes null here.
+    maximumAttempts: v.nullable(finiteNumber),
+    nextRetryAtMs: v.nullable(finiteNumber),
+    // When the CURRENT attempt was scheduled. Retained because "attempt 900" says
+    // nothing about whether it is moving; a scheduled time that is minutes old is
+    // a different situation from one that is seconds old.
+    scheduledAtMs: v.nullable(finiteNumber),
+});
+export type PendingRetry = v.InferOutput<typeof pendingRetrySchema>;
+
+// SHAPE ONLY, for the same reason as the request above and with one extra sting in
+// the tail: this message travels INTO the isolated world, which is the side that
+// renders. Anything on the page can post a well-formed one. So the schema is
+// deliberately total — every field, to the leaves — but it is still not provenance,
+// and it never will be: `postMessage` carries no authenticated sender. What narrows
+// forged and accidental traffic is the correlation check in rowInfoClient.ts, which
+// keeps an answer only when this side asked that exact question. The worst a forged
+// answer can then do is put a wrong event type or retry count in a row it was asked
+// about; it cannot make a request, reach the network, or move a payload.
+//
+// Validating to the leaves is what makes the renderer's `RowInfo` honest. It reads
+// `event.eventType` straight into a template, so `{lastEvent: 42}` is refused here
+// or it is refused nowhere. The version that declared `LastEvent | null` and checked
+// four fields of the envelope instead is at
+// docs/design-notes.md#the-guard-that-checked-the-envelope-and-cast-the-rest.
+export const rowInfoResultSchema = v.object({
+    source: v.literal(MESSAGE_SOURCE),
+    type: v.literal('row-info-result'),
     // Echoed back from the request it answers. A workflow id is unique within a
     // namespace and NOT across them, and a Temporal UI page fetches lists for more
     // than one — so without this an answer about `order-42` in a namespace the
     // picker touched could be filed under the `order-42` on screen. It is what lets
     // the ISOLATED world file answers per namespace, and what lets it recognise an
     // answer to a question it never asked.
-    namespace: string;
-    workflowId: string;
-    runId: string;
-    lastEvent: LastEvent | null;
-    retry: PendingRetry | null;
+    namespace: v.pipe(v.string(), v.minLength(1)),
+    workflowId: v.string(),
+    runId: v.string(),
+    lastEvent: v.nullable(lastEventSchema),
+    retry: v.nullable(pendingRetrySchema),
     // WHEN THIS WAS TRUE — the instant the answer was read from Temporal, not the
     // instant it was sent on. The two differ by up to the TTL, because an answer may
     // be served from the cache in rowInfoServe.ts.
@@ -107,137 +199,19 @@ export interface RowInfoResult {
     // Where fields disagree — one served from cache, the other freshly fetched — this
     // is the OLDER of them, so it is a floor: everything in this message was true at
     // or after this instant.
-    observedAtMs: number;
+    //
+    // REQUIRED, and the one number here that is NOT nullable. A message without it
+    // would leave the renderer to invent a reference point, and the only one
+    // available is Date.now() — the exact behaviour the field exists to remove,
+    // arrived at by omission.
+    observedAtMs: finiteNumber,
     // Set when a question could not be answered at all. Rendered into a title
     // attribute, so it is written for a human — never a status code on its own.
-    error: string | null;
-}
-
-// A forged message can name as many runs as it likes, and each one costs a URL
-// build and a ledger lookup. The bound is deliberately larger than a Temporal
-// list page so the real caller never trips it.
-export const MAX_RUNS_PER_REQUEST = 500;
-
-// The floor under `fresh`. An answer that arrived less than this ago is not
-// re-fetched however many times it is asked for, so the worst a page script can do
-// by posting `fresh` in a loop is one round of requests per run per five seconds —
-// rather than one per message. It is the bound that lets the flag exist at all.
-//
-// Five seconds is short enough that a human who presses refresh gets something they
-// would call fresh, and far enough below the TTL that the button is not decoration.
-// The button disables itself for the same interval, so the rule the receiver
-// enforces is the rule the reader can see.
-export const FRESH_FLOOR_MS = 5_000;
-
-// SHAPE ONLY. This says the message is well-formed and nothing whatever about who
-// sent it — every field of it is published in this repository. What stops a forged
-// message from being answered is the ledger in pageApi.ts, which fetches only for
-// runs the PAGE ITSELF was handed.
-export function isRowInfoRequest(value: unknown): value is RowInfoRequest {
-    const message = asObject(value);
-    if (!message) return false;
-    if (message['source'] !== MESSAGE_SOURCE || message['type'] !== 'row-info-request') return false;
-    if (typeof message['namespace'] !== 'string' || !message['namespace']) return false;
-    const want = message['want'];
-    if (!Array.isArray(want) || want.length === 0) return false;
-    if (!want.every((field) => field === 'lastEvent' || field === 'retry')) return false;
-    // Required, not optional. A message that does not say which mode it is asking
-    // for is a message from a different build, and defaulting it here would make the
-    // cache-bypassing mode the one you get by omission.
-    if (typeof message['fresh'] !== 'boolean') return false;
-    const runs = message['runs'];
-    if (!Array.isArray(runs) || runs.length > MAX_RUNS_PER_REQUEST) return false;
-    return runs.every((run) => {
-        const entry = asObject(run);
-        return typeof entry?.['workflowId'] === 'string' && typeof entry['runId'] === 'string';
-    });
-}
-
-// SHAPE ONLY, for the same reason as above and with one extra sting in the tail:
-// this message travels INTO the isolated world, which is the side that renders.
-// Anything on the page can post a well-formed one. So the shape check below is
-// deliberately total — every field, to the leaves — but it is still not provenance,
-// and it never will be: `postMessage` carries no authenticated sender. What narrows
-// forged and accidental traffic is the correlation check in rowInfoClient.ts, which
-// keeps an answer only when this side asked that exact question. The worst a forged
-// answer can then do is put a wrong event type or retry count in a row it was asked
-// about; it cannot make a request, reach the network, or move a payload.
-//
-// Validating to the leaves is what makes the renderer's `RowInfo` honest. Before
-// this, `lastEvent` was declared `LastEvent | null` and checked not at all, so
-// `{lastEvent: 42}` type-checked its way to `event.eventType.length` in a template.
-export function isRowInfoResult(value: unknown): value is RowInfoResult {
-    const message = asObject(value);
-    if (!message) return false;
-    if (message['source'] !== MESSAGE_SOURCE || message['type'] !== 'row-info-result') return false;
-    if (typeof message['namespace'] !== 'string' || !message['namespace']) return false;
-    if (typeof message['workflowId'] !== 'string' || typeof message['runId'] !== 'string') return false;
-    // Required, and NOT nullable. Every age on screen is measured against it, so a
-    // message without it would either have to be dropped later or silently fall back
-    // to Date.now() — which is the exact behaviour this field was added to remove.
-    if (!isFiniteNumber(message['observedAtMs'])) return false;
-    if (!isNullOr(message['error'], (error) => typeof error === 'string')) return false;
-    if (!isNullOr(message['lastEvent'], isLastEvent)) return false;
-    return isNullOr(message['retry'], isPendingRetry);
-}
-
-function isLastEvent(value: unknown): boolean {
-    const event = asObject(value);
-    if (!event) return false;
-    if (typeof event['eventId'] !== 'string' || typeof event['eventType'] !== 'string') return false;
-    return isNullOr(event['timeMs'], isFiniteNumber);
-}
-
-function isPendingRetry(value: unknown): boolean {
-    const retry = asObject(value);
-    if (!retry) return false;
-    if (typeof retry['activityType'] !== 'string') return false;
-    if (!isFiniteNumber(retry['attempt'])) return false;
-    if (!isNullOr(retry['maximumAttempts'], isFiniteNumber)) return false;
-    if (!isNullOr(retry['nextRetryAtMs'], isFiniteNumber)) return false;
-    return isNullOr(retry['scheduledAtMs'], isFiniteNumber);
-}
-
-// `null` and only null — never `undefined`. An absent field is a different message
-// from one that says "asked, and there is nothing", and the readers below already
-// return the explicit null.
-function isNullOr(value: unknown, ok: (value: unknown) => boolean): boolean {
-    return value === null || ok(value);
-}
-
-// Rejects NaN and both infinities, which JSON.stringify would have turned into
-// `null` anyway — so a number that survives a round-trip as a number is finite.
-// Safe against our own serve: numberOf and timeToMs below return null, not NaN.
-function isFiniteNumber(value: unknown): boolean {
-    return typeof value === 'number' && Number.isFinite(value);
-}
+    error: v.nullable(v.string()),
+});
+export type RowInfoResult = v.InferOutput<typeof rowInfoResultSchema>;
 
 // ── Reading the answers ──────────────────────────────────────────────────────
-
-export interface LastEvent {
-    // int64 in the proto, and therefore a STRING in JSON. Kept as one: it is
-    // displayed and compared, never added up. See the note on numberOf below.
-    eventId: string;
-    // Normalised — see prettyEventType.
-    eventType: string;
-    timeMs: number | null;
-}
-
-export interface PendingRetry {
-    // activityType.name: a symbol from the workflow's source, not user data.
-    activityType: string;
-    // The attempt now pending. 1 means "running for the first time", which is not
-    // a retry and never produces a badge — see readPendingRetry.
-    attempt: number;
-    // 0 in the API means UNLIMITED, and reporting "attempt 900 of 0" is worse
-    // than saying nothing, so it becomes null here.
-    maximumAttempts: number | null;
-    nextRetryAtMs: number | null;
-    // When the CURRENT attempt was scheduled. Retained because "attempt 900" says
-    // nothing about whether it is moving; a scheduled time that is minutes old is
-    // a different situation from one that is seconds old.
-    scheduledAtMs: number | null;
-}
 
 // The newest event of a run, from a history-reverse page.
 //

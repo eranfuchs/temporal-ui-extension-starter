@@ -9,9 +9,15 @@
 // round per TTL rather than one per render pass — and there are dozens of render
 // passes a second while the Temporal UI re-renders.
 
+import { safeParse } from 'valibot';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { isRowInfoRequest, MAX_RUNS_PER_REQUEST, type RowInfoRequest, type RowInfoResult } from '../../src/rowInfo/rowInfo';
+import {
+    MAX_RUNS_PER_REQUEST,
+    rowInfoRequestSchema,
+    type RowInfoRequest,
+    type RowInfoResult,
+} from '../../src/rowInfo/rowInfo';
 import {
     clearRowInfo,
     installRowInfo,
@@ -54,9 +60,10 @@ beforeEach(() => {
     posted = [];
     clearRowInfo();
     vi.spyOn(window, 'postMessage').mockImplementation(((message: unknown, targetOrigin?: string) => {
-        // The type guard, not a cast: a message the receiver would refuse is a
-        // message that was never sent, and this spec should fail in that case.
-        if (isRowInfoRequest(message)) posted.push({ request: message, targetOrigin: String(targetOrigin) });
+        // Parsed, not cast: a message the receiver would refuse is a message that
+        // was never sent, and this spec should fail in that case.
+        const request = safeParse(rowInfoRequestSchema, message);
+        if (request.success) posted.push({ request: request.output, targetOrigin: String(targetOrigin) });
     }) as typeof window.postMessage);
 });
 
@@ -273,7 +280,7 @@ describe('receiving answers', () => {
         deliver({ source: MESSAGE_SOURCE, type: 'workflows', executions: [] });
         deliver('hello');
         // Well-formed envelope, junk inside: `lastEvent` is declared an object and
-        // the renderer reads a property off it. isRowInfoResult validates to the
+        // the renderer reads a property off it. rowInfoResultSchema describes the
         // leaves precisely so this cannot reach a cell.
         deliver(answer({ lastEvent: 42 as unknown as RowInfoResult['lastEvent'] }));
         deliver(answer(), null); // event.source !== window

@@ -197,6 +197,14 @@ const RULES = [
 
 function isAllowedHost(host) {
     const h = host.toLowerCase();
+    // An elided host names nothing. Prose in this repository — commit messages
+    // above all — quotes URLs with the middle taken out (`https://…/base?`), and
+    // the gate read `…` as a hostname it had never heard of. This is not a
+    // widening of the allowlist: a registrable name or an IP address needs at
+    // least one letter or digit, so a "host" with none cannot identify a machine.
+    // An elision INSIDE a host keeps every alphanumeric it has and stays checked,
+    // which is the direction the self-test pins.
+    if (!/[a-z0-9]/.test(h)) return true;
     if (ALLOWED_HOSTS.has(h)) return true;
     return ALLOWED_HOST_SUFFIXES.some((s) => h.endsWith(s));
 }
@@ -612,6 +620,36 @@ function selftest() {
             'still reads the host of a non-http scheme',
             schemeRun.status === 1 && schemeRun.output.includes('reporting.a-real-internal-hostname'),
             `exit ${schemeRun.status}: ${schemeRun.output.trim()}`,
+        );
+
+        // An elided URL, both ways. `npm run leak:history` failed on a commit
+        // message that quoted `https://…/base?` while explaining a bug in the codec
+        // endpoint guard — a host of one ellipsis, which names nothing. The gate was
+        // right that it was not on the allowlist and wrong that it was a host, and a
+        // false positive on the repository's own history is how a gate gets skipped.
+        // The second line is the negative control: an elision does not launder the
+        // host it sits inside.
+        const elided = join(dir, 'elided');
+        mkdirSync(elided, { recursive: true });
+        writeFileSync(
+            join(elided, 'prose.md'),
+            `Quoting a URL with the middle removed: \`${'https'}://…/base?\` was accepted.\n`,
+        );
+        const elidedRun = run(['--dir', elided, '--quiet']);
+        check(
+            'accepts a URL whose host is elided entirely',
+            elidedRun.status === 0,
+            `exit ${elidedRun.status}: ${elidedRun.output.trim()}`,
+        );
+        writeFileSync(
+            join(elided, 'prose.md'),
+            `Partly elided: \`${'https'}://api…a-real-internal-hostname/base\`.\n`,
+        );
+        const partlyElidedRun = run(['--dir', elided, '--quiet']);
+        check(
+            '  and still reads a host that is only partly elided',
+            partlyElidedRun.status === 1 && partlyElidedRun.output.includes('a-real-internal-hostname'),
+            `exit ${partlyElidedRun.status}: ${partlyElidedRun.output.trim()}`,
         );
 
         // A URL inside a cookie jar, both ways. The gate reported

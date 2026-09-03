@@ -71,7 +71,7 @@ can be compared line by line.
 | **Data it writes** | nothing. No `chrome.storage`, no cookies, no `localStorage`, no files |
 | **Requests it makes** | none. It never originates a request |
 | **Data that leaves the machine** | none. There is no outbound anything — no analytics, no telemetry, no deep links |
-| **Third-party code in the bundle** | none. No runtime dependencies |
+| **Third-party code in the bundle** | one package, `valibot`, and nothing behind it. Budgeted, and checked against what esbuild actually inlined — see [Dependencies](#dependencies) |
 
 Two of those rows are load-bearing and worth stating as arguments rather than
 facts:
@@ -92,12 +92,16 @@ npm run surface        # from the repository root
 
 `scripts/surface.mjs` compares each manifest against the budget declared in
 `scripts/surface.json` and fails if a project exceeds it. For this project the
-budget is empty, so the gate fails on the first `permissions` entry, the first
-`host_permissions` entry, a service worker, any reference to the `chrome`
-namespace under `src/`, `tests/` or `public/`, an `@types/chrome` entry in *this
-project's* `package.json`, a `"chrome"` entry in its `tsconfig.json` `types`, a
-runtime dependency, any of the markup/code sinks (`innerHTML`, `eval`, …), a
-content-script match outside the allowed hosts, and `<all_urls>` outright.
+permission budget is empty, so the gate fails on the first `permissions` entry,
+the first `host_permissions` entry, a service worker, any reference to the
+`chrome` namespace under `src/`, `tests/` or `public/`, an `@types/chrome` entry
+in *this project's* `package.json`, a `"chrome"` entry in its `tsconfig.json`
+`types`, any of the markup/code sinks (`innerHTML`, `eval`, …), a content-script
+match outside the allowed hosts, and `<all_urls>` outright. The dependency budget
+is not empty — it names `valibot` — and the gate reads **esbuild's metafile** to
+decide, so it fails on a package in a bundle that the budget does not name, on a
+budgeted package no bundle actually contains, and on an import that resolves only
+because a sibling project installed it.
 
 "Any reference" is meant literally, and it is why the gate **parses** each file
 rather than searching it: `const { storage } = chrome` and `cell['innerHTML'] = x`
@@ -110,32 +114,43 @@ own failure case is worse than no gate.
 
 ### What has not been done
 
-- **No third-party security review.** The mechanism comes from an extension used
-  internally, but this code is a clean-room rewrite and nobody outside this
-  repository has audited it.
-- **Verified against live Temporal Cloud** — v0.2.0, on 2026-08-31, in Chrome
-  151.0.7922.174, against one tenant and one page of 100 workflows. A headed
-  browser-automation probe (which lives outside this repository, because it
-  drives a private namespace) confirmed each link in the chain separately: the
-  `window.fetch` wrapper survived Cloud's bootstrap, Cloud's list URL still
-  matched the expected shape, every row on the page was annotated, `content.css`
-  was in effect — checked through computed style, not by reading the stylesheet —
-  and a second settled render pass wrote nothing, which is the idempotency
-  property the specs assert offline.
-
-  The tree itself was checked against the payload rather than against
-  expectations: of 100 workflows, 60 carried a `parentExecution` and 49 of those
-  parents were present in the same list, which is exactly how many rows were
-  indented and given a prefix. That comparison is the point — the run before it
-  drew nothing at all, on a page whose top 25 workflows happened to be 25
-  unrelated roots, and a probe that asserts "an overlay was drawn" without asking
-  whether the data held a family calls that a bug in the extension.
-
-  That is **one** version of Cloud on **one** tenant. It does not generalise to
-  the next Cloud release, and nothing equivalent has been run against a
-  self-hosted UI with real data in it.
+- **No independent security review.** This is not unreviewed code: every change is
+  reviewed as it is written, the message boundary carries specs that forge a message
+  and assert it is refused, and `npm run preflight` re-runs the banned-sink,
+  permission, dependency and secret-scan gates on every pass. What is missing is an
+  outside pair of eyes. The mechanism comes from an extension used internally, but
+  this code is a clean-room rewrite and nobody outside this repository has audited it.
+- **Tested against one version of Temporal Cloud, on one tenant.** That is what any
+  extension against a UI it does not own can honestly claim: the next Cloud release
+  can move the list URL, the row markup or the bootstrap order, and this code finds
+  out the same way you would. Nothing here has been run against a self-hosted UI with
+  real data in it.
 - **No supply-chain attestation.** Build it yourself from source; the bundle is
-  built unminified on purpose, so `dist/content.js` is readable.
+  built unminified on purpose, so `dist/content.js` is readable — including the one
+  third-party package inside it. What the repository guarantees is that a package
+  cannot enter a bundle without a reviewed diff; it does not verify any package's
+  contents against its repository, and `package-lock.json` integrity hashes are the
+  only pinning there is.
+
+## Dependencies
+
+One package reaches the browser. The repository's dependency policy, and the
+audit-surface argument behind it, are in the
+[root README](../README.md#dependencies).
+
+| | `valibot` |
+|---|---|
+| **Version** | 1.4.2 — MIT |
+| **What it is for** | Runtime schema validation. Every boundary this extension reads across — the page's own workflow-list response, and the `postMessage` from the page world — is `safeParse`d against a schema before any field is read, so a shape that changed is an `issues` list handled at the boundary instead of an `undefined` that surfaces four calls later as something else |
+| **Bundles it enters** | `dist/content.js` and `dist/inject.js`, both of them |
+| **Packages it brings with it** | none. valibot has no dependencies of its own, so the bundled set is exactly the one package |
+| **What stays ours** | the schemas, and every decision they inform. A parse result is evidence about the **shape** of a value and never about where it came from — see `src/types.ts` |
+
+`npm run measure` prints what it currently costs each bundle; it is the larger part
+of both of them, and the numbers move whenever the schemas change, so run the
+command rather than trusting a figure written here. Why valibot and not zod, with
+the measurements that decided it, is in
+[`docs/design-notes.md`](../docs/design-notes.md#two-schema-libraries-measured).
 
 ## Layout
 

@@ -9,28 +9,9 @@
 // ledger that enforces the last part, and src/page/pacer.ts for what keeps the volume
 // down. Two of the toggles below are what turn those requests on.
 
-import { templateScope, type DeepLinkTemplate } from './links/deepLink';
+import * as v from 'valibot';
 
-export interface Settings {
-    // Master switch. Off = the extension writes nothing to the page.
-    enabled: boolean;
-    // Draw parent/child connectors and re-order rows into families.
-    treeEnabled: boolean;
-    // Per-row buttons that open this workflow in your own tools.
-    linksEnabled: boolean;
-    links: DeepLinkTemplate[];
-    // The two features that make requests of their OWN — one per running row each,
-    // paced and cached in rowInfoServe.ts. Separate switches so the cost is
-    // separately refusable; on by default, because they read no user data at all
-    // (the retry badge deliberately does not read the failure message) and a
-    // feature nobody turns on teaches nobody anything.
-    lastEventEnabled: boolean;
-    retryEnabled: boolean;
-    // Not a feature — a migration marker. True once a human has edited the link list,
-    // after which their choices are taken literally and no scope is filled in for
-    // them. See withActivityScope below for what it prevents.
-    linkScopesSeeded: boolean;
-}
+import { deepLinkTemplateSchema, templateScope, type DeepLinkTemplate } from './links/deepLink';
 
 // There is deliberately no codec-server setting in this build. Reading a payload
 // means decoding it, and decoding one Temporal cannot decode for you means sending
@@ -70,22 +51,78 @@ export const DEFAULT_ACTIVITY_LINK: DeepLinkTemplate = {
         'https://example.com/search?q={namespace}+{workflowId}+{activityId}&from={activityScheduledIso-1m}&to={activityClosedIso+1m}',
 };
 
-export const DEFAULT_SETTINGS: Settings = {
-    enabled: true,
-    treeEnabled: true,
-    linksEnabled: true,
-    links: [
-        {
-            label: 'Logs',
-            urlTemplate:
-                'https://example.com/search?q={namespace}+{workflowId}&from={startTimeIso-10m}&to={endTimeIso+10m}',
-        },
-        DEFAULT_ACTIVITY_LINK,
-    ],
-    lastEventEnabled: true,
-    retryEnabled: true,
-    linkScopesSeeded: false,
-};
+export const DEFAULT_LINKS: DeepLinkTemplate[] = [
+    {
+        label: 'Logs',
+        urlTemplate:
+            'https://example.com/search?q={namespace}+{workflowId}&from={startTimeIso-10m}&to={endTimeIso+10m}',
+    },
+    DEFAULT_ACTIVITY_LINK,
+];
+
+// The stored settings, as a schema — because the previous author of this object is an
+// OLDER BUILD OF THIS EXTENSION, which is the one boundary here where the untrusted
+// input is our own past self. chrome.storage.sync keeps whatever that build wrote,
+// including fields since renamed, retyped or deleted for being a bad idea.
+//
+// Every field is a v.fallback(), which is this schema's version of what the loader
+// below used to spell as `stored.enabled !== false`: present and false means off, and
+// anything else — absent, a string, a number an older popup wrote — means the shipped
+// default. Reproducing that reading exactly is the requirement, not an approximation
+// of it: a loader that turned a feature off because a stored value had the wrong type
+// would present as "the feature is broken" with a correct settings screen.
+//
+// UNKNOWN KEYS ARE STRIPPED, and here that is the load-bearing half rather than the
+// tidy half. A field that was deleted from this schema is a field no reader can reach,
+// even though it is still sitting in storage: the parsed object simply does not have
+// it. Stage 03 is where that matters — this build has no codec setting at all, and the
+// one it will have there is an endpoint with deliberately no credential switch beside
+// it, so a `codecIncludeCredentials: true` left behind by anything cannot come back.
+const settingsSchema = v.object({
+    // Master switch. Off = the extension writes nothing to the page.
+    enabled: v.fallback(v.boolean(), true),
+    // Draw parent/child connectors and re-order rows into families.
+    treeEnabled: v.fallback(v.boolean(), true),
+    // Per-row buttons that open this workflow in your own tools.
+    linksEnabled: v.fallback(v.boolean(), true),
+    // Salvaged ENTRY BY ENTRY, and never accepted or rejected whole: one malformed
+    // template in a list of five costs that template, not the reader's other four.
+    // A stored value that is not a list at all is the different case, and falls back
+    // to the shipped pair. Same shape and same reasoning as normalizeExecutions() in
+    // src/family/rows.ts, for the same reason — a collection from outside is a
+    // collection of separately trustworthy things.
+    links: v.fallback(
+        v.pipe(
+            v.array(v.unknown()),
+            v.transform((entries) =>
+                entries.flatMap((entry) => {
+                    const link = v.safeParse(deepLinkTemplateSchema, entry);
+                    return link.success ? [link.output] : [];
+                }),
+            ),
+        ),
+        DEFAULT_LINKS,
+    ),
+    // The two features that make requests of their OWN — one per running row each,
+    // paced and cached in rowInfoServe.ts. Separate switches so the cost is
+    // separately refusable; on by default, because they read no user data at all
+    // (the retry badge deliberately does not read the failure message) and a
+    // feature nobody turns on teaches nobody anything.
+    lastEventEnabled: v.fallback(v.boolean(), true),
+    retryEnabled: v.fallback(v.boolean(), true),
+    // Not a feature — a migration marker. True once a human has edited the link list,
+    // after which their choices are taken literally and no scope is filled in for
+    // them. See withActivityScope below for what it prevents.
+    linkScopesSeeded: v.fallback(v.boolean(), false),
+});
+
+export type Settings = v.InferOutput<typeof settingsSchema>;
+
+// The shipped defaults ARE the schema's fallbacks, read out by parsing an empty
+// object. One declaration rather than two, so a default cannot be changed in the
+// schema and missed here — which is the mistake the note under withActivityScope is
+// about, one level down.
+export const DEFAULT_SETTINGS: Settings = v.parse(settingsSchema, {});
 
 // A NEW DEFAULT DOES NOT REACH AN EXISTING USER. This is the bug that made the
 // per-activity links invisible on a live tenant where everything else worked, and it
@@ -117,23 +154,26 @@ export async function loadSettings(): Promise<Settings> {
     // chrome.storage's typings want a plain record for the defaults argument, so
     // the shape is widened here rather than cast at the call site.
     const defaults: Record<string, unknown> = { ...DEFAULT_SETTINGS };
-    const stored = (await chrome.storage.sync.get(defaults)) as Partial<Settings>;
-    // Guard the array shape explicitly: a half-written settings object from an
-    // older build must degrade to the default, not throw inside a render pass
-    // where the only symptom would be "the extension stopped working".
-    const links = Array.isArray(stored.links) ? (stored.links as DeepLinkTemplate[]) : DEFAULT_SETTINGS.links;
-    const usable = links.filter((l) => l && typeof l.label === 'string' && typeof l.urlTemplate === 'string');
+    // Parsed, never cast. The old version of this line asserted `as Partial<Settings>`
+    // over whatever storage returned and then re-derived every field by hand; the
+    // schema does the deriving, and the assertion is gone with it.
+    //
+    // safeParse with an explicit fallback rather than v.parse, because the object
+    // ITSELF can be the wrong thing: every field inside settingsSchema recovers on its
+    // own, but a non-object — which is what a storage read fails to as much as
+    // succeeds to — fails the parse outright, and throwing here would take out a render
+    // pass whose only symptom is "the extension stopped working".
+    const parsed = v.safeParse(settingsSchema, await chrome.storage.sync.get(defaults));
+    const settings = parsed.success ? parsed.output : DEFAULT_SETTINGS;
     return {
-        enabled: stored.enabled !== false,
-        treeEnabled: stored.treeEnabled !== false,
-        linksEnabled: stored.linksEnabled !== false,
-        // See withActivityScope above: a stored array from before the activity
-        // template existed would otherwise make the per-activity links unreachable
-        // for good, with nothing saying so.
-        links: stored.linkScopesSeeded === true ? usable : withActivityScope(usable),
-        lastEventEnabled: stored.lastEventEnabled !== false,
-        retryEnabled: stored.retryEnabled !== false,
-        linkScopesSeeded: stored.linkScopesSeeded === true,
+        ...settings,
+        // NOT a schema default, and this is the distinction worth keeping: a fallback
+        // says what an absent field means, and this says what to do about a field that
+        // is present and complete and predates a feature. See withActivityScope above —
+        // a stored array from before the activity template existed would otherwise make
+        // the per-activity links unreachable for good, with nothing saying so. A
+        // migration is application logic and stays visible as one.
+        links: settings.linkScopesSeeded ? settings.links : withActivityScope(settings.links),
     };
 }
 

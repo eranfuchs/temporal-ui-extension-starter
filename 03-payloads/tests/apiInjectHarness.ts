@@ -22,10 +22,11 @@
 // never saw test 2's list call, so it answers "nothing observed" beside the correct
 // answer and an assertion reads whichever arrived first.
 
+import { safeParse } from 'valibot';
 import { expect, vi } from 'vitest';
 
-import { isPayloadResult, type PayloadRequest, type PayloadResult } from '../src/payloads/payloadMessages';
-import { isRowInfoResult, type RowInfoRequest, type RowInfoResult } from '../src/rowInfo/rowInfo';
+import { payloadResultSchema, type PayloadRequest, type PayloadResult } from '../src/payloads/payloadMessages';
+import { rowInfoResultSchema, type RowInfoRequest, type RowInfoResult } from '../src/rowInfo/rowInfo';
 import { MESSAGE_SOURCE } from '../src/types';
 
 export const NAMESPACE = 'sample-namespace';
@@ -214,9 +215,15 @@ export const reachedNetwork: Seen[] = [];
 export const rowInfoResults: RowInfoResult[] = [];
 export const payloadResults: PayloadResult[] = [];
 
+// Both kinds of answer are captured through the SAME schema the isolated world parses
+// them with, so every spec that reads an answer is also asserting the serve emits one
+// the receiving side will accept. A cast here would have let the two sides drift with
+// the specs green.
 const capture = (event: MessageEvent) => {
-    if (isRowInfoResult(event.data)) rowInfoResults.push(event.data);
-    if (isPayloadResult(event.data)) payloadResults.push(event.data);
+    const rowInfo = safeParse(rowInfoResultSchema, event.data);
+    if (rowInfo.success) rowInfoResults.push(rowInfo.output);
+    const payload = safeParse(payloadResultSchema, event.data);
+    if (payload.success) payloadResults.push(payload.output);
 };
 
 export const reverseCalls = () => reachedNetwork.filter((seen) => seen.url.includes('/history-reverse'));

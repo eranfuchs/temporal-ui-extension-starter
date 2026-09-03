@@ -67,9 +67,11 @@
 // different properties and only the first one is enforced here.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { safeParse } from 'valibot';
+
 import { namespaceFromApiUrl, normalizeExecutions, runKey } from '../family/rows';
 import { apiPrefixOf, type ApiTarget, type RunRef } from './temporalApi';
-import type { TemporalApiWorkflow } from '../types';
+import { workflowListEnvelopeSchema } from '../types';
 
 export const TAG = '[temporal-ui-starter]';
 
@@ -217,13 +219,16 @@ function recordListedRuns(response: Response, namespace: string): void {
     const clone = response.clone();
     const fill = (async () => {
         try {
-            const body: unknown = JSON.parse(await clone.text());
-            const executions = (body as { executions?: unknown } | null)?.executions;
-            if (!Array.isArray(executions)) return;
+            // The same envelope schema inject.ts parses, on the same body, for a
+            // different purpose. Parsed rather than cast: a cast here would have
+            // been a cast on the input to an AUTHORISATION list, which is the
+            // last place to tell the compiler to stop asking.
+            const body = safeParse(workflowListEnvelopeSchema, JSON.parse(await clone.text()));
+            if (!body.success) return;
             // normalizeExecutions is the shared, tested reader of this shape; it
-            // also drops any entry without both ids, which is what keeps a
-            // half-formed row out of an authorisation list.
-            const rows = normalizeExecutions(executions as TemporalApiWorkflow[]);
+            // parses each entry and drops any without both ids, which is what
+            // keeps a half-formed row out of an authorisation list.
+            const rows = normalizeExecutions(body.output.executions);
             // Eviction is the whole set, before the refill, and never a slice of
             // this response. A list body is self-sufficient — everything the user
             // can now see is in it — so forgetting older pages cannot refuse a row

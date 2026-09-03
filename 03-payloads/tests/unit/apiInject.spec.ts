@@ -125,8 +125,8 @@ describe('answering only for runs the page itself listed', () => {
     it('refuses a run id the page was never handed, without spending the bearer', async () => {
         // The forged-message case in full: correct source, correct type, correct
         // namespace, a real workflow id, and a run id of the attacker's choosing.
-        // isRowInfoRequest accepts it — it is well-formed — and this is where it
-        // stops instead.
+        // rowInfoRequestSchema accepts it — it is well-formed, and shape is not
+        // provenance — and this is where it stops instead.
         const result = await askOneRow({
             ...ONE_QUESTION,
             runs: [{ workflowId: WORKFLOW_ID, runId: '00000000-0000-4000-8000-00000000dead' }],

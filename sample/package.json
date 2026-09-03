@@ -2,7 +2,7 @@
     "name": "temporal-ui-extension-starter-sample",
     "version": "0.1.0",
     "private": true,
-    "description": "Sample workflows that produce a parent/child hierarchy for the extension to draw. Its own npm project so the extension itself keeps zero runtime dependencies.",
+    "description": "Sample workflows that produce a parent/child hierarchy for the extension to draw. Its own npm project so the Temporal SDK's tree, native binaries and all, stays out of every extension's dependency budget.",
     "license": "MIT",
     "scripts": {
         "worker": "tsx src/worker.ts",

@@ -66,6 +66,15 @@ import { MESSAGE_SOURCE } from '../types';
 // single number that decides how much traffic the feature makes.
 const TTL_MS = 30_000;
 
+// INVARIANT: this cache is bounded by ENTRY COUNT and not only by the TTL above.
+// Breaking it: an expired entry is overwritten when the same run is asked about
+// again, and a run scrolled past is never asked about again — so a TTL alone leaves
+// every run a long-lived tab has ever shown sitting in the map for the life of the
+// page. The bound was missing here for exactly that reason: the two caches on the
+// other side of the boundary have one, and the TTL made this one look like it did.
+// See docs/design-notes.md#the-cache-a-ttl-made-look-bounded.
+const MAX_CACHED_ANSWERS = 2_000;
+
 // ── One cache per field ──────────────────────────────────────────────────────
 
 interface Answer<T> {
@@ -110,6 +119,12 @@ function makeFieldStore<T>(load: (namespace: string, run: RunRef) => Promise<T |
                     // fastest way to turn one 403 into a thousand.
                     answer = { value: null, error: fetchFailureMessage(err), atMs: Date.now() };
                 }
+                // Whole-map eviction, cleared BEFORE the insert so the answer just
+                // fetched survives its own pass. Crude and adequate for the same
+                // reason it is in rowInfoClient.ts: every run still on screen is one
+                // render pass away from being asked about again, so the cost of
+                // throwing the lot away is one extra round for the current table.
+                if (answers.size >= MAX_CACHED_ANSWERS) answers.clear();
                 answers.set(key, answer);
                 inFlight.delete(key);
                 return answer;
@@ -233,7 +248,7 @@ async function answerOne(namespace: string, run: RunRef, want: RowInfoField[], f
         // this field exists to stop — the message is new, the data in it is not.
         //
         // The fallback cannot happen through serveRowInfo (an empty `want` is rejected
-        // by isRowInfoRequest) and is here so that the field is never absent, because
+        // by rowInfoRequestSchema) and is here so that the field is never absent, because
         // absent would mean the renderer had to invent one.
         observedAtMs: observedAt.length > 0 ? Math.min(...observedAt) : nowMs,
         // Deduplicated: both questions failing for the same reason (an evicted

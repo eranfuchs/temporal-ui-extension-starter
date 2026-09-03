@@ -1,10 +1,18 @@
 // The load-control invariants, with time under the test's control.
 //
-// These exist because the pacer was inline in rowInfoServe.ts with NO tests, and
-// the bug it shipped with — a slot reserved AFTER the backoff sleep instead of
-// before — is invisible to any test that cannot hold several callers inside one
-// backoff window at once. A real clock cannot do that reliably; a fake one does it
-// deterministically.
+// These exist because the pacer was hand-written and inline in rowInfoServe.ts with
+// NO tests, and the bug it shipped with — a slot reserved AFTER the backoff sleep
+// instead of before — is invisible to any test that cannot hold several callers
+// inside one backoff window at once. A real clock cannot do that reliably; a fake
+// one does it deterministically.
+//
+// The slot accounting is now p-limit's, so what is asserted here is deliberately
+// narrower than it was: NOT that a queue hands a slot from one caller to the next
+// without a gap (that is the library's, and it has its own tests), but that the
+// pacer's use of it holds every property this extension depends on. Two of those
+// only exist because of how we compose the two halves — a caller asleep in a
+// backoff still occupies its slot, and `active`/`waiting` are wired to the right
+// counters — and those are exactly the ones a test of the library would not cover.
 //
 // The fake clock never advances on its own. `sleep()` records the sleeper and
 // resolves only when the test moves time forward, so "did this caller start before
@@ -12,6 +20,14 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { advisedWaitMs, makePacer, type Pacer, type PacerClock } from '../../src/page/pacer';
+
+// One macrotask boundary, which drains EVERY pending microtask instead of a counted
+// few. A unit of work crosses several awaits between `run()` and `work()` — the
+// queue's own handoff, then the block re-check, then work itself — and a test that
+// hard-codes how many is a test that breaks when any of them adds one. Nothing here
+// waits on a real timer: every wait the pacer performs goes through the fake clock
+// below, so there is nothing else this can be waiting for.
+const settle = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 interface FakeClock extends PacerClock {
     advance(ms: number): Promise<void>;
@@ -33,11 +49,7 @@ function fakeClock(startMs = 1_000_000): FakeClock {
             const due = waking.filter((entry) => entry.atMs <= nowMs);
             waking = waking.filter((entry) => entry.atMs > nowMs);
             for (const entry of due) entry.wake();
-            // Two turns: one for each sleeper's own continuation, one for whatever
-            // that continuation awaited (the pacer re-checks the block, then calls
-            // work(), which is itself async).
-            await Promise.resolve();
-            await Promise.resolve();
+            await settle();
         },
         sleepers: () => waking.length,
     };
@@ -75,8 +87,7 @@ function tracker() {
         peakInFlight: () => peak,
         async completeAll(): Promise<void> {
             while (finish.length > 0) finish.shift()!();
-            await Promise.resolve();
-            await Promise.resolve();
+            await settle();
         },
     };
 }
@@ -93,52 +104,61 @@ describe('pacer concurrency', () => {
     it('runs at most maxConcurrent units of work at once', async () => {
         const jobs = tracker();
         for (let i = 0; i < 20; i++) void pacer.run(() => jobs.work());
-        await Promise.resolve();
-        await Promise.resolve();
+        await settle();
 
         expect(jobs.started()).toBe(LIMITS.maxConcurrent);
+        // Wired to the right counters, which is a mistake worth one assertion of
+        // its own: p-limit's `activeCount` and `pendingCount` are both small
+        // numbers of the same type, so swapping them type-checks, and the swapped
+        // version would read "sixteen requests in flight, four queued" — the exact
+        // opposite of the property this pacer exists to hold.
         expect(pacer.active()).toBe(LIMITS.maxConcurrent);
         expect(pacer.waiting()).toBe(20 - LIMITS.maxConcurrent);
     });
 
-    it('drains the queue four at a time as slots come back', async () => {
+    it('drains a queue of ten without ever exceeding the cap', async () => {
         const jobs = tracker();
         const all: Promise<void>[] = [];
         for (let i = 0; i < 10; i++) all.push(pacer.run(() => jobs.work()));
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(jobs.started()).toBe(4);
+        await settle();
+        expect(jobs.started()).toBe(LIMITS.maxConcurrent);
 
-        await jobs.completeAll();
-        expect(jobs.started()).toBe(8);
-
-        await jobs.completeAll();
-        expect(jobs.started()).toBe(10);
-
-        await jobs.completeAll();
+        // Each completion admits the next. Bounded rather than `while`, so a pacer
+        // that stopped admitting anything fails here instead of hanging the suite.
+        for (let round = 0; round < 10 && pacer.active() + pacer.waiting() > 0; round++) {
+            await jobs.completeAll();
+        }
         await Promise.all(all);
+
+        expect(jobs.started()).toBe(10);
         // Never more than four at any single moment, across the whole drain.
-        expect(jobs.peakInFlight()).toBe(4);
+        expect(jobs.peakInFlight()).toBe(LIMITS.maxConcurrent);
         expect(pacer.active()).toBe(0);
         expect(pacer.waiting()).toBe(0);
     });
 
-    // THE REGRESSION TEST FOR THE ORIGINAL BUG. The old pacer checked the slot
-    // count, then slept out the backoff, then took a slot — so during a backoff
-    // `active` was 0, every caller passed the check, and all of them woke and
-    // fetched together. Twenty rows became twenty simultaneous requests at the
-    // exact moment the server had asked for fewer.
+    // THE REGRESSION TEST FOR THE ORIGINAL BUG, and the one property that is about
+    // how the two halves are composed rather than about either half. The old pacer
+    // checked the slot count, then slept out the backoff, then took a slot — so
+    // during a backoff `active` was 0, every caller passed the check, and all of
+    // them woke and fetched together. Twenty rows became twenty simultaneous
+    // requests at the exact moment the server had asked for fewer.
+    //
+    // The fix is that the sleep happens INSIDE the queued task, so `clock.sleepers()`
+    // is capped by the concurrency: moving the sleep back outside the queue would
+    // make it 20 and this test would say so.
     it('still admits only four when a backoff releases a crowd', async () => {
         const jobs = tracker();
         pacer.noteRateLimit('30');
         for (let i = 0; i < 20; i++) void pacer.run(() => jobs.work());
-        await Promise.resolve();
-        await Promise.resolve();
+        await settle();
 
         // Nothing has started, and only four callers are parked in the sleep: the
         // other sixteen never got a slot to sleep in.
         expect(jobs.started()).toBe(0);
         expect(clock.sleepers()).toBe(LIMITS.maxConcurrent);
+        expect(pacer.active()).toBe(LIMITS.maxConcurrent);
+        expect(pacer.waiting()).toBe(20 - LIMITS.maxConcurrent);
 
         await clock.advance(30_000);
         expect(jobs.started()).toBe(LIMITS.maxConcurrent);
@@ -159,7 +179,7 @@ describe('pacer backoff', () => {
         const jobs = tracker();
         pacer.noteRateLimit('10');
         void pacer.run(() => jobs.work());
-        await Promise.resolve();
+        await settle();
 
         await clock.advance(9_999);
         expect(jobs.started()).toBe(0);
@@ -177,7 +197,7 @@ describe('pacer backoff', () => {
         expect(pacer.blockedForMs()).toBe(60_000);
 
         void pacer.run(() => jobs.work());
-        await Promise.resolve();
+        await settle();
         await clock.advance(4_000);
         expect(jobs.started()).toBe(0);
 
@@ -189,7 +209,7 @@ describe('pacer backoff', () => {
         const jobs = tracker();
         pacer.noteRateLimit('10');
         void pacer.run(() => jobs.work());
-        await Promise.resolve();
+        await settle();
 
         // A response that was already in flight comes back 429 while this caller is
         // asleep, pushing the window out. Waking into a still-blocked window and

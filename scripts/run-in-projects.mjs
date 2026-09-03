@@ -2,10 +2,22 @@
 // Runs one npm script in every project: `node scripts/run-in-projects.mjs build`.
 //
 // The root package.json has no source of its own — the projects do — so its
-// `build` / `test` / `typecheck` scripts are this, once per project. Deliberately
-// NOT npm workspaces: each project must stay clonable and buildable on its own,
-// which is the whole reason they are separate directories, and a workspace root
-// makes a project's package.json meaningless outside this repository.
+// `build` / `test` / `typecheck` scripts are this, once per project.
+//
+// The projects ARE npm workspaces (see the root `workspaces` field), but that
+// only decides where `npm install` puts packages. It does not run anything: npm
+// workspace scripts would run in a fixed order and stop at the first failure,
+// and "02 is broken" is more useful than "something is broken". So the running
+// stays here and the installing stays with npm.
+//
+// This used to say workspaces were deliberately avoided, on the grounds that a
+// workspace root makes a project's package.json meaningless outside the repo.
+// That was wrong on the facts — a workspace member's package.json is an ordinary
+// one, and `npm install` inside a lone copy of a project directory still works —
+// and it had a cost: without a workspace root, `npm install` here installed only
+// the root's declarations, so every project's dependency list was decorative.
+// Each project now declares what it actually needs, and the root install honours
+// it. `npm run surface` checks that the two agree.
 //
 // It keeps going after a failure and reports every project's status at the end,
 // because "02 is broken" is more useful than "something is broken" and stopping

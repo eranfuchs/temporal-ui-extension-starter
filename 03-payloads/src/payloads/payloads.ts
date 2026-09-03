@@ -168,8 +168,18 @@ export function decodePayload(payload: RawPayload): string {
         const bytes = base64Bytes(payload.data);
         return `(${encoding || 'unknown encoding'} — ${bytes} bytes, not decoded here. Set a codec server in the popup to read it.)`;
     }
-    const text = base64ToText(payload.data ?? '');
-    return encoding === 'json/plain' ? prettyJson(text) : text;
+    // EXACTLY THE BYTES THE SERVER SENT, whatever the encoding claims. Nothing here
+    // re-indents, re-orders or re-serialises a payload — not even one that says it is
+    // JSON. `JSON.parse` turns every number into an IEEE double, so a round-trip
+    // silently rewrites a 20-digit account id into a different 20-digit account id
+    // that looks exactly as real; the worked example is in
+    // docs/design-notes.md#pretty-printing-silently-corrupted-long-integers.
+    //
+    // Formatting it *safely* is possible — it takes a lossless formatter that edits
+    // only the whitespace between tokens, which takes a real JSON lexer, which takes
+    // a dependency. That is stage 04's trade, together with the viewer it belongs to.
+    // This rung shows you the payload; it does not typeset it.
+    return base64ToText(payload.data ?? '');
 }
 
 export function formatPayloads(payloads: RawPayload[]): string {
@@ -186,24 +196,6 @@ export function formatPayloads(payloads: RawPayload[]): string {
 export function clip(text: string): string {
     if (text.length <= MAX_DISPLAY_CHARS) return text;
     return `${text.slice(0, MAX_DISPLAY_CHARS)}\n\n… clipped: ${text.length - MAX_DISPLAY_CHARS} more characters.`;
-}
-
-// A LONG INTEGER IS SHOWN EXACTLY AS THE SERVER WROTE IT, unformatted.
-//
-// JSON.parse turns any number into an IEEE double, so re-serialising a 20-digit id
-// silently changes its last digits — and account numbers and transaction ids are
-// precisely the fields long enough for it to happen to. Ugly beats wrong; the worked
-// example is in docs/design-notes.md.
-const LONG_INTEGER = /-?\b\d{16,}\b/;
-
-export function prettyJson(text: string): string {
-    if (LONG_INTEGER.test(text)) return text;
-    try {
-        return JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-        // Not JSON despite the encoding saying so. Show what arrived.
-        return text;
-    }
 }
 
 // ── base64 ──────────────────────────────────────────────────────────────────

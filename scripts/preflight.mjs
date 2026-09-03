@@ -25,6 +25,8 @@ import { join, relative } from 'node:path';
 // explain why. The check below is the whole reason it is imported at all.
 import * as workerThreads from 'node:worker_threads';
 
+import semver from 'semver';
+
 import { discoverProjects, ROOT } from './projects.mjs';
 
 const results = [];
@@ -87,6 +89,10 @@ const LOCAL_BIN = join(ROOT, 'node_modules', '.bin');
 const VERIFIED_NODE_MAJOR = 22;
 const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
+// Before the checks, because it must not run them: --selftest drives this file's own
+// range logic on synthetic inputs and exits.
+if (process.argv.includes('--selftest')) selftest();
+
 // ── Repository-wide ──────────────────────────────────────────────────────────
 
 console.log('repository');
@@ -95,6 +101,12 @@ console.log('repository');
 checkNodeRuntime();
 checkLockfileParity();
 checkEngineRange();
+
+// This file ran four other gates' self-tests and had none of its own, which made it
+// the only gate here trusted on the strength of looking correct. It runs itself in a
+// child process because the alternative is importing this file, and importing it runs
+// every check in it.
+runCheck('preflight self-test', NODE, ['scripts/preflight.mjs', '--selftest', '--quiet']);
 
 // First, because it is the one whose failure cannot be undone by a later commit.
 // Run without --quiet on purpose: its last line names how many files it read, and
@@ -159,9 +171,13 @@ for (const project of projects) {
 
 // ── The repository-wide checks ───────────────────────────────────────────────
 
+// The LOWEST major the declared range admits, which is the one the DOM specs have to
+// survive. `semver.minVersion` answers that for the whole range; the first number in
+// the string does not — it is the lowest only while the `||` branches happen to be
+// written in ascending order, and nothing makes anyone write them that way.
 function declaredNodeMajor(range) {
-    const match = /(\d+)/.exec(range ?? '');
-    return match ? Number(match[1]) : null;
+    if (!range || !semver.validRange(range)) return null;
+    return semver.minVersion(range)?.major ?? null;
 }
 
 // Why a whole check for one function existing:
@@ -269,65 +285,80 @@ function checkLockfileParity() {
 // treated as satisfied.
 // Breaking it: an --engine-strict install fails for a first-time cloner before any
 // check here can explain why. See docs/design-notes.md#a-node-range-the-dependencies-never-promised.
-// `function`, not `const` — the checks run at the top of this file, above these
-// definitions, so a const arrow would still be in its temporal dead zone and the
-// whole run would die with a ReferenceError instead of reporting anything.
-function parseNodeVersion(text) {
-    const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(text.trim());
-    return match ? [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)] : null;
-}
-function compareNodeVersions(a, b) {
-    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-}
-
-// `to: null` is infinity. A half-open span, so `^22.1.0` ends exactly where 23 begins.
-function parseNodeRange(range) {
-    const spans = [];
-    for (const part of String(range).split('||')) {
-        const text = part.trim();
-        const caret = /^\^\s*(.+)$/.exec(text);
-        const atLeast = /^>=\s*(.+)$/.exec(text);
-        const from = parseNodeVersion(caret?.[1] ?? atLeast?.[1] ?? text);
-        if (!from) return null;
-        // `^0.10.0` means <0.11.0, not <1.0.0 — semver treats a 0 major as having no
-        // compatible range. Modelling it as <1.0.0 would be WIDER than the truth, and a
-        // containment check that errs wide reports "fits" where it does not. No such
-        // range is in the tree today; refusing to guess is what keeps that safe if one
-        // arrives. Unparseable here means reported unchecked, never assumed satisfied.
-        if (caret && from[0] === 0) return null;
-        spans.push({ from, to: atLeast ? null : [from[0] + 1, 0, 0] });
+//
+// The containment question is `semver.subset(ours, theirs)` — node-semver's own, the
+// same implementation npm resolves with. It used to be sixty lines of range algebra
+// here that understood `^`, `>=` and `||` and refused everything else; what that cost,
+// and the one comparison it silently got wrong, is in
+// docs/design-notes.md#two-algorithms-the-gates-had-no-business-owning.
+//
+// Two things the version below still has to decide for itself, because they are policy
+// rather than semantics:
+//   - an UNPARSEABLE range is reported unverified, never treated as satisfied. That is
+//     the whole reason validRange() is called before subset() rather than catching a
+//     throw: a gate that turns "I could not tell" into a pass is worse than no gate.
+//   - a range that does not fit is reported per package, with the fix, because the
+//     useful output is "which dependency, and what does it need".
+function nodeRangeFitsWithin(ours, theirs) {
+    // subset() throws on a range it cannot parse, and both are checked by the callers,
+    // so a throw here means an input shape node-semver accepts as valid and cannot
+    // compare. That is a case to report, not to swallow into either verdict.
+    try {
+        return semver.subset(ours, theirs) ? 'fits' : 'wider';
+    } catch {
+        return 'unknown';
     }
-    return spans.length > 0 ? spans : null;
 }
 
-function mergeNodeSpans(spans) {
-    const merged = [];
-    for (const span of [...spans].sort((a, b) => compareNodeVersions(a.from, b.from))) {
-        const last = merged[merged.length - 1];
-        if (last && (last.to === null || compareNodeVersions(span.from, last.to) <= 0)) {
-            last.to =
-                last.to === null || span.to === null
-                    ? null
-                    : compareNodeVersions(span.to, last.to) > 0
-                      ? span.to
-                      : last.to;
-        } else {
-            merged.push({ ...span });
+// The decision, separated from the files it normally reads so that --selftest can
+// drive it on inputs no lockfile here contains. Returns exactly what record() takes,
+// plus the extra lines to print underneath.
+function engineRangeVerdict(declared, lockPackages) {
+    if (!semver.validRange(declared)) {
+        return { state: 'unverified', detail: `cannot parse engines.node "${declared}"`, lines: [] };
+    }
+
+    const tooWideFor = [];
+    const unparsed = [];
+    let compared = 0;
+    for (const [path, meta] of Object.entries(lockPackages)) {
+        if (!path) continue; // the root entry is us, not a dependency
+        const range = meta.engines?.node;
+        if (!range) continue;
+        // Both arms end up unverified, and deliberately so: a range node-semver rejects
+        // and a pair it accepts but cannot compare are the same thing to this check —
+        // a dependency whose promise it did not manage to read.
+        if (!semver.validRange(range) || nodeRangeFitsWithin(declared, range) === 'unknown') {
+            unparsed.push(`${path} ("${range}")`);
+            continue;
+        }
+        compared += 1;
+        if (nodeRangeFitsWithin(declared, range) === 'wider') {
+            tooWideFor.push(`${path.replace(/^node_modules\//, '')} needs ${range}`);
         }
     }
-    return merged;
-}
 
-// Every version our range admits must be a version theirs admits too.
-function nodeRangeFitsWithin(ours, theirs) {
-    const merged = mergeNodeSpans(theirs);
-    return ours.every((span) =>
-        merged.some(
-            (other) =>
-                compareNodeVersions(other.from, span.from) <= 0 &&
-                (other.to === null || (span.to !== null && compareNodeVersions(span.to, other.to) <= 0)),
-        ),
-    );
+    if (tooWideFor.length > 0) {
+        return {
+            state: 'failed',
+            detail: `"${declared}" is wider than ${tooWideFor.length} locked package(s) allow`,
+            lines: [
+                ...tooWideFor.slice(0, 6),
+                ...(tooWideFor.length > 6 ? [`… and ${tooWideFor.length - 6} more`] : []),
+                'Fix: narrow engines.node in the root and every project, then npm install --package-lock-only',
+            ],
+        };
+    }
+    // Reported AFTER a failure, never instead of one: a range that is provably too wide
+    // is a fact, and one unreadable dependency elsewhere does not make it less of one.
+    if (unparsed.length > 0) {
+        return {
+            state: 'unverified',
+            detail: `${unparsed.length} range(s) this check cannot parse: ${unparsed.join(', ')}`,
+            lines: [],
+        };
+    }
+    return { state: 'ok', detail: `"${declared}" fits within all ${compared} declared range(s)`, lines: [] };
 }
 
 function checkEngineRange() {
@@ -338,41 +369,10 @@ function checkEngineRange() {
         record(name, 'unverified', declared ? 'no package-lock.json to compare against' : 'no engines.node declared');
         return;
     }
-    const ours = parseNodeRange(declared);
-    if (!ours) {
-        record(name, 'unverified', `cannot parse engines.node "${declared}"`);
-        return;
-    }
-
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
-    const tooWideFor = [];
-    const unparsed = [];
-    let compared = 0;
-    for (const [path, meta] of Object.entries(lock.packages ?? {})) {
-        if (!path) continue; // the root entry is us, not a dependency
-        const range = meta.engines?.node;
-        if (!range) continue;
-        const theirs = parseNodeRange(range);
-        if (!theirs) {
-            unparsed.push(`${path} ("${range}")`);
-            continue;
-        }
-        compared += 1;
-        if (!nodeRangeFitsWithin(ours, theirs)) tooWideFor.push(`${path.replace(/^node_modules\//, '')} needs ${range}`);
-    }
-
-    if (tooWideFor.length > 0) {
-        record(name, 'failed', `"${declared}" is wider than ${tooWideFor.length} locked package(s) allow`);
-        for (const line of tooWideFor.slice(0, 6)) console.log(indent(line));
-        if (tooWideFor.length > 6) console.log(indent(`… and ${tooWideFor.length - 6} more`));
-        console.log(indent('Fix: narrow engines.node in the root and every project, then npm install --package-lock-only'));
-        return;
-    }
-    if (unparsed.length > 0) {
-        record(name, 'unverified', `${unparsed.length} range(s) this check cannot parse: ${unparsed.join(', ')}`);
-        return;
-    }
-    record(name, 'ok', `"${declared}" fits within all ${compared} declared range(s)`);
+    const { state, detail, lines } = engineRangeVerdict(declared, lock.packages ?? {});
+    record(name, state, detail);
+    for (const line of lines) console.log(indent(line));
 }
 
 // ── The per-project checks ───────────────────────────────────────────────────
@@ -568,6 +568,104 @@ function checkDist(project) {
     record(name, 'ok', `${manifestReferences(manifest).length} manifest-named files present`, {
         project: project.id,
     });
+}
+
+// ── Self-test ────────────────────────────────────────────────────────────────
+//
+// Every other gate in this repository proves it still detects; this file did not, and
+// it is the file that decides whether anything else ran. The gap mattered most for the
+// range comparison, whose stated invariant is that a range it cannot read comes back
+// UNVERIFIED — the one outcome no happy-path run ever exercises, and the one whose
+// failure looks exactly like a pass.
+//
+// Scope, deliberately narrow: the range decision and the minimum-major reading, which
+// are the parts with logic. The rest of this file spawns builds and test runs, and a
+// self-test that shelled out to those would be the preflight run itself.
+//
+// Not a conformance suite for node-semver. Every case below is a decision THIS file
+// makes on top of it: which state a verdict maps to, and which end of a `||` range the
+// DOM-spec floor is compared against.
+function selftest() {
+    const quiet = process.argv.includes('--quiet');
+    const cases = [];
+    const check = (label, passed, detail) => {
+        cases.push({ label, passed });
+        if (!quiet || !passed) console.log(`  ${passed ? 'ok  ' : 'FAIL'}  ${label}${passed ? '' : ` — ${detail}`}`);
+    };
+
+    const lock = (ranges) => Object.fromEntries(ranges.map((range, i) => [`node_modules/p${i}`, { engines: { node: range } }]));
+    const verdict = (declared, ranges) => engineRangeVerdict(declared, lock(ranges));
+
+    const fits = verdict('^22.22.2 || ^24.15.0 || >=26.0.0', ['>=10', '>=18', '^22 || ^24 || >=26']);
+    check('accepts a range every dependency admits', fits.state === 'ok', `got ${fits.state}: ${fits.detail}`);
+
+    // The case the check exists for. `>=22` admits 23, and a dependency that stops at 22
+    // does not — so an --engine-strict install breaks for a cloner on 23.
+    const wider = verdict('>=22', ['^22']);
+    check(
+        'fails a range wider than a dependency allows, and names it',
+        wider.state === 'failed' && wider.lines.some((line) => line.includes('p0 needs ^22')),
+        `got ${wider.state}: ${wider.detail}`,
+    );
+
+    // The invariant. Not "ok", not "failed" — the third state, or the gate is lying.
+    const badOurs = verdict('twenty-two or later', ['>=10']);
+    check(
+        'reports an unreadable declared range UNVERIFIED, not satisfied',
+        badOurs.state === 'unverified' && badOurs.detail.includes('cannot parse'),
+        `got ${badOurs.state}: ${badOurs.detail}`,
+    );
+
+    const badTheirs = verdict('^22.22.2', ['>=10', 'whatever node you like']);
+    check(
+        'reports an unreadable dependency range UNVERIFIED, and names the package',
+        badTheirs.state === 'unverified' && badTheirs.detail.includes('node_modules/p1'),
+        `got ${badTheirs.state}: ${badTheirs.detail}`,
+    );
+
+    // A failure outranks an unreadable neighbour. Reversing these two returns would turn
+    // a provable break into "inconclusive" as soon as one dependency was unparseable.
+    const bothWrong = verdict('>=22', ['^22', 'nonsense']);
+    check(
+        'reports a provable break as FAILED even beside a range it cannot read',
+        bothWrong.state === 'failed',
+        `got ${bothWrong.state}: ${bothWrong.detail}`,
+    );
+
+    // A dependency with no engines field promises nothing, so it is not a comparison.
+    // Counting it would inflate the number this check reports as evidence.
+    const silent = engineRangeVerdict('^22.22.2', {
+        '': { engines: { node: 'ignored — this entry is us' } },
+        'node_modules/a': {},
+        'node_modules/b': { engines: { node: '>=10' } },
+    });
+    check(
+        'counts only the dependencies that declare a range',
+        silent.state === 'ok' && silent.detail.includes('all 1 declared'),
+        `got ${silent.state}: ${silent.detail}`,
+    );
+
+    // The lowest major the range admits, whatever order the branches are written in.
+    // The regex this replaced read the FIRST number in the string, which is the lowest
+    // only by convention — and the DOM-spec floor is compared against it.
+    check(
+        'reads the minimum major from a reordered range',
+        declaredNodeMajor('>=26.0.0 || ^22.22.2') === 22,
+        `got ${declaredNodeMajor('>=26.0.0 || ^22.22.2')}`,
+    );
+    check(
+        'reads no major at all out of a range it cannot parse',
+        declaredNodeMajor('twenty-two') === null,
+        `got ${declaredNodeMajor('twenty-two')}`,
+    );
+
+    const failures = cases.filter((c) => !c.passed);
+    console.log(
+        failures.length === 0
+            ? `preflight selftest: all ${cases.length} case(s) behaved as required`
+            : `preflight selftest: ${failures.length} case(s) WRONG`,
+    );
+    process.exit(failures.length === 0 ? 0 : 1);
 }
 
 // ── Verdict ──────────────────────────────────────────────────────────────────
