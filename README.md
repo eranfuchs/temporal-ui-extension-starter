@@ -67,7 +67,7 @@ visible. Three rungs are here; stage 04 is planned:
 | [`01-family-tree/`](01-family-tree/) | the family tree, and nothing else | **none** | **none** | none |
 | [`02-techniques/`](02-techniques/) | deep links to your own log tool (per row, and per activity on a workflow's own page), a settings pane, a "last event" column with a refresh control, a retrying-activity badge | `storage` | up to two per **running** row, to the page's own Temporal API, paced and cached — plus whatever the refresh control is pressed for, floored at one round per run per 5s. Nowhere else | none |
 | [`03-payloads/`](03-payloads/), the **payload stage** | each workflow's input and result on hover, decoded through your own codec server | `storage` — **the same permission surface as 02** | the above, plus one history event per question — one for a running row, two for a closed one — and, only once you have named one, the codec server you typed into the popup | none |
-| stage 04, conveniences — sketched only | column reorder, a larger page size, an activity finder, expand-to-families, and a payload **viewer** — collapsible values, colour per value. 03's panel briefly had a version of this and it was removed; the survey of why is in [`docs/design-notes.md`](docs/design-notes.md#every-json-viewer-wanted-a-parsed-value) | `storage` | no new destination | none |
+| stage 04, conveniences — planned, not written | payload viewing and JSON highlighting, column reordering, a larger page size, expand-to-families, family focus, per-column copy, NOT filtering and additive filtering — [the full list](#stage-04-planned--the-conveniences) | `storage` | no new destination | none |
 
 The "requests" column is there because it is the one cost the manifest does
 **not** show. 02 declares no `host_permissions` and still originates requests: it
@@ -98,8 +98,33 @@ read one diff in this repository, read that one: it is the clearest statement th
 ladder makes that **a permission diff is not a capability diff**.
 
 **Stage 04 is not written yet**, and there is no empty directory standing in for it.
-Its row above says what it is planned to carry; every claim in the three rows above
-it is about code that is in this tree.
+The list below is what it is planned to carry; every claim in the three rows above it
+is about code that is in this tree.
+
+### Stage 04, planned — the conveniences
+
+This is the one authoritative copy of the scope. Everywhere else in the repository
+that mentions stage 04 links here, because four prose copies of a roadmap is four
+things to update and three that will not be.
+
+- **Separate input and output payload affordances** — one control per direction,
+  rather than one panel showing both.
+- **JSON highlighting**, and the value viewer it implies: collapsible values, colour
+  per value rather than per panel, and lossless formatting so a 20-digit id survives.
+  03 briefly had a version of this and it was removed; the library survey that stage
+  04 should start from is in
+  [`docs/design-notes.md`](docs/design-notes.md#every-json-viewer-wanted-a-parsed-value).
+- **Column reordering.**
+- **Workflow-list page size up to 1,000.**
+- **Expand to families** — pull in the relatives of the rows a filter matched.
+- **One-click family focus.**
+- **A copy button on each data-column header.**
+- **NOT filtering** — the negation Temporal's own filter bar does not offer.
+- **Ctrl/Cmd-click additive filtering**, for Temporal's own filters and for the NOT
+  filter above.
+
+None of it needs a new permission or a new destination: `storage`, and the requests
+03 already makes.
 
 That ladder is the argument this repository is making: a genuinely useful view
 costs zero permissions, and every permission after that should be traceable to a
@@ -210,7 +235,7 @@ question with an answer here rather than an install log.
 |---|---|---|
 | [01](01-family-tree/README.md#dependencies) | `valibot` | — |
 | [02](02-techniques/README.md#dependencies) | `valibot`, `p-limit` | `yocto-queue` |
-| [03](03-payloads/README.md#dependencies) | `valibot`, `p-limit`, `jsonc-parser` | `yocto-queue` |
+| [03](03-payloads/README.md#dependencies) | `valibot`, `p-limit` — the same set as 02 | `yocto-queue` |
 
 Each project's README carries a **dependency card** with the version, the licence,
 what the package is for, which bundles it is in, and what stayed

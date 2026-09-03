@@ -46,8 +46,10 @@
 // intended trade at this rung of the ladder. An unauthenticated codec server on
 // your own machine is the case this stage is built for.
 
+import * as v from 'valibot';
+
 import type { UnauthenticatedPost } from '../page/pageApi';
-import { needsCodec, type RawPayload } from './payloads';
+import { needsCodec, rawPayloadsSchema, type RawPayload } from './payloads';
 import { asObject } from './valueGuards';
 
 // ── Which endpoints may be used ─────────────────────────────────────────────
@@ -179,5 +181,18 @@ export function readCodecResponse(body: unknown, sent: number): RawPayload[] {
     if (payloads.length !== sent) {
         throw new Error(`Codec server returned ${payloads.length} payloads for ${sent} sent.`);
     }
-    return payloads as RawPayload[];
+    // The COUNT was never the whole check. A server that returns the right number of
+    // wrong-shaped objects passed the test above and then handed `{data: {}}` to
+    // `atob()` and `null` to `encodingOf()`, inside a tooltip. The elements are the
+    // decoded form of somebody's data, arriving from a host the reader typed in, so
+    // they are validated to the leaves like every other message from outside.
+    //
+    // Whole or nothing, and an error rather than a filter: dropping element 2 of 3
+    // would pair answer 3 with argument 2 and label one workflow's data with
+    // another's, which is precisely what the count check above exists to stop.
+    const checked = v.safeParse(rawPayloadsSchema, payloads);
+    if (!checked.success) {
+        throw new Error('Codec server returned a payload that is not shaped like one.');
+    }
+    return checked.output;
 }

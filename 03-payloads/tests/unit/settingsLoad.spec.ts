@@ -88,6 +88,24 @@ describe('loadSettings', () => {
         expect(links).toEqual([WORKFLOW_LINK]);
     });
 
+    it('gives every fallback load its own objects, sharing no leaf with the next', async () => {
+        // valibot hands a fallback back BY REFERENCE. With a bare array as the
+        // fallback, both loads below returned the SAME array holding the SAME link
+        // objects — and popup.ts edits a link in place, so one popup's edit changed
+        // what the next load produced, without anything being stored. Reproduced
+        // before the fix; this pins the fix rather than the library.
+        const first = (await load({ links: 'corrupt', linkScopesSeeded: true })).links;
+        const second = (await load({ links: 'corrupt', linkScopesSeeded: true })).links;
+
+        expect(first).toEqual(second);
+        expect(first).not.toBe(second);
+        expect(first[0]).not.toBe(second[0]);
+
+        // The consequence, stated as the thing a reader would actually notice.
+        first[0]!.label = 'edited in one popup';
+        expect(second[0]!.label).not.toBe('edited in one popup');
+    });
+
     it('falls back to the shipped pair when the stored links are not a list at all', async () => {
         for (const junk of [undefined, 'nope', 42, {}]) {
             expect((await load({ links: junk, linkScopesSeeded: true })).links, String(junk)).toEqual(DEFAULT_LINKS);

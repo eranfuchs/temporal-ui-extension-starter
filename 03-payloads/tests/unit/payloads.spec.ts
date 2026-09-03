@@ -49,6 +49,33 @@ describe('extractInput', () => {
         expect(extractInput({ events })).not.toBeNull();
     });
 
+    it('shows no payloads rather than malformed ones when an element is not a payload', () => {
+        // A history response is a document from outside. These elements used to be
+        // CAST to RawPayload and handed straight on: `null` to encodingOf(), a
+        // non-string `data` to atob(). The panel has a shape for "nothing to show",
+        // and it is the right one here — nothing is on screen yet, so there is no
+        // reader waiting on an answer to raise at. (The codec path, where there IS
+        // one, throws instead; see codec.spec.ts.)
+        for (const bad of [null, 42, { data: {} }, { metadata: { encoding: 5 } }]) {
+            const events = [
+                event('workflowExecutionStartedEventAttributes', { input: { payloads: [bad] } }),
+            ];
+            expect(extractInput({ events })!.payloads, JSON.stringify(bad)).toEqual([]);
+        }
+    });
+
+    it('does not drop the good elements of a list quietly', () => {
+        // Whole or nothing: one bad element out of two costs both, because dropping
+        // it would renumber the argument that survives — "── 1 of 2 ──" would label
+        // the second argument as the first.
+        const events = [
+            event('workflowExecutionStartedEventAttributes', {
+                input: { payloads: [payload('json/plain', '{"a":1}'), { data: {} }] },
+            }),
+        ];
+        expect(extractInput({ events })!.payloads).toEqual([]);
+    });
+
     it('returns null when the response holds no started event', () => {
         expect(extractInput({ history: { events: [] } })).toBeNull();
         expect(extractInput({})).toBeNull();
@@ -233,9 +260,34 @@ describe('clip', () => {
 });
 
 describe('base64 helpers', () => {
-    it('returns the raw string when it is not valid base64', () => {
-        // Inside a tooltip, showing what arrived beats throwing.
-        expect(base64ToText('not base64 !!')).toBe('not base64 !!');
+    it('says so, and still shows what arrived, when it is not valid base64', () => {
+        // Inside a tooltip, showing what arrived beats throwing — but it used to be
+        // returned BARE, which reads as a successful decode of something else. The
+        // characters are all still there; they are now labelled.
+        const shown = base64ToText('not base64 !!');
+        expect(shown).toContain('not valid base64');
+        expect(shown).toContain('not base64 !!');
+    });
+
+    it('never silently replaces a byte it cannot decode', () => {
+        // THE CLAIM THIS RUNG MAKES IS THAT A PAYLOAD IS SHOWN UNALTERED. The default
+        // TextDecoder is lossy in silence: 0xff becomes U+FFFD, and the panel has then
+        // shown the reader a character the server never sent — an alteration that looks
+        // like data. `fatal: true` turns that into a named case.
+        const loneHighByte = btoa('ÿþ');
+        const shown = base64ToText(loneHighByte);
+
+        expect(shown).not.toContain('�');
+        expect(shown).toContain('not UTF-8 text');
+        expect(shown).toContain('2 bytes');
+        // Lossless: the base64 is right there, and it pastes back into a request.
+        expect(shown).toContain(loneHighByte);
+    });
+
+    it('still decodes real UTF-8, multi-byte characters included', () => {
+        expect(base64ToText(btoa(String.fromCharCode(...new TextEncoder().encode('naïve café — ✓'))))).toBe(
+            'naïve café — ✓',
+        );
     });
 
     it('counts bytes from the base64 length, padding included', () => {

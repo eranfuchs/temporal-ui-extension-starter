@@ -19,16 +19,34 @@
 // **a permission diff is not a capability diff**, and this is the rung where the
 // difference is largest.
 
+import * as v from 'valibot';
+
 import { asObject, asText } from './valueGuards';
 
 // ── Reading the history ──────────────────────────────────────────────────────
 
 // One entry of a `payloads[]` array, as Temporal serialises it: both fields are
-// base64 in JSON.
-export interface RawPayload {
-    metadata?: Record<string, string> | null;
-    data?: string | null;
-}
+// base64 in JSON. Optional AND nullable, separately, because the server sends
+// neither for an empty payload and JSON has both spellings for "not here".
+//
+// A SCHEMA RATHER THAN AN INTERFACE, because both places this shape arrives are
+// outside the extension: a history response from Temporal, and a decode response
+// from whatever host the reader typed into the popup. An interface is a promise the
+// compiler makes about our own code and says nothing about either of them — and a
+// cast is how `{data: {}}` reaches `atob()` and how a `null` element reaches
+// `encodingOf()`, in a tooltip, one hover away from the reader.
+export const rawPayloadSchema = v.object({
+    metadata: v.optional(v.nullable(v.record(v.string(), v.string()))),
+    data: v.optional(v.nullable(v.string())),
+});
+
+export type RawPayload = v.InferOutput<typeof rawPayloadSchema>;
+
+// The array form, used at both boundaries. WHOLE OR NOTHING, deliberately: a bad
+// element is not filtered out, because the panel pairs answer N with argument N and
+// dropping element 2 of 3 would silently relabel the two that remain — the same
+// failure the codec count check exists to prevent, arriving by a different door.
+export const rawPayloadsSchema = v.array(rawPayloadSchema);
 
 export interface Extracted {
     label: string;
@@ -107,9 +125,15 @@ function eventsOf(history: unknown): unknown[] {
     return Array.isArray(events) ? events : [];
 }
 
+// A history response is a document from outside, so its payload elements are
+// validated rather than cast. An array whose elements do not hold up is treated as
+// no payloads at all: this runs while BUILDING the panel's question, before anything
+// is on screen, and the panel already has a shape for "nothing to show here". The
+// codec path is the one that raises instead — see readCodecResponse — because there
+// a reader is waiting on an answer that was asked for.
 function payloadsIn(container: unknown): RawPayload[] {
-    const payloads = asObject(container)?.['payloads'];
-    return Array.isArray(payloads) ? (payloads as RawPayload[]) : [];
+    const payloads = v.safeParse(rawPayloadsSchema, asObject(container)?.['payloads']);
+    return payloads.success ? payloads.output : [];
 }
 
 // A Temporal failure is a linked list: the interesting message is usually the
@@ -202,16 +226,31 @@ export function clip(text: string): string {
 
 // base64 → text, via bytes. `atob` alone gives one char per BYTE, which mangles
 // every non-ASCII character in a payload; TextDecoder is what makes it UTF-8.
+//
+// `fatal: true`, AND THAT IS THE WHOLE POINT OF THIS FUNCTION'S HONESTY. The default
+// decoder is lossy in silence: every byte it cannot interpret becomes U+FFFD, so a
+// `binary/plain` payload holding 0xff renders as `` and the panel has quietly shown
+// the reader something the server did not send. This rung's claim is that a payload
+// is displayed unaltered, and a replacement character is an alteration — the one kind
+// that looks like data.
+//
+// So a payload that is not UTF-8 is NAMED as such and shown as its base64 instead,
+// which is lossless and pastes back into a request. Same for base64 that does not
+// decode at all: the old code returned the raw string as though it were the decoded
+// text, which reads as a successful decode of something else entirely.
 export function base64ToText(data: string): string {
+    let bytes: Uint8Array;
     try {
         const binary = atob(data);
-        const bytes = new Uint8Array(binary.length);
+        bytes = new Uint8Array(binary.length);
         for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-        return new TextDecoder().decode(bytes);
     } catch {
-        // Not valid base64. Returning the raw string is more useful than
-        // throwing inside a tooltip.
-        return data;
+        return `(not valid base64 — ${data.length} characters, shown as they arrived.)\n${data}`;
+    }
+    try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+        return `(not UTF-8 text — ${bytes.length} bytes, shown as base64.)\n${data}`;
     }
 }
 

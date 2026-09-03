@@ -661,9 +661,9 @@ all. Reviewing "what can this thing send" means reading one file.
 
 **No payload is decoded here** — that is the boundary of this stage, not an
 omission. Input and result on hover, through a codec server, are
-[`../03-payloads/`](../03-payloads/); column reorder, a larger page size, a
-cross-workflow activity finder and expand-to-families are conveniences one rung
-further up, and that stage is not in this repository yet.
+[`../03-payloads/`](../03-payloads/). The conveniences are one rung further up and
+that stage is not in this repository yet;
+[the root README lists them](../README.md#stage-04-planned--the-conveniences).
 
 ## Commands
 

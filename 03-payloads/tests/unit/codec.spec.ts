@@ -279,4 +279,32 @@ describe('readCodecResponse', () => {
             expect(() => readCodecResponse(bad, 1)).toThrow(/payloads array/);
         }
     });
+
+    it('refuses the RIGHT NUMBER of wrong-shaped payloads', () => {
+        // The count check alone let each of these through, and every one of them
+        // reaches code that assumes otherwise: `null` reaches encodingOf(), a
+        // non-string `data` reaches atob(), and non-string metadata values reach
+        // the encoding lookup. In a tooltip, holding somebody's decrypted data.
+        const wrong = [null, 42, 'a string', { data: {} }, { data: 7 }, { metadata: { encoding: 5 } }, { metadata: 'x' }];
+        for (const bad of wrong) {
+            expect(() => readCodecResponse({ payloads: [bad] }, 1), JSON.stringify(bad)).toThrow(/shaped like one/);
+        }
+    });
+
+    it('refuses the whole response when one element of several is malformed', () => {
+        // Not a filter. Dropping element 2 of 3 would pair answer 3 with argument 2
+        // and label one workflow's data with another's — the same failure the count
+        // check exists to prevent, arriving through a different door.
+        const good = payload('json/plain', '{"a":1}');
+        expect(() => readCodecResponse({ payloads: [good, { data: {} }, good] }, 3)).toThrow(/shaped like one/);
+    });
+
+    it('accepts the shapes Temporal actually sends for an empty payload', () => {
+        // Both fields are optional AND nullable, separately: the server sends
+        // neither for an empty payload, and JSON has two spellings for "not here".
+        // Rejecting these would break a legitimate empty argument.
+        for (const ok of [{}, { data: null }, { metadata: null }, { metadata: null, data: null }]) {
+            expect(readCodecResponse({ payloads: [ok] }, 1)).toEqual([ok]);
+        }
+    });
 });

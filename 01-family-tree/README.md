@@ -185,9 +185,10 @@ asserted.
 Deep links to your log tool, a settings pane, a last-event column and a
 retrying-activity badge are [`../02-techniques/`](../02-techniques/). Workflow
 input and result on hover, decoded through your codec server, are the rung above
-that — [`../03-payloads/`](../03-payloads/), the payload stage. Conveniences like
-column reorder, a bigger page size and a cross-workflow activity finder are the one
-above *that*, and are not in this repository yet.
+that — [`../03-payloads/`](../03-payloads/), the payload stage. The conveniences —
+JSON highlighting, column reordering, filtering and the rest — are the rung above
+*that*, [listed in full in the root README](../README.md#stage-04-planned--the-conveniences),
+and not in this repository yet.
 
 Each step up the ladder costs something: 02 asks for `storage`, and — the part no
 manifest key shows — it **originates requests**, because two of the facts it puts

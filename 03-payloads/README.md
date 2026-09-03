@@ -8,9 +8,10 @@ teams actually came for:
   returned or why it failed;
 - **decoded through your own codec server** when the payload is encrypted, with
   the host that decoded it named on screen, every time;
-- **and nothing else.** The conveniences that were once bundled with this — column
-  reorder, a bigger page size, a cross-workflow activity finder — are stage 04's
-  problem. None of them changes what the extension can reach; this does.
+- **and nothing else.** Every convenience once bundled with this — JSON
+  highlighting, column reordering, a bigger page size, filtering — is
+  [stage 04's](../README.md#stage-04-planned--the-conveniences). None of them changes
+  what the extension can reach; this does.
 
 ```
 Workflow ID                                  Last event ⟳                   Status
@@ -20,14 +21,18 @@ order-2601011200-01      Logs  { }           3m 00s · ActivityTaskStarted   Run
                                 └───────────────────────────────────────────┐
                                 │ order-2601011200-01 · OrderWorkflow · Running
                                 │ INPUT · DECODED BY CODEC.EXAMPLE.COM
-                                │ {
-                                │   "orderId": "2601011200-01",
-                                │   "amount": { "currency": "EUR", "minor": 4999 }
-                                │ }
+                                │ {"orderId":"2601011200-01","amount":{"curr
+                                │ ency":"EUR","minor":4999}}
                                 │ RESULT
                                 │ Still running.
                                 └───────────────────────────────────────────┘
 ```
+
+Yes, the payload really is shown on one line like that — **exactly the bytes the
+server sent**, wrapped by the panel and re-indented by nothing. Turning JSON into
+something pleasant to read is a job with its own correctness problem (see
+[the note below](#what-a-production-build-would-add-and-this-one-deliberately-does-not)),
+and it belongs to stage 04 with the viewer it needs.
 
 **This is the rung where three things arrive at once**, which is why it is a stage
 of its own: the extension decodes payloads for the first time, sends data out of the
@@ -419,7 +424,7 @@ projects can be compared line by line.
 | **Payloads it decodes** | yes — that is the feature. `json/plain`, `binary/plain`, `text/plain`, `binary/null` in the browser; anything else through your codec server, or not at all |
 | **Credentials it holds** | none. It stores no token. The page's `Authorization` header is read in the page's world and attached **only** to Temporal's own API — there is no parameter, setting or message field that can attach any credential to a codec request. The token option was never built and the cookie option was deleted; the codec `fetch` says `credentials: 'omit'` as a literal |
 | **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace — the same single ledger, now also gating the hover. A request naming any other run is refused *before* the page's token is spent on it |
-| **Third-party code in the bundle** | four packages — `valibot`, `p-limit`, `jsonc-parser`, and `yocto-queue` behind `p-limit`. None of them is on the egress path: the codec request is built and sent by our own code. Budgeted, and checked against what esbuild actually inlined — see [Dependencies](#dependencies) |
+| **Third-party code in the bundle** | three packages — `valibot`, `p-limit`, and `yocto-queue` behind `p-limit`; the same set as 02, since this stage adds none of its own. None of them is on the egress path: the codec request is built and sent by our own code. Budgeted, and checked against what esbuild actually inlined — see [Dependencies](#dependencies) |
 
 ### The row that matters: data leaves the browser
 
@@ -605,12 +610,12 @@ for this project is the same as 02's and says so in capitals, because the gate c
 only enforce the floor: **the audit for this rung is the security card above, not
 the permission list.**
 
-The one place the budget is *not* the same as 02's is the dependency list, which
-gains `jsonc-parser` — and there the gate reads esbuild's metafile rather than
-`package.json`, so it fails on a package inside a bundle that the budget does not
-name, on a budgeted package no bundle contains, and on an import that resolves only
-because a sibling project installed it. Notably, `innerHTML` was **not** allowlisted
-to bring that package in: see [Dependencies](#dependencies).
+The dependency budget is the same as 02's too — this stage adds no package of its
+own — and the gate behind it reads esbuild's metafile rather than `package.json`, so
+it fails on a package inside a bundle that the budget does not name, on a budgeted
+package no bundle contains, and on an import that resolves only because a sibling
+project installed it. That last case is why the budget is per project and the check
+is per bundle: see [Dependencies](#dependencies).
 
 The tests are also mutation-audited rather than merely green. A green test proves
 nothing until it has been shown to go red, and one hole was found that way: deleting
@@ -689,8 +694,8 @@ type-check, and is exactly the change to refuse in review.
   repository, and `package-lock.json` integrity hashes are the only pinning there
   is. This rung is where that distinction has teeth — it is the one with an egress
   path — so it is worth being precise: no third-party code touches that path. The
-  codec request is assembled, gated and sent by `src/payloads/codec.ts`, and what
-  `jsonc-parser` sees is a payload that has *already* come back.
+  codec request is assembled, gated and sent by `src/payloads/codec.ts`. `valibot`
+  runs on the response, after it has come back, and `p-limit` never sees it at all.
 
 One thing here *is* live-verified, and it is worth stating because it was carried over
 by hand. The detail-page links — the workflow bar on the tab row, and the per-activity
@@ -866,9 +871,9 @@ of this README.
   [`docs/design-notes.md`](../docs/design-notes.md) says what to read if you want it
   in a fork.
 
-Column reorder, a larger page size, a cross-workflow activity finder and
-expand-to-families are stage 04's conveniences; none of them changes what the
-extension can reach, which is why they are not here.
+[Stage 04's conveniences](../README.md#stage-04-planned--the-conveniences) — JSON
+highlighting, column reordering, filtering, the rest — change nothing about what the
+extension can reach, which is why none of them is here.
 
 ## Commands
 

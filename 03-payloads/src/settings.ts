@@ -103,7 +103,13 @@ const settingsSchema = v.object({
                 }),
             ),
         ),
-        DEFAULT_LINKS,
+        // A FUNCTION, NOT THE ARRAY. valibot hands a fallback back BY REFERENCE, so a
+        // bare `DEFAULT_LINKS` here would make every load that fell back share one
+        // array — and the popup edits link objects in place. Editing a link in a tab
+        // whose settings had fallen back would then change what the NEXT load returned,
+        // for the life of the page. Fresh objects every time; settingsLoad.spec.ts pins
+        // that two fallback loads share no leaf.
+        () => structuredClone(DEFAULT_LINKS),
     ),
     // The per-row `{ }` button that shows a workflow's input and result. On by
     // default and it costs nothing until the panel is opened — hover, or keyboard
@@ -181,7 +187,9 @@ export const DEFAULT_SETTINGS: Settings = v.parse(settingsSchema, {});
 // argues with you.
 export function withActivityScope(links: DeepLinkTemplate[]): DeepLinkTemplate[] {
     if (links.some((link) => templateScope(link.urlTemplate) === 'activity')) return links;
-    return [...links, DEFAULT_ACTIVITY_LINK];
+    // A copy, for the reason given at the links fallback above: the caller may edit
+    // what it gets back, and this constant must not be what it edits.
+    return [...links, { ...DEFAULT_ACTIVITY_LINK }];
 }
 
 export async function loadSettings(): Promise<Settings> {
