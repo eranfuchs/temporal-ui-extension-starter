@@ -22,7 +22,7 @@ import { expect, vi } from 'vitest';
 
 import { isPayloadRequest, type CodecConfig, type PayloadKind, type PayloadRequest, type PayloadResult } from '../src/payloads/payloadMessages';
 import { installPayloadTooltip, resetPayloadState, type TooltipRow } from '../src/payloads/tooltip';
-import { PANEL_CLASS, PAYLOAD_CLASS } from '../src/render';
+import { PANEL_CLASS, PAYLOAD_CLASS } from '../src/decoration';
 import { MESSAGE_SOURCE } from '../src/types';
 import { fakeRunId } from './helpers';
 

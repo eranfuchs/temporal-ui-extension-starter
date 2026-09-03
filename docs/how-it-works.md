@@ -60,7 +60,10 @@ lesson here, so a diagram that overstates them teaches the wrong model. In `02` 
                      │                                      ▼
                   ┌──┴───────────────────────── extension world (ISOLATED) ──┐
                   │ src/content.ts   wiring                                   │
-                  │   src/render.ts       writes the table                    │
+                  │   src/render.ts       the table: rows, order, cleanup     │
+                  │     rowInfo/rowInfoRender.ts  the column and the badge    │
+                  │     links/linkRender.ts       the deep-link anchors       │
+                  │     payloads/payloadButton.ts the { } button   (03 only)  │
                   │   src/detail/detailLinks.ts  writes the workflow page's links     │
                   │   src/payloads/tooltip.ts      writes the hover panel   (03 only)   │
                   └──────────────────────────────────────────────────────────┘
@@ -72,11 +75,13 @@ Two things the `01` diagram does not have to say, and these two rungs do:
   unforgeable sender, so every request arriving in MAIN world is treated as
   attacker-controlled — see the ledger, below, and the weakness section of each
   project's README.
-- **Three files write to the DOM, not one.** `render.ts` owns the table,
-  `detailLinks.ts` owns the links on a single workflow's page, and `03`'s `tooltip.ts`
-  owns the hover panel. They are separated by *what* they draw, not by whether they
-  are allowed to draw — and all three write into the DOM the page shares with us,
-  which is why `03`'s panel has to erase its text rather than merely hide it.
+- **More than one file writes to the DOM.** Three *surfaces*: `render.ts` and the
+  `*Render.ts` modules it calls own the workflow table, `detailLinks.ts` owns the links
+  on a single workflow's page, and `03`'s `tooltip.ts` owns the hover panel. They are
+  separated by *what* they draw, not by whether they are allowed to draw — and every one
+  writes into the DOM the page shares with us, which is why `03`'s panel has to erase
+  its text rather than merely hide it. `grep -rln 'createElement\|classList' src/` in
+  any project prints the real list; run it rather than trusting a count in prose.
 
 Why the injected script has to be in the page's **own** world is the crux, and it
 is easy to get backwards. An API call made from page JavaScript needs no
@@ -142,12 +147,13 @@ The first four exist in every project, byte-identical — enforced by
 | `src/family/rows.ts` | API shape → row shape. Pure. |
 | `src/family/tree.ts` | `buildTree` — the whole feature, as one pure function. Ordering, depth, connector columns. |
 
-These two differ per project, and the difference is the lesson:
+These differ per project, and the difference is the lesson:
 
 | File | What it is |
 |---|---|
-| `src/content.ts` | ISOLATED world. Wiring: receives messages, drives a `MutationObserver`. No DOM writes. In `01` it uses no `chrome.*` API at all; in `02` and `03` it also loads settings, answers the popup, and holds no repeating timer of any kind — the only one it schedules is a single pass `FRESH_FLOOR_MS` after a `⟳` press, to re-enable that button, because the "last event" ages are frozen at the instant Temporal was read rather than animated against the clock. In `03` it additionally drops the decoded-payload cache when the master switch goes off or the codec setting changes. |
-| `src/render.ts` | Every DOM write **in the workflow table**, which in `01` is every DOM write there is. `01`'s takes no options, because it has no settings to vary. `03`'s adds the per-row `{ }` button, which carries no row identity on any attribute. The other two writers, in the projects that have them, are `src/detail/detailLinks.ts` (a single workflow's own page) and `03`'s `src/payloads/tooltip.ts` (the hover panel) — split by *what* they draw, and each idempotent on its own surface for the reason in trap 2. |
+| `src/content.ts` | ISOLATED world. Wiring: receives messages, drives a `MutationObserver`. No DOM writes at all in `01`; in `02` and `03` exactly one — the off-class on `<html>` that the master switch hangs its CSS on. In `01` it uses no `chrome.*` API at all; in `02` and `03` it also loads settings, answers the popup, and holds no repeating timer of any kind — the only one it schedules is a single pass `FRESH_FLOOR_MS` after a `⟳` press, to re-enable that button, because the "last event" ages are frozen at the instant Temporal was read rather than animated against the clock. In `03` it additionally drops the decoded-payload cache when the master switch goes off or the codec setting changes. |
+| `src/render.ts` | The workflow table. In `01` it *is* every DOM write there is — one lesson, one file, and it takes no options because there are no settings to vary. In `02` and `03` it kept the table plumbing (find the `<tbody>`, identify a row, order the families, remove everything on the master switch) and handed the drawing to modules named after the lesson that added them: `src/rowInfo/rowInfoRender.ts` (the column and the badge — the only render job that writes outside the workflow-id cell), `src/links/linkRender.ts` (the anchors, used from two pages), and `03`'s `src/payloads/payloadButton.ts` (the `{ }` button, which carries no row identity on any attribute). The dependency points one way: `render.ts` imports them and passes row identity *in* as a function, so nothing that draws can reach back for the table. |
+| `src/decoration.ts` | `02` and `03` only. The root class of everything drawn, plus every class two modules share and the render types they are handed — because a selector in one module and the node it is meant to find in another is how the two drift apart. It is what the master switch's completeness rests on: `removeAllDecoration()` in `render.ts` can only sweep the classes this file names, and several of them are on nodes that are not in the table at all — the two link sites on a single workflow's page in both projects, plus `03`'s payload panel. Not *every* class in the extension: a node that only exists inside one of these roots, or a modifier written onto one, is named locally by the file that draws it, because removing the root takes it away too. The rule is in the file's own header. |
 
 `02-techniques/` and `03-payloads/` add `src/links/deepLink.ts` (templated per-row links,
 pure), `src/settings.ts` (`chrome.storage.sync`) and `src/popup.ts` (the toolbar
@@ -207,10 +213,17 @@ eyeball and expensive to get wrong. There are several of them, split by *what is
 being drawn* rather than by which source file draws it — `render.spec.ts` for the tree
 and the shared invariants, then `renderLinks.spec.ts`, `renderRowInfo.spec.ts` and, in
 `03`, `renderPayloadButton.spec.ts`, all sharing one harness so that one file's idea of
-what a row looks like cannot drift from another's. **`render.ts` itself has not been
-split to match, and it is the largest source file in the repository** — the seams are
-already named by those four specs, so it is the obvious next move rather than a
-finished one.
+what a row looks like cannot drift from another's.
+
+**The specs named those seams before the source had them, and `02` and `03` have since
+been split to match:** `renderRowInfo.spec.ts` now drives `src/rowInfo/rowInfoRender.ts`,
+`renderLinks.spec.ts` drives `src/links/linkRender.ts`, `renderPayloadButton.spec.ts`
+drives `src/payloads/payloadButton.ts`, and `render.spec.ts` keeps the tree, the shared
+invariants and the one case that asserts the master switch removes every root it drew,
+puts the row order back, and leaves the table as it found it. Each
+module sits in the lesson directory that introduced it, so "what did this stage add?" is
+answerable from a directory listing. `01`'s `render.ts` is deliberately *not* split — one
+lesson, one file, and `wc -l 01-family-tree/src/render.ts` is the argument.
 
 ## Things that will bite you
 
@@ -271,9 +284,11 @@ is what that costs.
 A `MutationObserver` drives the render. An unconditional write wakes the
 observer, which schedules another pass, which writes again. That is 100% of a CPU
 core, forever. The fix is not a longer debounce — it is comparing before writing,
-so a pass with nothing to do touches nothing at all. `render.ts` compares before
-every single write, and a spec asserts that a second pass produces zero mutation
-records.
+so a pass with nothing to do touches nothing at all. Every writer compares before
+every single write — `render.ts`, each `*Render.ts` module it calls, `detailLinks.ts`
+and `03`'s panel — and a spec asserts that a second pass produces zero mutation
+records. The rule is stated once, at the top of `render.ts`, and it governs the
+modules it calls as well: a module that draws is not exempt from it for being small.
 
 **3. The UI recycles `<tr>` elements.**
 The same DOM node is reused for a different workflow, with only the link

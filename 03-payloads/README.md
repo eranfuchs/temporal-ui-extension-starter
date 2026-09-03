@@ -44,9 +44,13 @@ largest capability step in this repository is the one the manifest does not reco
 ## Run it
 
 ```bash
-npm install          # from the repository root, once — needs Node >= 22
+npm install          # from the repository root, once
 npm run build        # from this directory
 ```
+
+The Node range `npm install` needs is stated once, in
+[the root README](../README.md#start-with-01), rather than copied into each
+project where three copies would go stale one at a time.
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select
 `03-payloads/dist/`. Open a workflow list, reload the tab, and hover a `{ }`.
@@ -91,7 +95,8 @@ accommodate this stage, and each change is a decision worth reading:
 | [`src/apiInject.ts`](src/apiInject.ts) | Installs a second server, so the enumerable list of accepted messages goes from one to two. This is the trust-boundary diff. |
 | [`src/page/pageApi.ts`](src/page/pageApi.ts) | Gains `fetchFromPageWorld()` — a second exported fetch that carries **no** credential to an origin the caller names, beside the one that spends the bearer on an origin it picks itself. Keeping those two from converging is the security argument of the stage. |
 | [`src/rowInfo/rowInfoServe.ts`](src/rowInfo/rowInfoServe.ts) | Stops building its own pacer and imports the shared instance instead. One line; see `src/page/requestPacing.ts` for why a second `makePacer()` would have looked correct in both places. |
-| [`src/render.ts`](src/render.ts) | Adds the per-row `{ }` button, which deliberately carries no row identity on any attribute, and the cleanup when a row's payload is no longer current. |
+| [`src/render.ts`](src/render.ts) | Ranks the `{ }` button into the control order 02 already states for the workflow-id cell — a third control appended into a cell whose order must not depend on which feature a given user switched on first. The button itself is [`src/payloads/payloadButton.ts`](src/payloads/payloadButton.ts) — nine lines of DOM that deliberately carry no row identity on any attribute, which is what makes them correct under `<tr>` recycling. |
+| [`src/decoration.ts`](src/decoration.ts) | Two more class names — one for the button in the cell, one for the panel, which is not in a row at all. The master switch sweeps the table; the panel is the node it can only remove because this file names it, which is why the class list and the removal live one import apart. |
 | [`src/content.ts`](src/content.ts) | Drops the decoded-payload cache when the master switch goes off or the codec setting changes. |
 | [`src/settings.ts`](src/settings.ts) | One new field, and it is the one that names a host. |
 | [`src/popup.ts`](src/popup.ts) | The endpoint input and the codec verdict line — the only place an endpoint can be set. |
@@ -707,7 +712,11 @@ src/
   apiInject.ts      MAIN world — every message accepted from the page, in one switch
   content.ts        ISOLATED world — wiring, and nothing else
   popup.ts          the toolbar popup, including the codec verdict line
-  render.ts         everything that writes to the table
+  render.ts         the table: finding it, identifying rows, ordering families — and
+                    the master switch, which removes every node this extension added
+                    and puts the row order back
+  decoration.ts     every root class and shared render type the writers use, and
+                    REMOVABLE_ROOT_CLASSES — the list the master switch sweeps
   settings.ts       chrome.storage.sync — including the one field that names a host
   types.ts          the shapes crossing the postMessage boundary
   page/             the boundary with the page's own Temporal API
@@ -728,8 +737,12 @@ src/
     rowInfoClient.ts  ISOLATED world — which rows are worth asking about, and what
                     came back
     rowInfoServe.ts MAIN world — answers them: cache, then the pacer
+    rowInfoRender.ts  draws the column and the badge — the only render job that
+                    writes outside the workflow-id cell
   links/
     deepLink.ts     URL templates: tokens, offsets, scope, and what may become an href
+    linkRender.ts   draws the anchors — the one render job used from two pages, so the
+                    three hardening attributes on an outbound link live here once
   detail/           one workflow's own page
     detail.ts       pure: URL rules, the folds behind the links, and which activity
                     an id on the page resolves to
@@ -742,6 +755,8 @@ src/
     codec.ts        pure: what a codec request looks like — destination, headers, body
                     — and what is deliberately NOT in it
     valueGuards.ts  the two narrowings the payload path shares
+    payloadButton.ts  draws the per-row `{ }` button, and deliberately puts no row
+                    identity on it
     tooltip.ts      ISOLATED world — the hover panel: the element, the gesture, and
                     the five rules
     payloadClient.ts  ISOLATED world — one hover's question, and the four invariants
@@ -760,8 +775,13 @@ tests/              the ordering rules, the DOM bugs that cost the most, the req
 
 The split is what makes the security card checkable: `src/payloads/payloads.ts` and
 `src/payloads/codec.ts` are pure and therefore testable, `src/page/pageApi.ts` is the
-only file that issues a request, and `render.ts`, `src/detail/detailLinks.ts` and
-`src/payloads/tooltip.ts` are the only ones that touch the page.
+only file that issues a request, and the only files that write to the page are
+`src/render.ts`, the three render modules it calls (`src/rowInfo/rowInfoRender.ts`,
+`src/links/linkRender.ts`, `src/payloads/payloadButton.ts`), `src/detail/detailLinks.ts` and
+`src/payloads/tooltip.ts` — plus one line in `src/content.ts`, which toggles the master
+switch's class on `<html>` and writes nothing else. `grep -rln 'createElement\|classList'
+src/` is the check; the one other name it returns is `src/popup.ts`, which writes to the
+popup's own document and cannot reach the page at all.
 
 **Reviewing "what can this thing send" means reading four files, not one** — an
 earlier draft of this line said one, which was the claim a reviewer had to disprove

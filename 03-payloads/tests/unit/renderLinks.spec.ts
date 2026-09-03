@@ -10,11 +10,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-    applyToTable,
-    LINK_BLOCKED_CLASS,
-    LINK_CLASS,
-} from '../../src/render';
+import { LINK_BLOCKED_CLASS, LINK_CLASS } from '../../src/decoration';
+import { applyToTable } from '../../src/render';
 import { buildWorkflowTable } from '../helpers';
 import {
     CHILD_A_RUN,

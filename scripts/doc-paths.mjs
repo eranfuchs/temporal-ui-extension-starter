@@ -9,7 +9,7 @@
 // in every document was wrong simultaneously — which is what made a gate cheaper
 // than proofreading.
 //
-// It checks five things, and nothing else:
+// It checks six things, and nothing else:
 //
 //   1. Markdown links — [text](target) — for local targets.
 //   2. Backticked path-looking strings, e.g. `src/family/tree.ts`, resolved against the
@@ -38,6 +38,18 @@
 //      requests against a fake network" — without quoting a block, so there is
 //      nothing to compare a filename against. Check 5 rewards prose that quotes
 //      the block it means; prose that only paraphrases is still on trust.
+//   6. The HEADING a `#fragment` names, in a Markdown link or a source citation.
+//      The other member of the resolves-and-is-still-wrong family, and the one
+//      that fails most quietly of all: a wrong fragment does not 404. GitHub
+//      leaves the reader at the top of the document, which reads as "that section
+//      was deleted". Both directions were unchecked until a source comment started
+//      pointing into docs/design-notes.md — mutating an anchor in a table of
+//      contents and an anchor in a render.ts comment both left this gate reporting
+//      clean, which is how it came to be written.
+//
+//      Its slugs come from github-slugger, GitHub's own, which means duplicate
+//      headings numbered `-1`, `-2` and letters of every script — see slugOf below
+//      for the one shape it still gets wrong, and which direction it errs in.
 //
 // What it deliberately does NOT check: prose. A doc can claim anything about
 // behaviour and this gate will not notice — see `npm run surface` and the unit
@@ -128,6 +140,79 @@ function isExempt(path) {
     return NOT_YET_PRESENT.some((re) => re.test(path));
 }
 
+// GitHub's heading slug, which is what a `#fragment` in this repository resolves
+// against — these documents are read on GitHub. Taken from github-slugger 2.0.0, the
+// module GitHub's renderer uses, rather than inferred from the anchors that happen to
+// work today: lowercase, drop every character that is not a Unicode letter, mark or
+// decimal digit, `_`, `-` or a space, then turn each remaining space into a hyphen.
+//
+// Each space, not each RUN of spaces: "a — b" slugs to `a--b`, because the em dash is
+// dropped and both of the spaces around it survive as hyphens. Collapsing runs would
+// produce `a-b` and reject the anchor GitHub actually generates.
+//
+// Letters means letters in ANY script — `é`, `ל`, `日` all survive. The first version
+// used `\w`, which strips them, so it would have rejected a working link to any
+// heading it could not spell. Symbols, emoji and punctuation go, including the
+// backticks around inline code: GitHub's renderer removes those as markup before
+// slugging, and dropping them as characters lands in the same place.
+//
+// KNOWN LIMIT, and it fails LOUD: GitHub slugs the RENDERED text, so a heading holding
+// a Markdown link or raw HTML — `## See [the docs](x)` — slugs to `see-the-docs` there
+// and `see-the-docsx` here. No heading in this repository has that shape. If one
+// appears, this rejects a link that works — a wrong answer someone reads, rather than
+// a silent pass.
+const SLUG_DROP = /[^\p{L}\p{M}\p{Nd}_ -]/gu;
+const slugOf = (heading) => heading.trim().toLowerCase().replace(SLUG_DROP, '').replace(/ /g, '-');
+
+// Every anchor a Markdown file offers. Cached, because check 1 and check 4 both ask,
+// and check 4 asks once per citation.
+//
+// Two things beyond "slug each heading", both of which the first version got wrong:
+//
+// DUPLICATES. GitHub gives the first `## Off` the anchor `off`, the second `off-1` and
+// the third `off-2`, skipping any suffix a heading already spells literally. Without
+// that, a valid link to a repeated heading is rejected — and this repository's own
+// convention favours short section names, so repeats are likely rather than exotic.
+//
+// FENCED CODE. A `# comment` line inside a ``` block is not a heading, and the README
+// has several. Registering them invents anchors that satisfy this gate and 404 on
+// GitHub — a false PASS, which is the direction that matters.
+const anchorCache = new Map();
+function anchorsOf(file) {
+    if (anchorCache.has(file)) return anchorCache.get(file);
+    const anchors = new Set();
+    if (existsSync(file)) {
+        // github-slugger's counter map, keyed by the base slug AND every suffixed form
+        // it has handed out — which is what makes the collision skip work.
+        const taken = new Map();
+        // The marker that opened the fence, so a ~~~ line inside a ``` block does not
+        // close it and turn every heading below into code.
+        let fence = null;
+        for (const line of readFileSync(file, 'utf8').split('\n')) {
+            const marker = /^\s{0,3}(```|~~~)/.exec(line);
+            if (marker && (fence === null || marker[1] === fence)) {
+                fence = fence === null ? marker[1] : null;
+                continue;
+            }
+            if (fence !== null) continue;
+            // The optional closing sequence — `## Foo ##` — is markup, not text.
+            const heading = /^#{1,6}\s+(.*?)(?:\s+#+)?\s*$/.exec(line);
+            if (!heading) continue;
+            const base = slugOf(heading[1]);
+            let slug = base;
+            while (taken.has(slug)) {
+                const next = (taken.get(base) ?? 0) + 1;
+                taken.set(base, next);
+                slug = `${base}-${next}`;
+            }
+            taken.set(slug, 0);
+            anchors.add(slug);
+        }
+    }
+    anchorCache.set(file, anchors);
+    return anchors;
+}
+
 function main(argv) {
     const dirIdx = argv.indexOf('--dir');
     const root = dirIdx >= 0 ? resolve(argv[dirIdx + 1]) : ROOT;
@@ -157,7 +242,7 @@ function main(argv) {
     }
 
     const findings = [];
-    const counted = { links: 0, paths: 0, commands: 0, sourcePaths: 0, titles: 0 };
+    const counted = { links: 0, anchors: 0, paths: 0, commands: 0, sourcePaths: 0, titles: 0 };
 
     for (const doc of docs) {
         const where = relative(root, doc);
@@ -171,10 +256,25 @@ function main(argv) {
             const linkRe = /\[[^\]]*\]\(([^)\s]+)\)/g;
             let link;
             while ((link = linkRe.exec(line)) !== null) {
-                let target = link[1];
-                if (/^(https?|mailto|chrome|chrome-extension):/i.test(target)) continue;
-                if (target.startsWith('#')) continue;
-                target = target.split('#')[0];
+                const raw = link[1];
+                if (/^(https?|mailto|chrome|chrome-extension):/i.test(raw)) continue;
+                const [target, fragment] = [raw.split('#')[0], raw.split('#').slice(1).join('#')];
+                // 6. The heading a `#fragment` names, in this file or another.
+                //
+                // Not cosmetic, and the reason it is checked at all: a wrong fragment
+                // does not 404. GitHub silently leaves the reader at the top of the
+                // document, which reads as "the section was removed" — the same
+                // confident wrong conclusion a moved file produces. Every entry in a
+                // hand-written table of contents is one of these.
+                if (fragment) {
+                    const targetDoc = target ? join(dirname(doc), target) : doc;
+                    counted.anchors++;
+                    if (/\.md$/i.test(targetDoc) && existsSync(targetDoc) && !anchorsOf(targetDoc).has(fragment)) {
+                        findings.push(
+                            `${at}: names no heading in ${relative(root, targetDoc)}: #${fragment}`,
+                        );
+                    }
+                }
                 if (!target) continue;
                 counted.links++;
                 if (isExempt(target)) continue;
@@ -230,12 +330,28 @@ function main(argv) {
             readFileSync(file, 'utf8')
                 .split('\n')
                 .forEach((line, index) => {
-                    for (const match of line.matchAll(/\b(?:src|tests|public|docs|scripts)\/[\w./-]*\.\w+/g)) {
-                        const path = match[0];
+                    for (const match of line.matchAll(/\b(?:src|tests|public|docs|scripts)\/[\w./-]*\.\w+(#[\w-]+)?/g)) {
+                        const path = match[0].split('#')[0];
+                        const fragment = match[1]?.slice(1);
                         counted.sourcePaths++;
                         if (isExempt(path)) continue;
-                        if (!bases.some((base) => existsSync(join(base, path)))) {
+                        const resolved = bases.map((base) => join(base, path)).find((full) => existsSync(full));
+                        if (!resolved) {
                             findings.push(`${where}:${index + 1}: cites a path that exists nowhere: ${path}`);
+                            continue;
+                        }
+                        // Check 6 again, from the other side. A source comment that points
+                        // at a section of docs/design-notes.md — the convention that file's
+                        // own header asks for — is the citation most likely to rot, because
+                        // the heading it names lives in a different file from the rule it
+                        // explains and nothing brings the two together for a reader.
+                        if (fragment && /\.md$/i.test(resolved)) {
+                            counted.anchors++;
+                            if (!anchorsOf(resolved).has(fragment)) {
+                                findings.push(
+                                    `${where}:${index + 1}: names no heading in ${path}: #${fragment}`,
+                                );
+                            }
                         }
                     }
                 });
@@ -331,6 +447,7 @@ function main(argv) {
     if (!quiet) {
         console.log(`doc-paths: read ${docs.length} Markdown file(s) under ${relative(ROOT, root) || '.'}`);
         console.log(`  links checked: ${counted.links}`);
+        console.log(`  heading anchors checked: ${counted.anchors}`);
         console.log(`  backticked paths checked: ${counted.paths}`);
         console.log(`  npm commands checked: ${counted.commands}`);
         console.log(`  paths cited in source files checked: ${counted.sourcePaths}`);
@@ -346,8 +463,9 @@ function main(argv) {
 
     if (!quiet) {
         console.log(
-            `doc-paths: clean — ${counted.links} link(s), ${counted.paths} path(s), ${counted.commands} command(s), ` +
-                `${counted.sourcePaths} source citation(s), ${counted.titles} spec block(s)`,
+            `doc-paths: clean — ${counted.links} link(s), ${counted.anchors} anchor(s), ${counted.paths} path(s), ` +
+                `${counted.commands} command(s), ${counted.sourcePaths} source citation(s), ` +
+                `${counted.titles} spec block(s)`,
         );
     }
     return 0;
@@ -460,12 +578,144 @@ function selftest() {
         // An external link must not be resolved as a local path — otherwise the
         // gate fails on every citation of the Temporal docs.
         const external = drive(
-            makeTree('external', 'See [the docs](https://docs.temporal.io/develop) and [the anchor](#idea).\n'),
+            makeTree('external', '# Fixture\n\nSee [the docs](https://docs.temporal.io/develop) and [this file](#fixture).\n'),
         );
         check(
-            'ignores external links and anchors',
+            'ignores external links, and accepts a same-file anchor that exists',
             external.status === 0,
             `exit ${external.status}: ${external.output.trim()}`,
+        );
+
+        // ── Check 6: the heading a #fragment names ─────────────────────────────
+        // Same-file first, because a table of contents is written this way and is
+        // where the mistake is easiest to make.
+        const deadAnchor = drive(makeTree('anchorsame', '# Fixture\n\nSee [the idea](#the-idae).\n'));
+        check(
+            'rejects a same-file anchor that names no heading',
+            deadAnchor.status === 1 && deadAnchor.output.includes('#the-idae'),
+            `exit ${deadAnchor.status}: ${deadAnchor.output.trim()}`,
+        );
+
+        const crossDoc = { 'docs/notes.md': '# Notes\n\n## The real section\n\nBody.\n' };
+        const crossGood = drive(
+            makeTree('anchorcross', 'See [the section](docs/notes.md#the-real-section).\n', crossDoc),
+        );
+        check(
+            'accepts a cross-document anchor that exists',
+            crossGood.status === 0,
+            `exit ${crossGood.status}: ${crossGood.output.trim()}`,
+        );
+
+        const crossDead = drive(
+            makeTree('anchorcrossdead', 'See [the section](docs/notes.md#the-moved-section).\n', crossDoc),
+        );
+        check(
+            'rejects a cross-document anchor whose heading is gone, though the file resolves',
+            crossDead.status === 1 && crossDead.output.includes('#the-moved-section'),
+            `exit ${crossDead.status}: ${crossDead.output.trim()}`,
+        );
+
+        // The direction that motivated the check: a rule in a source comment
+        // pointing at the section of design-notes that tells its story.
+        const sourceAnchorGood = drive(
+            makeTree('anchorsrc', '# Fixture\n', {
+                ...crossDoc,
+                '01-a/src/family/tree.ts': '// See docs/notes.md#the-real-section.\nexport const x = 1;\n',
+            }),
+        );
+        check(
+            'accepts a live doc anchor cited from a source comment',
+            sourceAnchorGood.status === 0,
+            `exit ${sourceAnchorGood.status}: ${sourceAnchorGood.output.trim()}`,
+        );
+
+        const sourceAnchorDead = drive(
+            makeTree('anchorsrcdead', '# Fixture\n', {
+                ...crossDoc,
+                '01-a/src/family/tree.ts': '// See docs/notes.md#the-renamed-section.\nexport const x = 1;\n',
+            }),
+        );
+        check(
+            'rejects a dead doc anchor cited from a source comment',
+            sourceAnchorDead.status === 1 && sourceAnchorDead.output.includes('#the-renamed-section'),
+            `exit ${sourceAnchorDead.status}: ${sourceAnchorDead.output.trim()}`,
+        );
+
+        // The trailing period after a citation is prose, not part of the anchor —
+        // and the path check before it must still see a bare path.
+        const trailingPunctuation = drive(
+            makeTree('anchorpunct', '# Fixture\n', {
+                ...crossDoc,
+                '01-a/src/family/tree.ts': '// Written up in docs/notes.md#the-real-section, at length.\nexport const x = 1;\n',
+            }),
+        );
+        check(
+            'reads an anchor followed by punctuation without swallowing it',
+            trailingPunctuation.status === 0,
+            `exit ${trailingPunctuation.status}: ${trailingPunctuation.output.trim()}`,
+        );
+
+        // ── Check 6, boundaries: where GitHub's slugger is not the obvious one ──
+        // Repeated headings. GitHub numbers the SECOND one `-1`, and a gate that does
+        // not know it rejects a link that works. Both directions, because a rule that
+        // only ever accepts is not a rule.
+        const repeated = ['# Fixture', '', '## Off', 'a', '', '## Off', 'b', ''].join('\n');
+        const duplicateGood = drive(makeTree('anchordup', `${repeated}\nSee [the second](#off-1).\n`));
+        check(
+            'accepts a link to the second heading of the same name',
+            duplicateGood.status === 0,
+            `exit ${duplicateGood.status}: ${duplicateGood.output.trim()}`,
+        );
+
+        const duplicateTooFar = drive(makeTree('anchordupfar', `${repeated}\nSee [a third](#off-2).\n`));
+        check(
+            'rejects a duplicate suffix past the number of headings that exist',
+            duplicateTooFar.status === 1 && duplicateTooFar.output.includes('#off-2'),
+            `exit ${duplicateTooFar.status}: ${duplicateTooFar.output.trim()}`,
+        );
+
+        // A suffix a heading spells literally is taken, so the repeat skips past it —
+        // github-slugger loops until the candidate is free rather than counting blindly.
+        const collision = ['# Fixture', '', '## Off', 'a', '', '## Off 1', 'b', '', '## Off', 'c', ''].join('\n');
+        const suffixCollision = drive(makeTree('anchorcollide', `${collision}\nSee [the repeat](#off-2).\n`));
+        check(
+            'skips a duplicate suffix that a literal heading already occupies',
+            suffixCollision.status === 0,
+            `exit ${suffixCollision.status}: ${suffixCollision.output.trim()}`,
+        );
+
+        // Non-ASCII headings. GitHub keeps letters of every script; stripping them
+        // would reject a working link to any heading this gate cannot spell.
+        const unicodeDoc = { 'docs/notes.md': '# Notes\n\n## Café ל 日\n\nBody.\n' };
+        const unicodeGood = drive(makeTree('anchorunicode', 'See [it](docs/notes.md#café-ל-日).\n', unicodeDoc));
+        check(
+            'accepts an anchor whose heading is not ASCII',
+            unicodeGood.status === 0,
+            `exit ${unicodeGood.status}: ${unicodeGood.output.trim()}`,
+        );
+
+        const unicodeStripped = drive(makeTree('anchorstripped', 'See [it](docs/notes.md#caf--).\n', unicodeDoc));
+        check(
+            'rejects the anchor an ASCII-only slugger would have produced',
+            unicodeStripped.status === 1 && unicodeStripped.output.includes('#caf--'),
+            `exit ${unicodeStripped.status}: ${unicodeStripped.output.trim()}`,
+        );
+
+        // A `#` line inside a fenced block is a shell comment, not a heading. This is
+        // the one anchor case whose failure would be a false PASS.
+        const fenced = ['# Fixture', '', '```bash', '# Install once', 'npm install', '```', ''].join('\n');
+        const fencedComment = drive(makeTree('anchorfence', `${fenced}\nSee [it](#install-once).\n`));
+        check(
+            'does not offer an anchor for a # comment inside a fenced block',
+            fencedComment.status === 1 && fencedComment.output.includes('#install-once'),
+            `exit ${fencedComment.status}: ${fencedComment.output.trim()}`,
+        );
+
+        const closingSequence = drive(makeTree('anchorclosing', '# Fixture ##\n\nSee [this file](#fixture).\n'));
+        check(
+            'reads a closed ATX heading as its text, not its trailing hashes',
+            closingSequence.status === 0,
+            `exit ${closingSequence.status}: ${closingSequence.output.trim()}`,
         );
 
         // ── Check 4: citations inside non-Markdown project files ──────────────

@@ -18,34 +18,38 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
     ACTIVITY_LINKS_CLASS,
-    applyToTable,
     COLUMN_HEAD_CLASS,
-    findWorkflowTbody,
-    idsFromRow,
     LAST_EVENT_CLASS,
     LINK_BAR_CLASS,
     LINK_CLASS,
-    namespaceFromLocation,
     PREFIX_CLASS,
-    removeAllDecoration,
     RETRY_CLASS,
     SEGMENT_WIDTH_PX,
+} from '../../src/decoration';
+import {
+    applyToTable,
+    findWorkflowTbody,
+    idsFromRow,
+    namespaceFromLocation,
+    removeAllDecoration,
+    syncControlOrder,
     visibleRows,
 } from '../../src/render';
 import { buildWorkflowTable, fakeRunId, rowOrder, workflowLink } from '../helpers';
 import {
     A_RETRY,
+    answers,
     CHILD_A_RUN,
     CHILD_B_RUN,
     DONE_RUN,
     FAMILY,
+    hostResorts,
     LIVE_RUN,
+    lookupFor,
     MIXED,
+    mutationsDuring,
     OPTIONS,
     PARENT_RUN,
-    answers,
-    lookupFor,
-    mutationsDuring,
     resetRenderHarness,
     withHeader,
 } from '../renderHarness';
@@ -223,8 +227,133 @@ describe('applyToTable', () => {
         expect(tbody.querySelectorAll(`.${PREFIX_CLASS}`)).toHaveLength(0);
         expect(Array.from(tbody.querySelectorAll('a')).every((a) => a.style.marginLeft === '')).toBe(true);
     });
+
+    // ── The snapshot is a ONE-SHOT ────────────────────────────────────────────
+    // Restoring an order is a claim about the past, and the past expires. Once the
+    // rows are back where they started, the page owns the order again — the user is
+    // free to sort by any column, and a disabled extension that keeps putting its
+    // own remembered order back is no longer restoring anything, it is fighting the
+    // UI's own controls. These two cases are the difference between "off" and
+    // "off, and still moving the furniture".
+    it('takes the page\'s own re-sort as the new baseline once the tree is off', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'child-b', runId: CHILD_B_RUN },
+            { workflowId: 'parent', runId: PARENT_RUN },
+            { workflowId: 'child-a', runId: CHILD_A_RUN },
+        ]);
+        const lookup = lookupFor(FAMILY);
+        const off = { ...OPTIONS, treeEnabled: false };
+
+        applyToTable(tbody, lookup, OPTIONS);
+        applyToTable(tbody, lookup, off);
+        expect(rowOrder(tbody)).toEqual(['child-b', 'parent', 'child-a']);
+
+        const hostOrder = hostResorts(tbody);
+        // The fixture's own control, and it has to compare against the RESTORED order
+        // rather than against hostResorts' own return value: if the helper moved
+        // nothing, the two would agree, and the assertion at the end of this test
+        // would pass on the stale order it exists to reject.
+        expect(hostOrder).not.toEqual(['child-b', 'parent', 'child-a']);
+
+        // The observer schedules another disabled pass, as it does for any mutation.
+        applyToTable(tbody, lookup, off);
+
+        expect(rowOrder(tbody)).toEqual(hostOrder);
+    });
+
+    it('takes the page\'s own re-sort as the new baseline once the switch is off', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'child-b', runId: CHILD_B_RUN },
+            { workflowId: 'parent', runId: PARENT_RUN },
+            { workflowId: 'child-a', runId: CHILD_A_RUN },
+        ]);
+        const lookup = lookupFor(FAMILY);
+
+        applyToTable(tbody, lookup, OPTIONS);
+        removeAllDecoration(document);
+        expect(rowOrder(tbody)).toEqual(['child-b', 'parent', 'child-a']);
+
+        const hostOrder = hostResorts(tbody);
+        expect(hostOrder).not.toEqual(['child-b', 'parent', 'child-a']);
+
+        // content.ts calls this on every observed mutation while the switch is off,
+        // and the host's re-sort IS an observed mutation.
+        removeAllDecoration(document);
+
+        expect(rowOrder(tbody)).toEqual(hostOrder);
+    });
 });
 
+
+describe('the order of the controls in the id cell', () => {
+    it('puts the badge before the links whichever toggle was used first', () => {
+        // The order on screen must not depend on the order the toggles were used in.
+        // Both controls are created with appendChild, so DOM order is the order the
+        // features were switched ON in until syncControlOrder settles it — and the
+        // wrong order appears only for the user who switched them on the other way
+        // round, never in a screenshot of a fresh install.
+        //
+        // Two controls are enough. This spec is here at two, rather than waiting for
+        // the third, because the fix costs a sort and the bug is unreportable.
+        const links = [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }];
+        const withBadge = { ...OPTIONS, retryEnabled: true, info: answers({ 'child-a': { retry: A_RETRY } }) };
+        const named: ReadonlyArray<readonly [string, string]> = [
+            [RETRY_CLASS, 'retry'],
+            [LINK_CLASS, 'link'],
+        ];
+        const order = (tbody: HTMLTableSectionElement): string[] => {
+            const cell = tbody.querySelector<HTMLTableCellElement>('td')!;
+            return Array.from(cell.children)
+                .map((node) => named.find(([className]) => node.classList.contains(className))?.[1])
+                .filter((name): name is string => name !== undefined);
+        };
+        // Spelled out rather than derived from CELL_CONTROL_ORDER: a spec that reads
+        // the answer out of the source it is checking passes on every order.
+        const wanted = ['retry', 'link'];
+
+        const both = buildWorkflowTable(document, [{ workflowId: 'child-a', runId: CHILD_A_RUN }]);
+        applyToTable(both, lookupFor(FAMILY), { ...withBadge, linksEnabled: true, links });
+        expect(order(both)).toHaveLength(named.length);
+        expect(order(both)).toEqual(wanted);
+
+        const later = buildWorkflowTable(document, [{ workflowId: 'child-a', runId: CHILD_A_RUN }]);
+        const lookup = lookupFor(FAMILY);
+        // Links on first, badge only afterwards — the append history that used to
+        // decide it, and the one that produced the wrong row.
+        applyToTable(later, lookup, { ...OPTIONS, linksEnabled: true, links });
+        applyToTable(later, lookup, { ...withBadge, linksEnabled: true, links });
+        expect(order(later)).toEqual(wanted);
+    });
+
+    it('moves nothing, and says so, when the cell is already in order', () => {
+        // Rule 2 applies to moving a node as much as to writing one: appendChild on a
+        // node that is already last is still a mutation the observer wakes up for, and
+        // this runs on every row of every pass. An unconditional reorder is an infinite
+        // render loop that presents as a slow page.
+        //
+        // Asserted on the return value because that is the only way to tell "in order
+        // already" from "put in order just now" from outside — and an implementation
+        // that always returns true still passes every order assertion above.
+        const links = [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }];
+        const tbody = buildWorkflowTable(document, [{ workflowId: 'child-a', runId: CHILD_A_RUN }]);
+        applyToTable(tbody, lookupFor(FAMILY), {
+            ...OPTIONS,
+            retryEnabled: true,
+            linksEnabled: true,
+            links,
+            info: answers({ 'child-a': { retry: A_RETRY } }),
+        });
+
+        const cell = tbody.querySelector<HTMLTableCellElement>('td')!;
+        expect(syncControlOrder(cell)).toBe(false);
+
+        // Now put it back the way an append-ordered cell would have looked, which is
+        // also the only way to reach the true branch without a toggle.
+        cell.appendChild(cell.querySelector(`.${RETRY_CLASS}`)!);
+        expect(syncControlOrder(cell)).toBe(true);
+        expect(syncControlOrder(cell)).toBe(false);
+    });
+});
 
 describe('visibleRows', () => {
     it('reports the rows the table is showing, in table order', () => {
@@ -247,10 +376,14 @@ describe('visibleRows', () => {
 });
 
 describe('removeAllDecoration', () => {
-    it('leaves the table as it found it', () => {
+    it('removes every root it draws and leaves the table as it found it', () => {
+        // Deliberately NOT in family order: the child comes first, as the UI's own
+        // sort would have it. A fixture that starts in family order cannot tell
+        // "put the rows back" apart from "never moved them", and this spec claims the
+        // stronger of the two.
         const tbody = buildWorkflowTable(document, [
-            { workflowId: 'parent', runId: PARENT_RUN },
             { workflowId: 'child-a', runId: CHILD_A_RUN },
+            { workflowId: 'parent', runId: PARENT_RUN },
         ]);
         withHeader(tbody, ['Workflow ID', 'Status']);
         applyToTable(tbody, lookupFor(FAMILY), {
@@ -258,6 +391,12 @@ describe('removeAllDecoration', () => {
             linksEnabled: true,
             lastEventEnabled: true,
             links: [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }],
+            // Every feature that draws a root has to be ON here. An absence assertion
+            // over something that was never drawn passes whatever the function does:
+            // this spec used to assert the badge was gone without ever drawing one, so
+            // deleting the badge from the list below would not have failed it.
+            retryEnabled: true,
+            info: answers({ 'child-a': { retry: A_RETRY } }),
         });
         // Neither of the workflow-page decorations is in the table: the link bar sits
         // in the page's own layout and an activity group sits inside a panel. The
@@ -269,14 +408,33 @@ describe('removeAllDecoration', () => {
         activityLinks.className = ACTIVITY_LINKS_CLASS;
         document.body.append(bar, activityLinks);
 
+        // Same list as removeAllDecoration's, checked in both directions: which of
+        // these is on the page before, and which after.
+        const roots = [
+            PREFIX_CLASS,
+            LINK_CLASS,
+            RETRY_CLASS,
+            LINK_BAR_CLASS,
+            ACTIVITY_LINKS_CLASS,
+            LAST_EVENT_CLASS,
+            COLUMN_HEAD_CLASS,
+        ];
+        const onThePage = (): string[] => roots.filter((className) => document.querySelector(`.${className}`) !== null);
+        expect(onThePage()).toEqual(roots);
+        // The tree really did move the rows, so the assertion after cleanup is about
+        // undoing something rather than about nothing having happened.
+        expect(rowOrder(tbody)).toEqual(['parent', 'child-a']);
+
         removeAllDecoration(document);
 
-        expect(
-            document.querySelectorAll(
-                `.${PREFIX_CLASS}, .${LINK_CLASS}, .${RETRY_CLASS}, .${LINK_BAR_CLASS}, .${ACTIVITY_LINKS_CLASS}, .${LAST_EVENT_CLASS}, .${COLUMN_HEAD_CLASS}`,
-            ),
-        ).toHaveLength(0);
+        expect(onThePage()).toEqual([]);
         expect(Array.from(tbody.querySelectorAll('a')).every((a) => a.style.marginLeft === '')).toBe(true);
+        // Not a node and not a style: the marker attribute, and the row ORDER — the
+        // only edit this extension makes that leaves no trace of itself to find. A
+        // table still in family order after the master switch is off looks like the
+        // switch half-worked, which is worse than it not existing.
+        expect(tbody.querySelectorAll('[data-tuis-workflow-id]')).toHaveLength(0);
+        expect(rowOrder(tbody)).toEqual(['child-a', 'parent']);
     });
 });
 

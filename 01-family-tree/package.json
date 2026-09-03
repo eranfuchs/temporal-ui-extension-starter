@@ -1,12 +1,12 @@
 {
     "name": "temporal-ui-starter-01-family-tree",
-    "version": "0.2.4",
+    "version": "0.2.5",
     "private": true,
     "type": "module",
     "description": "The smallest useful thing: parent/child workflow families in the Temporal UI, with zero permissions.",
     "license": "MIT",
     "engines": {
-        "node": ">=22"
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
     },
     "scripts": {
         "build": "node esbuild.mjs",

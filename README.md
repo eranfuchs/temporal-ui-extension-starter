@@ -38,10 +38,14 @@ npm install                    # once, at the root: every project shares it
 cd 01-family-tree && npm run build
 ```
 
-**Node 22 or newer** (`node --version`). Not a preference: the jsdom specs cannot
-start on Node 20, and the way they fail is to vanish from the totals while the
-run still reports every collected test as passing. `npm run preflight` refuses to
-proceed on a Node that cannot host them, and states the reason.
+**Node `^22.22.2 || ^24.15.0 || >=26.0.0`** (`node --version`). Not a preference, and
+not a round number either: the jsdom specs cannot start on Node 20, and the way
+they fail is to vanish from the totals while the run still reports every
+collected test as passing. The odd-looking range is jsdom's own `engines.node`,
+which is the narrowest in the lockfile — so an `--engine-strict` install on a
+Node outside it can fail before `preflight` gets a chance to say anything.
+`preflight` checks both halves: that the declared range is no wider than every
+locked dependency allows, and that the Node actually running can host the specs.
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select
 `01-family-tree/dist/`. Open a workflow list and reload the tab.
@@ -149,7 +153,8 @@ The cards are not maintained by good intentions:
 | `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a runtime dependency, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
 | `npm run lineage` | a file duplicated across projects that has drifted, or that nobody has decided may drift — see [`scripts/lineage.json`](scripts/lineage.json) |
 | `npm run leak:gate` | private IPs, key material, bearer tokens, JWTs, and URLs pointing at hosts that are not on a short public allowlist |
-| `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves |
+| `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves. And the heading a `#fragment` names, because a wrong anchor does not 404 — GitHub leaves the reader at the top of the page, which reads as "that section was deleted" |
+| `npm run preflight` | an `engines.node` wider than the locked dependencies support, on top of everything below. The declaration is dead text to everyone already working here and live only for a first-time cloner, whose `--engine-strict` install then fails before any gate can explain why |
 
 Every gate ships with a self-test — `npm run surface:selftest`,
 `npm run lineage:selftest`, `npm run leak:selftest`, `npm run doc:selftest` —
@@ -211,7 +216,7 @@ Run at the **repository root**; each one runs in every project.
 | `npm run surface` | The permission budget, sinks, dependencies, binaries |
 | `npm run lineage` | Files duplicated across projects |
 | `npm run leak:gate` | Scan tracked files for anything that should not be published |
-| `npm run doc:paths` | Every path, link and command the docs name still exists — in Markdown and in source comments — and every quoted spec block is cited beside the spec that holds it |
+| `npm run doc:paths` | Every path, link, anchor and command the docs name still exists — in Markdown and in source comments — and every quoted spec block is cited beside the spec that holds it |
 | `npm run icons` | Regenerate every project's icons from arithmetic — each carries its own number and hue, derived from its directory name |
 | `npm run package` | Preflight, then zip a project's `dist/` |
 

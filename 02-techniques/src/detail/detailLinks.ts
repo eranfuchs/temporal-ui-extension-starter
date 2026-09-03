@@ -49,7 +49,8 @@ import {
     type DetailRef,
 } from './detail';
 import { templatesInScope, type DeepLinkTemplate } from '../links/deepLink';
-import { ACTIVITY_LINKS_CLASS, LINK_BAR_CLASS, syncLinkAnchors, type LinkPlacement } from '../render';
+import { ACTIVITY_LINKS_CLASS, LINK_BAR_CLASS } from '../decoration';
+import { syncLinkAnchors, type LinkPlacement } from '../links/linkRender';
 import { formatAge } from '../rowInfo/rowInfo';
 import type { WorkflowRow } from '../types';
 

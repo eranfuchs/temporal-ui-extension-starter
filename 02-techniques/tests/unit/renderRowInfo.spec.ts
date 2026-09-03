@@ -12,13 +12,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
-    applyToTable,
     COLUMN_HEAD_CLASS,
     COLUMN_LABEL_CLASS,
     LAST_EVENT_CLASS,
     RETRY_CLASS,
     type RowInfoLookup,
-} from '../../src/render';
+} from '../../src/decoration';
+import { applyToTable } from '../../src/render';
 import { FRESH_FLOOR_MS } from '../../src/rowInfo/rowInfo';
 import { buildWorkflowTable } from '../helpers';
 import {
@@ -273,8 +273,8 @@ describe('the “Last event” column', () => {
 
         pressRefreshAt(options.nowMs);
 
-        // Once, not three times. render.ts ASSIGNS onclick rather than adding a
-        // listener, which is what makes a pass unable to accumulate handlers.
+        // Once, not three times. rowInfoRender.ts ASSIGNS onclick rather than adding
+        // a listener, which is what makes a pass unable to accumulate handlers.
         expect(refreshPresses()).toBe(1);
     });
 

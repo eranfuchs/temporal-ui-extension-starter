@@ -1,12 +1,12 @@
 {
     "name": "temporal-ui-starter-03-payloads",
-    "version": "0.4.4",
+    "version": "0.4.9",
     "private": true,
     "type": "module",
     "description": "Everything 02 does, plus each workflow's input and result on hover — decoded through a codec server you name yourself. The rung where payloads, an outbound host and the personal-data question all arrive together. One permission: storage.",
     "license": "MIT",
     "engines": {
-        "node": ">=22"
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
     },
     "scripts": {
         "build": "node esbuild.mjs",

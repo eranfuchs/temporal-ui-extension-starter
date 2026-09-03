@@ -25,7 +25,8 @@ column and the badge ask Temporal questions the page never asked. That is a
 different trust argument, and most of this file is about it.
 
 Every feature has its own toggle, and there is a master switch that removes every
-node this extension put on the page — so "off" is verifiable, not merely claimed.
+node this extension put on the page **and puts the row order back** — so "off" is
+verifiable, not merely claimed.
 
 **It still decodes no payload.** Nothing here reads a workflow's input, its result
 or a failure message; everything on screen is derived from event *metadata* — event
@@ -38,9 +39,13 @@ is the whole reason that rung is worth reading.
 ## Run it
 
 ```bash
-npm install          # from the repository root, once — needs Node >= 22
+npm install          # from the repository root, once
 npm run build        # from this directory
 ```
+
+The Node range `npm install` needs is stated once, in
+[the root README](../README.md#start-with-01), rather than copied into each
+project where three copies would go stale one at a time.
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select
 `02-techniques/dist/`. Open a workflow list, reload the tab, and click the toolbar
@@ -52,6 +57,46 @@ review.
 
 Two projects loaded at once are distinguishable by their icons — each carries its
 own number and hue.
+
+## Read these files in order
+
+This project is several times the size of 01, and nearly all of the growth serves one
+idea: **it asks Temporal questions of its own.** To answer *"what does it ask, and who
+decides?"* — the only question that changes between 01 and 02 — read four files in this
+order:
+
+| # | File | The question it answers |
+|---|---|---|
+| 1 | [`src/apiInject.ts`](src/apiInject.ts) | Which messages this extension accepts from the page at all. One, and the list is the file. |
+| 2 | [`src/rowInfo/rowInfoServe.ts`](src/rowInfo/rowInfoServe.ts) | Whether a request happens: the things that keep a per-row feature from becoming a load generator, and why every one of them is on this side of the boundary rather than in the caller. |
+| 3 | [`src/page/temporalApi.ts`](src/page/temporalApi.ts) | What the request *is* — every URL this extension builds, as pure string work. No `fetch` in the file, and one direction flag that returns a completely different fact if you get it wrong. |
+| 4 | [`src/page/pageApi.ts`](src/page/pageApi.ts) | Where authority is enforced: one exported fetch, spending the page's own bearer on an origin **it** picks, and only for a run the page was itself handed. This is the confused-deputy file; the note at its top says what the first version got wrong. |
+
+Then the drawing side, which is three files rather than one:
+[`src/render.ts`](src/render.ts) finds the table, identifies rows and orders families;
+[`src/rowInfo/rowInfoRender.ts`](src/rowInfo/rowInfoRender.ts) draws the column and the
+badge, and is the only render job that writes *outside* the workflow-id cell;
+[`src/links/linkRender.ts`](src/links/linkRender.ts) draws the anchors, and is the one
+render job used from two different pages. Then two spec files, in this order:
+[`tests/unit/apiInject.spec.ts`](tests/unit/apiInject.spec.ts), which asserts the gate
+from the attacker's side — a page script trying to borrow the credential for a run it
+was never handed, *without spending the bearer to find out* — and
+[`tests/unit/render.spec.ts`](tests/unit/render.spec.ts), which asserts that a repeated
+pass writes nothing new and that the master switch really does remove everything —
+including the row order, which is the one edit that leaves nothing behind to find.
+
+**The diff from 01 is smaller than the file count suggests, and that is the point.**
+Most of 01's source is here byte-for-byte — the tree fold, the row index, the fetch hook
+and the shared types — which `npm run lineage` enforces rather than claims. Two files
+changed, and each change is a decision worth reading:
+
+| Changed file | What this stage did to it |
+|---|---|
+| [`src/render.ts`](src/render.ts) | Split. It kept the table plumbing and the three rules and handed the drawing to the two modules above; the class names and the render types moved to [`src/decoration.ts`](src/decoration.ts), which is what the master switch's completeness now rests on. It also states the left-to-right order of the controls that share the workflow-id cell, so that order cannot come out of which feature a given user switched on first. 01 keeps the whole job in one file, which is the right answer for one lesson. |
+| [`src/content.ts`](src/content.ts) | Grew from "fold the rows, draw the tree" into the wiring for the settings, the request client and the single-workflow page — while writing only the off-class on `<html>` and still calling no `fetch`. |
+
+Everything else a reviewer would look for is *new* here rather than modified, and each
+new file sits in a directory named after the thing it does — see **Layout** below.
 
 ## The two questions it asks Temporal
 
@@ -80,7 +125,7 @@ that cost has to buy: the table stays rectangular (a row with no workflow link a
 still gets a cell, appended, because a missing cell puts every header one column out
 from its data), and the placement is idempotent — moving a cell that is already in
 the right place is a DOM write, and a DOM write wakes the `MutationObserver` that
-triggered the pass. See `syncLastEventColumn` in [`src/render.ts`](src/render.ts).
+triggered the pass. See `syncLastEventColumn` in [`src/rowInfo/rowInfoRender.ts`](src/rowInfo/rowInfoRender.ts).
 
 The cell has to distinguish four states, and all four look like an empty cell if
 you let them: `…` not asked yet, `!` asked and it failed (with the reason in the
@@ -529,7 +574,8 @@ src/
   apiInject.ts      MAIN world — every message accepted from the page, in one switch
   content.ts        ISOLATED world — wiring, and nothing else
   popup.ts          the toolbar popup, including "is it working?"
-  render.ts         everything that writes to the table
+  render.ts         the table: finding it, identifying rows, ordering families
+  decoration.ts     every root class and shared name the writers use
   settings.ts       chrome.storage.sync
   types.ts          the shapes crossing the postMessage boundary
   page/             the boundary with the page's own Temporal API
@@ -540,13 +586,15 @@ src/
   family/           the tree, as pure functions — stage 01, unchanged
     rows.ts         API response → a flat row shape
     tree.ts         rows → ordered rows, each with its connector
-  rowInfo/          the two columns that cost a request
+  rowInfo/          the two features that cost a request
     rowInfo.ts      pure: the questions, the answers, and what a badge may say
     rowInfoClient.ts  ISOLATED world — which rows are worth asking about, and what
                     came back
     rowInfoServe.ts MAIN world — answers them: cache, then the pacer
+    rowInfoRender.ts  the column and the badge, drawn from those answers
   links/
     deepLink.ts     URL templates: tokens, offsets, scope, and what may become an href
+    linkRender.ts   the anchors — the only <a> this extension writes, both pages
   detail/           one workflow's own page
     detail.ts       pure: URL rules, the folds behind the links, and which activity
                     an id on the page resolves to
@@ -566,8 +614,12 @@ tests/              the ordering rules, the DOM bugs that cost the most, and the
 The split around the request path is deliberate, and it is what makes the security
 card checkable: `src/rowInfo/rowInfo.ts` and `src/page/temporalApi.ts` are pure and
 therefore testable, `src/page/pageApi.ts` is the only file that issues a request, and
-`render.ts` and `src/detail/detailLinks.ts` are the only ones that touch the page.
-Reviewing "what can this thing send" means reading one file.
+the only files that write to the page are `render.ts`, the two `*Render.ts` modules it
+calls, and `src/detail/detailLinks.ts` — plus one line in `src/content.ts`, which
+toggles the master switch's class on `<html>` and writes nothing else.
+`grep -rln 'createElement\|classList' src/` is the check; the one other name it returns
+is `src/popup.ts`, which writes to the popup's own document and cannot reach the page at
+all. Reviewing "what can this thing send" means reading one file.
 
 ## What it deliberately does not do
 

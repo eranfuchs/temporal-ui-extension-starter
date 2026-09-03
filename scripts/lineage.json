@@ -54,6 +54,14 @@
             "why": "Pure template expansion, including the rule that an expansion which is not an absolute http(s) URL is not opened. Identical wherever the feature exists."
         },
         {
+            "path": "src/links/linkRender.ts",
+            "why": "The only place in either project that writes an <a> the user can click, and the one render module called from TWO pages — the workflow list through syncDeepLinks(), a single workflow's own page through syncLinkAnchors(). Every anchor in the repository therefore carries the same three hardening attributes (target, rel=noopener noreferrer, referrerPolicy=no-referrer) and reports an unopenable URL the same way. A stage-local copy would let one page's links lose one of those attributes while the other kept it, which is the kind of difference nobody sees by eye."
+        },
+        {
+            "path": "src/rowInfo/rowInfoRender.ts",
+            "why": "The 'Last event' column and the retry badge. Byte-identical on purpose even though 03 draws a third control in the same cell: this file reads answers out of RenderOptions.info and never learns where they came from, so nothing about a later stage gives it a reason to differ. Two properties in it fail silently and must be proved once rather than twice — the column stays RECTANGULAR (every row gets exactly one cell, or the headers sit one column out from their data), and it is idempotent about POSITION as well as text, because moving a node that is already in place wakes the MutationObserver that called it."
+        },
+        {
             "path": "src/detail/detail.ts",
             "why": "The pure folds behind the links on a single workflow's page, including which activity an id found on the page resolves to. It reads responses the page fetched for itself and touches neither credentials nor the ledger, so nothing about a later stage gives it a reason to differ."
         },
@@ -141,7 +149,11 @@
         },
         {
             "path": "src/render.ts",
-            "why": "01 has no deep links and no on/off switch, so its applyToTable takes no options object at all: applyToTable(tbody, lookup). 02 and 03 pass RenderOptions and own LINK_CLASS, OFF_CLASS, syncDeepLinks, restoreOriginalOrder and removeAllDecoration. Parameterising one file to cover both would put the settings vocabulary back into the project whose whole claim is that it has none."
+            "why": "01 has no deep links and no on/off switch, so its applyToTable takes no options object at all: applyToTable(tbody, lookup), and it still holds the class names and the tree prefix in the one file, because at that length there is nothing to find (wc -l 01-family-tree/src/render.ts). 02 and 03 pass RenderOptions, delegate to the render modules beside them, own restoreOriginalOrder and the master switch removeAllDecoration — which calls the former, because the row order is the one edit that leaves no node behind to sweep, and state the left-to-right order of the controls that share the workflow-id cell rather than letting it fall out of which feature the user switched on first; 03 additionally calls payloads/payloadButton.ts and ranks a third control into that order. Parameterising one file to cover both would put the settings vocabulary back into the project whose whole claim is that it has none."
+        },
+        {
+            "path": "src/decoration.ts",
+            "why": "The root class of everything the extension draws, plus the shape of one render pass. removeAllDecoration() can only be as honest as this list, so anything the master switch has to reach is named here; a node that only exists inside one of those roots stays with the file that draws it. REMOVABLE_ROOT_CLASSES is that list as a value, and render.ts builds its sweep selector from it. Forked because the ladder IS the difference: 03 adds PAYLOAD_CLASS and PANEL_CLASS to both the names and that list, and PANEL_CLASS names the only node in this repository that can hold decoded payload text, which is why the master switch has to take it away. Its RenderOptions carries the matching payloadsEnabled. Sharing one file would mean 02 declaring names for nodes it never draws, and a reviewer reading this file for '02 can show me a payload' would find the vocabulary for it. 01 has no copy: its class names are still in src/render.ts."
         },
         {
             "path": "src/content.ts",
@@ -149,7 +161,7 @@
         },
         {
             "path": "tests/unit/render.spec.ts",
-            "why": "Follows src/render.ts, and holds only the table itself: finding it, reading a row out of it, drawing the tree into it, and the master switch that has to take every decoration away again. The per-feature blocks live beside it — renderLinks, renderRowInfo and 03's renderPayloadButton — and the first two are byte-identical and declared shared. 01's copy drops visibleRows and removeAllDecoration, which are about features it has not got; 03's differs from 02's by one line, the payloadsEnabled it hands the master-switch spec. The assertions every project keeps (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each proves them on its own code."
+            "why": "Follows src/render.ts, and holds only the table itself: finding it, reading a row out of it, drawing the tree into it, and the master switch that has to take every decoration away again — which is also the only spec that asserts src/decoration.ts's class list is complete. The per-feature blocks live beside it — renderLinks, renderRowInfo and 03's renderPayloadButton, matching the source modules of the same names — and the first two are byte-identical and declared shared. 01's copy drops visibleRows and removeAllDecoration, which are about features it has not got; 03's differs from 02's by the payloadsEnabled it hands the master-switch spec, and by not repeating the control-order block — 03 asserts that order in renderPayloadButton.spec.ts, beside the newest of the three controls, while 02's two are asserted here because 02's newest control is the retry badge and renderRowInfo.spec.ts is shared byte-identically with 03. The assertions every project keeps (idempotency, <tr> recycling, unknown rows) are deliberately duplicated verbatim so each proves them on its own code."
         },
         {
             "path": "public/content.css",
@@ -197,7 +209,7 @@
         },
         {
             "path": "tests/renderHarness.ts",
-            "why": "The render fixtures the spec files within each project share: the family, the placement lookup over it, a RenderOptions with every feature off, and the helpers that give a table a <thead> and press the column's refresh control. Forked by ONE line — 03's OPTIONS carries payloadsEnabled and 02's RenderOptions has no such field, the same difference src/render.ts is forked for. Everything else is byte-identical on purpose, because the two projects' render assertions are meant to be comparable. 01 has no copy: its render specs are a single short file with one fixture block and nothing to share."
+            "why": "The render fixtures the spec files within each project share: the family, the placement lookup over it, a RenderOptions with every feature off, and the helpers that give a table a <thead> and press the column's refresh control. Forked by ONE line — 03's OPTIONS carries payloadsEnabled and 02's RenderOptions has no such field, the same difference src/decoration.ts is forked for. Everything else is byte-identical on purpose, because the two projects' render assertions are meant to be comparable. 01 has no copy: its render specs are a single short file with one fixture block and nothing to share."
         },
         {
             "path": "tests/unit/apiInject.spec.ts",

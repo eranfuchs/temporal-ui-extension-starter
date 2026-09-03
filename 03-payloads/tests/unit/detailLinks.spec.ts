@@ -28,7 +28,7 @@ import {
     type DetailLinksOptions,
 } from '../../src/detail/detailLinks';
 import { MAX_ACTIVITIES, NO_FACTS, type DetailActivity, type DetailFacts } from '../../src/detail/detail';
-import { ACTIVITY_LINKS_CLASS, LINK_BAR_CLASS, LINK_BLOCKED_CLASS, LINK_CLASS } from '../../src/render';
+import { ACTIVITY_LINKS_CLASS, LINK_BAR_CLASS, LINK_BLOCKED_CLASS, LINK_CLASS } from '../../src/decoration';
 import { fakeRunId } from '../helpers';
 import { MESSAGE_SOURCE } from '../../src/types';
 

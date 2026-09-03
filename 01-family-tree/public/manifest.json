@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Temporal starter 01 — family tree",
-    "version": "0.2.4",
+    "version": "0.2.5",
     "description": "Draws parent/child workflow families in the Temporal UI. No permissions, no backend, no credentials.",
     "icons": {
         "16": "icons/icon-16.png",

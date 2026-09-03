@@ -18,36 +18,39 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
     ACTIVITY_LINKS_CLASS,
-    applyToTable,
     COLUMN_HEAD_CLASS,
-    findWorkflowTbody,
-    idsFromRow,
     LAST_EVENT_CLASS,
     LINK_BAR_CLASS,
     LINK_CLASS,
-    namespaceFromLocation,
     PANEL_CLASS,
     PAYLOAD_CLASS,
     PREFIX_CLASS,
-    removeAllDecoration,
     RETRY_CLASS,
     SEGMENT_WIDTH_PX,
+} from '../../src/decoration';
+import {
+    applyToTable,
+    findWorkflowTbody,
+    idsFromRow,
+    namespaceFromLocation,
+    removeAllDecoration,
     visibleRows,
 } from '../../src/render';
 import { buildWorkflowTable, fakeRunId, rowOrder, workflowLink } from '../helpers';
 import {
     A_RETRY,
+    answers,
     CHILD_A_RUN,
     CHILD_B_RUN,
     DONE_RUN,
     FAMILY,
+    hostResorts,
     LIVE_RUN,
+    lookupFor,
     MIXED,
+    mutationsDuring,
     OPTIONS,
     PARENT_RUN,
-    answers,
-    lookupFor,
-    mutationsDuring,
     resetRenderHarness,
     withHeader,
 } from '../renderHarness';
@@ -158,6 +161,9 @@ describe('applyToTable', () => {
         // idempotency is trivially satisfied by doing nothing twice.
         expect(tbody.querySelectorAll(`.${PREFIX_CLASS}`).length).toBeGreaterThan(0);
         expect(tbody.querySelectorAll(`.${LINK_CLASS}`).length).toBeGreaterThan(0);
+        // This stage's own control. Without it, deleting the syncPayloadButton() call
+        // would leave the assertion below green: nothing drawn is trivially idempotent.
+        expect(tbody.querySelectorAll(`.${PAYLOAD_CLASS}`).length).toBeGreaterThan(0);
         expect(tbody.querySelectorAll(`.${LAST_EVENT_CLASS}`).length).toBeGreaterThan(0);
         expect(document.querySelectorAll(`.${COLUMN_HEAD_CLASS}`)).toHaveLength(1);
         expect(tbody.querySelectorAll(`.${RETRY_CLASS}`)).toHaveLength(1);
@@ -226,6 +232,61 @@ describe('applyToTable', () => {
         expect(tbody.querySelectorAll(`.${PREFIX_CLASS}`)).toHaveLength(0);
         expect(Array.from(tbody.querySelectorAll('a')).every((a) => a.style.marginLeft === '')).toBe(true);
     });
+
+    // ── The snapshot is a ONE-SHOT ────────────────────────────────────────────
+    // Restoring an order is a claim about the past, and the past expires. Once the
+    // rows are back where they started, the page owns the order again — the user is
+    // free to sort by any column, and a disabled extension that keeps putting its
+    // own remembered order back is no longer restoring anything, it is fighting the
+    // UI's own controls. These two cases are the difference between "off" and
+    // "off, and still moving the furniture".
+    it('takes the page\'s own re-sort as the new baseline once the tree is off', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'child-b', runId: CHILD_B_RUN },
+            { workflowId: 'parent', runId: PARENT_RUN },
+            { workflowId: 'child-a', runId: CHILD_A_RUN },
+        ]);
+        const lookup = lookupFor(FAMILY);
+        const off = { ...OPTIONS, treeEnabled: false };
+
+        applyToTable(tbody, lookup, OPTIONS);
+        applyToTable(tbody, lookup, off);
+        expect(rowOrder(tbody)).toEqual(['child-b', 'parent', 'child-a']);
+
+        const hostOrder = hostResorts(tbody);
+        // The fixture's own control, and it has to compare against the RESTORED order
+        // rather than against hostResorts' own return value: if the helper moved
+        // nothing, the two would agree, and the assertion at the end of this test
+        // would pass on the stale order it exists to reject.
+        expect(hostOrder).not.toEqual(['child-b', 'parent', 'child-a']);
+
+        // The observer schedules another disabled pass, as it does for any mutation.
+        applyToTable(tbody, lookup, off);
+
+        expect(rowOrder(tbody)).toEqual(hostOrder);
+    });
+
+    it('takes the page\'s own re-sort as the new baseline once the switch is off', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'child-b', runId: CHILD_B_RUN },
+            { workflowId: 'parent', runId: PARENT_RUN },
+            { workflowId: 'child-a', runId: CHILD_A_RUN },
+        ]);
+        const lookup = lookupFor(FAMILY);
+
+        applyToTable(tbody, lookup, OPTIONS);
+        removeAllDecoration(document);
+        expect(rowOrder(tbody)).toEqual(['child-b', 'parent', 'child-a']);
+
+        const hostOrder = hostResorts(tbody);
+        expect(hostOrder).not.toEqual(['child-b', 'parent', 'child-a']);
+
+        // content.ts calls this on every observed mutation while the switch is off,
+        // and the host's re-sort IS an observed mutation.
+        removeAllDecoration(document);
+
+        expect(rowOrder(tbody)).toEqual(hostOrder);
+    });
 });
 
 
@@ -250,10 +311,14 @@ describe('visibleRows', () => {
 });
 
 describe('removeAllDecoration', () => {
-    it('leaves the table as it found it', () => {
+    it('removes every root it draws and leaves the table as it found it', () => {
+        // Deliberately NOT in family order: the child comes first, as the UI's own
+        // sort would have it. A fixture that starts in family order cannot tell
+        // "put the rows back" apart from "never moved them", and this spec claims the
+        // stronger of the two.
         const tbody = buildWorkflowTable(document, [
-            { workflowId: 'parent', runId: PARENT_RUN },
             { workflowId: 'child-a', runId: CHILD_A_RUN },
+            { workflowId: 'parent', runId: PARENT_RUN },
         ]);
         withHeader(tbody, ['Workflow ID', 'Status']);
         applyToTable(tbody, lookupFor(FAMILY), {
@@ -262,6 +327,12 @@ describe('removeAllDecoration', () => {
             payloadsEnabled: true,
             lastEventEnabled: true,
             links: [{ label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' }],
+            // Every feature that draws a root has to be ON here. An absence assertion
+            // over something that was never drawn passes whatever the function does:
+            // this spec used to assert the badge was gone without ever drawing one, so
+            // deleting the badge from the list below would not have failed it.
+            retryEnabled: true,
+            info: answers({ 'child-a': { retry: A_RETRY } }),
         });
         // None of the three is in the table: the panel floats over one, the link bar
         // sits in a workflow page's own layout and an activity group sits inside a
@@ -277,14 +348,35 @@ describe('removeAllDecoration', () => {
         activityLinks.className = ACTIVITY_LINKS_CLASS;
         document.body.append(panel, bar, activityLinks);
 
+        // Same list as removeAllDecoration's, checked in both directions: which of
+        // these is on the page before, and which after.
+        const roots = [
+            PREFIX_CLASS,
+            LINK_CLASS,
+            PAYLOAD_CLASS,
+            PANEL_CLASS,
+            RETRY_CLASS,
+            LINK_BAR_CLASS,
+            ACTIVITY_LINKS_CLASS,
+            LAST_EVENT_CLASS,
+            COLUMN_HEAD_CLASS,
+        ];
+        const onThePage = (): string[] => roots.filter((className) => document.querySelector(`.${className}`) !== null);
+        expect(onThePage()).toEqual(roots);
+        // The tree really did move the rows, so the assertion after cleanup is about
+        // undoing something rather than about nothing having happened.
+        expect(rowOrder(tbody)).toEqual(['parent', 'child-a']);
+
         removeAllDecoration(document);
 
-        expect(
-            document.querySelectorAll(
-                `.${PREFIX_CLASS}, .${LINK_CLASS}, .${PAYLOAD_CLASS}, .${PANEL_CLASS}, .${RETRY_CLASS}, .${LINK_BAR_CLASS}, .${ACTIVITY_LINKS_CLASS}, .${LAST_EVENT_CLASS}, .${COLUMN_HEAD_CLASS}`,
-            ),
-        ).toHaveLength(0);
+        expect(onThePage()).toEqual([]);
         expect(Array.from(tbody.querySelectorAll('a')).every((a) => a.style.marginLeft === '')).toBe(true);
+        // Not a node and not a style: the marker attribute, and the row ORDER — the
+        // only edit this extension makes that leaves no trace of itself to find. A
+        // table still in family order after the master switch is off looks like the
+        // switch half-worked, which is worse than it not existing.
+        expect(tbody.querySelectorAll('[data-tuis-workflow-id]')).toHaveLength(0);
+        expect(rowOrder(tbody)).toEqual(['child-a', 'parent']);
     });
 });
 

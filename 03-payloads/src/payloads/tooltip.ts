@@ -44,7 +44,7 @@
 
 import { installPayloadClient, requestPayload, resetPayloadClient, type Question } from './payloadClient';
 import { type CodecConfig, type PayloadKind } from './payloadMessages';
-import { PANEL_CLASS, PAYLOAD_CLASS } from '../render';
+import { PANEL_CLASS, PAYLOAD_CLASS } from '../decoration';
 
 // The subset of a row this panel needs. Deliberately not the render Placement:
 // the panel does not care about tree shape, and a narrower dependency is a

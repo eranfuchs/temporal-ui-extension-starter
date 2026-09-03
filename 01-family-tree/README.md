@@ -23,9 +23,13 @@ or it does not; if you want it off, disable the extension.
 ## Run it
 
 ```bash
-npm install          # from the repository root, once — needs Node >= 22
+npm install          # from the repository root, once
 npm run build        # from this directory
 ```
+
+The Node range `npm install` needs is stated once, in
+[the root README](../README.md#start-with-01), rather than copied into each
+project where three copies would go stale one at a time.
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select
 `01-family-tree/dist/`.

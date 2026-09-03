@@ -1,8 +1,10 @@
 // ISOLATED-world script: wiring only.
 //
 // It listens for the rows that inject.ts saw the page fetch, folds them into a
-// tree, and hands the result to render.ts. Every DOM write lives there, so this
-// file stays small enough to read in one sitting.
+// tree, and hands the result to render.ts, which draws it through the modules
+// beside it. This file writes one thing to the page itself — the off-class on
+// <html>, below — and nothing else, so it stays small enough to read in one
+// sitting.
 
 import { detailLinkStats, installDetailLinks, syncDetailLinks } from './detail/detailLinks';
 import { buildTree, countFamilies } from './family/tree';
@@ -15,15 +17,13 @@ import {
     type PlacementIndex,
 } from './family/rows';
 import { loadSettings, onSettingsChanged, type Settings } from './settings';
+import { OFF_CLASS, type Placement, type RenderStats } from './decoration';
 import {
     applyToTable,
     findWorkflowTbody,
     namespaceFromLocation,
-    OFF_CLASS,
     removeAllDecoration,
     visibleRows,
-    type Placement,
-    type RenderStats,
 } from './render';
 import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo/rowInfo';
 import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfo/rowInfoClient';
@@ -113,6 +113,9 @@ function apply(): void {
     if (off) {
         // Prove it is off rather than merely stopping: stale connectors left
         // behind after a toggle read as a broken extension, not a disabled one.
+        // That includes the ROW ORDER, which removeAllDecoration puts back — a table
+        // still grouped into families with the connectors gone is the same failure
+        // wearing a subtler face.
         removeAllDecoration();
         return;
     }
@@ -144,9 +147,9 @@ function apply(): void {
         links: settings.links,
         namespace,
         nowMs,
-        // Bound to the namespace of the page being rendered. render.ts asks about a
-        // row, which is a (workflowId, runId); the store is keyed per namespace too,
-        // and this is where the third part comes from — the renderer never has to
+        // Bound to the namespace of the page being rendered. rowInfoRender.ts asks
+        // about a row, which is a (workflowId, runId); the store is keyed per namespace
+        // too, and this is where the third part comes from — the renderer never has to
         // learn about it, and cannot look a row up in the wrong namespace.
         info: (workflowId, runId) => rowInfoFor(namespace, workflowId, runId),
         onRefresh: refreshRowInfoNow,
@@ -231,12 +234,12 @@ const observer = new MutationObserver(scheduleApply);
 // two seconds ago displayed a stall counting upwards, to the second, convincingly.
 //
 // So the age is frozen at the instant the answer was read (observedAtMs, threaded
-// from rowInfoServe.ts through to render.ts) and the cell's tooltip dates it. The
-// column now changes when the data changes and at no other time, which is what a
-// reader assumes a number on a screen means. Its cost is that a stall reads up to one
-// ask interval younger than it is; the alternative — a truthful per-second age —
-// costs a request per row per second, which is the load this feature is built to
-// avoid.
+// from rowInfoServe.ts through to rowInfo/rowInfoRender.ts) and the cell's tooltip
+// dates it. The column now changes when the data changes and at no other time, which
+// is what a reader assumes a number on a screen means. Its cost is that a stall reads
+// up to one ask interval younger than it is; the alternative — a truthful per-second
+// age — costs a request per row per second, which is the load this feature is built
+// to avoid.
 //
 // One consequence to keep in mind when adding anything time-dependent here: with no
 // heartbeat, a decoration that depends on elapsed time will sit unchanged on a quiet

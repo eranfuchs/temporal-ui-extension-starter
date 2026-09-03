@@ -1,12 +1,12 @@
 {
     "name": "temporal-ui-starter-02-techniques",
-    "version": "0.11.4",
+    "version": "0.11.9",
     "private": true,
     "type": "module",
     "description": "Family tree plus the techniques around it: templated deep links, a settings pane, and two facts the workflow list does not carry. Decodes no payload. One permission: storage.",
     "license": "MIT",
     "engines": {
-        "node": ">=22"
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
     },
     "scripts": {
         "build": "node esbuild.mjs",

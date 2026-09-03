@@ -43,7 +43,7 @@ td:has(a[href*="/workflows/"]) {
 
 .tuis-seg {
     position: relative;
-    /* Must match SEGMENT_WIDTH_PX in src/render.ts. */
+    /* Must match SEGMENT_WIDTH_PX in src/decoration.ts. */
     width: 18px;
     flex: 0 0 18px;
     height: 100%;

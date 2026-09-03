@@ -39,7 +39,7 @@ import {
     settled,
 } from '../tooltipHarness';
 import { MAX_CACHED_PAYLOADS, REQUEST_TIMEOUT_MS } from '../../src/payloads/payloadClient';
-import { PANEL_CLASS } from '../../src/render';
+import { PANEL_CLASS } from '../../src/decoration';
 import { resetPayloadState } from '../../src/payloads/tooltip';
 import { MESSAGE_SOURCE } from '../../src/types';
 import { fakeRunId } from '../helpers';

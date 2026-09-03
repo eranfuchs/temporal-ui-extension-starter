@@ -30,11 +30,11 @@ import {
     type PlacementLookup,
     type RenderOptions,
     type RowInfoLookup,
-} from '../src/render';
+} from '../src/decoration';
 import type { RowInfo } from '../src/rowInfo/rowInfoClient';
 import { buildTree } from '../src/family/tree';
 import { normalizeExecutions, runKey } from '../src/family/rows';
-import { apiWorkflow, fakeRunId } from './helpers';
+import { apiWorkflow, fakeRunId, rowOrder } from './helpers';
 import type { TemporalApiWorkflow } from '../src/types';
 
 // How many times the header's refresh control has called back. Counted rather than
@@ -167,12 +167,12 @@ export function refreshButton(): HTMLButtonElement | null {
     return document.querySelector<HTMLButtonElement>(`.${COLUMN_REFRESH_CLASS}`);
 }
 
-// A press at a stated instant. render.ts stamps the press with Date.now() — read at
-// the CLICK and not at the render pass that installed the handler — so a spec about
-// the cooldown has to be able to say when the click happened. jsdom offers no way to
-// do that, which is why fake timers appear here and nowhere else in these files; only
-// `Date` is faked, and only for the duration of the click, so nothing else in the
-// suite runs on a simulated clock.
+// A press at a stated instant. rowInfo/rowInfoRender.ts stamps the press with
+// Date.now() — read at the CLICK and not at the render pass that installed the
+// handler — so a spec about the cooldown has to be able to say when the click
+// happened. jsdom offers no way to do that, which is why fake timers appear here and
+// nowhere else in these files; only `Date` is faked, and only for the duration of the
+// click, so nothing else in the suite runs on a simulated clock.
 export function pressRefreshAt(atMs: number): void {
     vi.useFakeTimers({ toFake: ['Date'], now: atMs });
     try {
@@ -182,11 +182,11 @@ export function pressRefreshAt(atMs: number): void {
     }
 }
 
-// A time base for the specs that press refresh. render.ts remembers the last press
-// in MODULE state — deliberately, because the UI can replace its own header row at
-// any moment and a floor that reset with the node would not be a floor — so no spec
-// reuses a clock reading: each starts an hour after the last, which is outside
-// FRESH_FLOOR_MS whatever order the files run in.
+// A time base for the specs that press refresh. rowInfo/rowInfoRender.ts remembers
+// the last press in MODULE state — deliberately, because the UI can replace its own
+// header row at any moment and a floor that reset with the node would not be a floor
+// — so no spec reuses a clock reading: each starts an hour after the last, which is
+// outside FRESH_FLOOR_MS whatever order the files run in.
 let clockMs = OPTIONS.nowMs;
 export function nextHour(): number {
     clockMs += 3_600_000;
@@ -219,4 +219,17 @@ export const A_RETRY = {
 export function cellCounts(tbody: HTMLTableSectionElement): number[] {
     const table = tbody.closest('table')!;
     return Array.from(table.querySelectorAll('tr')).map((tr) => tr.children.length);
+}
+
+// The page sorting its own table: the SAME <tr> elements, in a new order, which is
+// what clicking a column header in the Temporal UI produces. Reversal rather than a
+// named order because the point is only that the order changed underneath us —
+// which rows moved where is the page's business, not this extension's.
+//
+// Returns the resulting order so a spec can assert against it without restating it,
+// and so the reorder itself can be asserted before the behaviour under test runs.
+export function hostResorts(tbody: HTMLTableSectionElement): string[] {
+    const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>(':scope > tr')).reverse();
+    for (const tr of rows) tbody.appendChild(tr);
+    return rowOrder(tbody);
 }

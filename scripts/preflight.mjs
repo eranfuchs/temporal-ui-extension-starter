@@ -93,6 +93,8 @@ console.log('repository');
 
 // Before anything that depends on the toolchain being able to run at all.
 checkNodeRuntime();
+checkLockfileParity();
+checkEngineRange();
 
 // First, because it is the one whose failure cannot be undone by a later commit.
 // Run without --quiet on purpose: its last line names how many files it read, and
@@ -112,7 +114,7 @@ runCheck('surface self-test', NODE, ['scripts/surface.mjs', '--selftest', '--qui
 // projects, and a path in a README rots without any symptom: the sentence still
 // reads fine. Splitting one project into three moved every file at once, so every
 // path in every document was wrong simultaneously and nothing complained.
-runCheck('doc paths (links, cited paths, npm scripts, spec blocks)', NODE, ['scripts/doc-paths.mjs'], {
+runCheck('doc paths (links, anchors, cited paths, npm scripts, spec blocks)', NODE, ['scripts/doc-paths.mjs'], {
     unverifiedExit: 2,
 });
 runCheck('doc paths self-test', NODE, ['scripts/doc-paths.mjs', '--selftest', '--quiet']);
@@ -194,7 +196,13 @@ function checkNodeRuntime() {
                     'and a summary reporting that every collected test passed, with the DOM specs',
                     'silently missing from the total.',
                     '',
-                    `Use Node >=${VERIFIED_NODE_MAJOR} (this repository declares "${declared}").`,
+                    // The range, never a bare major. "Use Node >=22" was advice this
+                    // repository does not honour — 22.0 through 22.22.1 satisfy it and are
+                    // outside engines.node — so the one line telling a stuck cloner what to
+                    // install is quoted from the declaration rather than restated near it.
+                    declared
+                        ? `Use a Node version satisfying engines.node "${declared}".`
+                        : `Use Node >=${VERIFIED_NODE_MAJOR}; this repository declares no engines.node to satisfy.`,
                 ].join('\n'),
             ),
         );
@@ -213,6 +221,158 @@ function checkNodeRuntime() {
         return;
     }
     record(name, 'ok', `${process.version}, engines.node "${declared}"`);
+}
+
+// The lockfile carries its own copy of the root version and engine range, and npm
+// only rewrites them when it is run — so a version bump that touches package.json
+// alone leaves the two disagreeing, silently and indefinitely. This repository asks
+// a cloner to trust that its stated contracts are enforced rather than claimed, and
+// the file npm actually installs from is a poor place to start breaking that.
+//
+// Deliberately NOT a full "is the dependency tree in sync" check: that needs the
+// network and npm's own resolver. This compares the two fields a human edits, which
+// are the two that have actually drifted. `npm install --package-lock-only` fixes it.
+function checkLockfileParity() {
+    const name = 'root package-lock.json agrees with package.json (version, engines)';
+    const lockPath = join(ROOT, 'package-lock.json');
+    if (!existsSync(lockPath)) {
+        record(name, 'unverified', 'no package-lock.json at the repository root');
+        return;
+    }
+    const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+    const rootEntry = lock.packages?.[''] ?? {};
+    const disagreements = [
+        ['version', ROOT_PKG.version, lock.version],
+        ['packages[""].version', ROOT_PKG.version, rootEntry.version],
+        ['packages[""].engines.node', ROOT_PKG.engines?.node ?? null, rootEntry.engines?.node ?? null],
+    ].filter(([, expected, found]) => expected !== found);
+
+    if (disagreements.length > 0) {
+        const detail = disagreements
+            .map(([field, expected, found]) => `${field}: lock has "${found}", package.json has "${expected}"`)
+            .join('; ');
+        record(name, 'failed', detail);
+        console.log(indent('Fix: npm install --package-lock-only'));
+        return;
+    }
+    record(name, 'ok', `v${ROOT_PKG.version}, node "${ROOT_PKG.engines?.node}"`);
+}
+
+// ── Is the Node range we ADVERTISE one the locked tree actually supports? ────
+//
+// A different question from checkNodeRuntime(), which asks whether THIS Node can run
+// the tests. This one asks whether the range in package.json is a promise the
+// dependencies keep.
+//
+// INVARIANT: every Node version engines.node admits is admitted by every locked
+// dependency too, and a range this cannot parse is reported UNCHECKED rather than
+// treated as satisfied.
+// Breaking it: an --engine-strict install fails for a first-time cloner before any
+// check here can explain why. See docs/design-notes.md#a-node-range-the-dependencies-never-promised.
+// `function`, not `const` — the checks run at the top of this file, above these
+// definitions, so a const arrow would still be in its temporal dead zone and the
+// whole run would die with a ReferenceError instead of reporting anything.
+function parseNodeVersion(text) {
+    const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(text.trim());
+    return match ? [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)] : null;
+}
+function compareNodeVersions(a, b) {
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+// `to: null` is infinity. A half-open span, so `^22.1.0` ends exactly where 23 begins.
+function parseNodeRange(range) {
+    const spans = [];
+    for (const part of String(range).split('||')) {
+        const text = part.trim();
+        const caret = /^\^\s*(.+)$/.exec(text);
+        const atLeast = /^>=\s*(.+)$/.exec(text);
+        const from = parseNodeVersion(caret?.[1] ?? atLeast?.[1] ?? text);
+        if (!from) return null;
+        // `^0.10.0` means <0.11.0, not <1.0.0 — semver treats a 0 major as having no
+        // compatible range. Modelling it as <1.0.0 would be WIDER than the truth, and a
+        // containment check that errs wide reports "fits" where it does not. No such
+        // range is in the tree today; refusing to guess is what keeps that safe if one
+        // arrives. Unparseable here means reported unchecked, never assumed satisfied.
+        if (caret && from[0] === 0) return null;
+        spans.push({ from, to: atLeast ? null : [from[0] + 1, 0, 0] });
+    }
+    return spans.length > 0 ? spans : null;
+}
+
+function mergeNodeSpans(spans) {
+    const merged = [];
+    for (const span of [...spans].sort((a, b) => compareNodeVersions(a.from, b.from))) {
+        const last = merged[merged.length - 1];
+        if (last && (last.to === null || compareNodeVersions(span.from, last.to) <= 0)) {
+            last.to =
+                last.to === null || span.to === null
+                    ? null
+                    : compareNodeVersions(span.to, last.to) > 0
+                      ? span.to
+                      : last.to;
+        } else {
+            merged.push({ ...span });
+        }
+    }
+    return merged;
+}
+
+// Every version our range admits must be a version theirs admits too.
+function nodeRangeFitsWithin(ours, theirs) {
+    const merged = mergeNodeSpans(theirs);
+    return ours.every((span) =>
+        merged.some(
+            (other) =>
+                compareNodeVersions(other.from, span.from) <= 0 &&
+                (other.to === null || (span.to !== null && compareNodeVersions(span.to, other.to) <= 0)),
+        ),
+    );
+}
+
+function checkEngineRange() {
+    const name = 'engines.node is a range the locked dependencies support';
+    const declared = ROOT_PKG.engines?.node ?? null;
+    const lockPath = join(ROOT, 'package-lock.json');
+    if (!declared || !existsSync(lockPath)) {
+        record(name, 'unverified', declared ? 'no package-lock.json to compare against' : 'no engines.node declared');
+        return;
+    }
+    const ours = parseNodeRange(declared);
+    if (!ours) {
+        record(name, 'unverified', `cannot parse engines.node "${declared}"`);
+        return;
+    }
+
+    const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+    const tooWideFor = [];
+    const unparsed = [];
+    let compared = 0;
+    for (const [path, meta] of Object.entries(lock.packages ?? {})) {
+        if (!path) continue; // the root entry is us, not a dependency
+        const range = meta.engines?.node;
+        if (!range) continue;
+        const theirs = parseNodeRange(range);
+        if (!theirs) {
+            unparsed.push(`${path} ("${range}")`);
+            continue;
+        }
+        compared += 1;
+        if (!nodeRangeFitsWithin(ours, theirs)) tooWideFor.push(`${path.replace(/^node_modules\//, '')} needs ${range}`);
+    }
+
+    if (tooWideFor.length > 0) {
+        record(name, 'failed', `"${declared}" is wider than ${tooWideFor.length} locked package(s) allow`);
+        for (const line of tooWideFor.slice(0, 6)) console.log(indent(line));
+        if (tooWideFor.length > 6) console.log(indent(`… and ${tooWideFor.length - 6} more`));
+        console.log(indent('Fix: narrow engines.node in the root and every project, then npm install --package-lock-only'));
+        return;
+    }
+    if (unparsed.length > 0) {
+        record(name, 'unverified', `${unparsed.length} range(s) this check cannot parse: ${unparsed.join(', ')}`);
+        return;
+    }
+    record(name, 'ok', `"${declared}" fits within all ${compared} declared range(s)`);
 }
 
 // ── The per-project checks ───────────────────────────────────────────────────

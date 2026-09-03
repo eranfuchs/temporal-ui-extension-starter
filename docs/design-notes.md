@@ -19,6 +19,24 @@ lines. The incident lives here, under an anchor the source comment links to.
 Nothing in this file is required reading to use the extensions. It is required
 reading before deleting a rule.
 
+**The shape to write, from here on.** A rule earns two lines in the source — the
+invariant, and the consequence of breaking it — and a link to its section here if
+there is a story:
+
+```
+// INVARIANT: <what is true after this returns>.
+// Breaking it: <what the reader would see>. See docs/design-notes.md#anchor.
+```
+
+Dates, the reproduction, what was tried first and what was discarded all belong in
+the section, not in the file. This is the convention for edits from now on rather
+than a rewrite of what is already here: the existing headers are longer than that
+because they were written before there was anywhere else to put the argument, and
+churning them all would break citations that point into them — this file cites
+source headers as the authority, and `npm run doc:paths` checks the ones it can see —
+including, since a source comment first pointed in here, that the `#anchor` half of
+such a link names a heading that exists.
+
 ## Contents
 
 - [The payload panel](#the-payload-panel)
@@ -37,6 +55,16 @@ reading before deleting a rule.
   - [The floating card was the wrong answer](#the-floating-card-was-the-wrong-answer)
   - [Where the links are allowed to sit](#where-the-links-are-allowed-to-sit)
   - [A stored setting that shadowed a new default](#a-stored-setting-that-shadowed-a-new-default)
+- [The master switch](#the-master-switch)
+  - [Off left the table sorted](#off-left-the-table-sorted)
+  - [A restored order that outlived its welcome](#a-restored-order-that-outlived-its-welcome)
+- [Splitting render.ts](#splitting-renderts)
+  - [Why each of the four files exists](#why-each-of-the-four-files-exists)
+  - [The age that climbed while the fact stood still](#the-age-that-climbed-while-the-fact-stood-still)
+  - [The button that knows nothing](#the-button-that-knows-nothing)
+  - [The press that was stamped an hour early](#the-press-that-was-stamped-an-hour-early)
+- [The gates](#the-gates)
+  - [A Node range the dependencies never promised](#a-node-range-the-dependencies-never-promised)
 
 ## The payload panel
 
@@ -355,3 +383,216 @@ The fix defaults the **scope**, not the array, one time. `withActivityScope` in
 `src/settings.ts` is that migration, and it is the one part of `settings.ts` that
 is byte-identical across the projects that have it, which is why its spec is
 registered as shared while the rest of `settings.ts` is a declared fork.
+
+## The master switch
+
+`removeAllDecoration` in `02-techniques/src/render.ts` and
+`03-payloads/src/render.ts`. One production caller each: the `if (off)` early
+return in `content.ts`.
+
+### Off left the table sorted
+
+The switch was written as "remove the nodes", because for a long time every
+trace this extension left *was* a node. It grew two exceptions quietly — the
+inline `margin-left` on the page's own workflow links, and the
+`data-tuis-workflow-id` marker — and both were caught and swept. The third was
+not a trace at all in the sense the function was looking for.
+
+Reordering the `<tbody>` is the whole point of the extension, and it is the one
+edit that leaves **nothing behind to find**. The rows are the page's own; moving
+them writes no class, no attribute and no style. So a sweep built from a list of
+class names could be complete, provably complete, and still leave the table
+grouped into families with every connector stripped off it — which is worse than
+either end state on its own. Off did not look off. It looked broken: a sort no
+Temporal UI control explains, and no visible cause.
+
+The fix is one call. `removeAllDecoration` ends by asking
+`restoreOriginalOrder(tbody, rowsOf(tbody))` to put the recorded order back,
+which was already idempotent because the render path runs under a
+`MutationObserver` and rule 2 applies to it too — a table already in its original
+order is not written to, so switching off does not wake the observer up.
+
+Two things about how this was found are worth keeping. It was **not** found by
+the cleanup spec, which existed and passed: its fixture started in `parent,
+child-a` order, which is already the family order, so "put the rows back" and
+"never moved them" produced the same green. The fixture is now deliberately out
+of family order, and the spec asserts the order twice — after rendering and after
+cleanup. And the sweep list is now a value, `REMOVABLE_ROOT_CLASSES` in
+`decoration.ts`, that `removeAllDecoration` builds its selector from; that keeps
+the code and the documentation from disagreeing about the nodes, but note what it
+cannot do — it could not have caught this, because the missing piece was never a
+class.
+
+### A restored order that outlived its welcome
+
+The fix above introduced this one, which is the more interesting of the two.
+
+`originalPosition` is a `WeakMap` from `<tr>` to the index it had on the first pass,
+and the first version of it kept that index for as long as the row existed. Every
+disabled pass sorted by it. That reads as obviously correct — restore what we
+recorded — and it is wrong after the second event:
+
+1. The extension records order A and groups the rows into families.
+2. The user switches the tree, or the whole extension, off.
+3. The first disabled pass restores order A. Correct, and this is what the tests
+   asserted.
+4. The user clicks a column header. Temporal sorts its own table into order B,
+   reusing the same `<tr>` elements.
+5. That mutation wakes the `MutationObserver`, which schedules another pass.
+6. The pass sorts by the recorded positions and puts order A back.
+
+So a switched-off extension quietly undoes the sort controls of the page it is off
+in — every time, for as long as the tab is open. Worse in the variant where the tree
+starts disabled: the first pass records whatever order it finds and there is no
+grouping to undo, so the extension does nothing visible at all except overrule the
+column headers.
+
+The fix is a delete. `restoreOriginalOrder` now removes the entries it just used, so
+a recorded position is a **one-shot**: the next pass records the order the page is in
+*now* as the new baseline, and re-enabling the tree takes a fresh snapshot. It is
+forgotten even when nothing moved, because "already in the recorded order" is still a
+restore, and the alternative leaves the snapshot alive for exactly the passes that
+did not need it.
+
+What made this survive review twice is the shape of the test. The specs asserted the
+restore, then stopped — one enabled pass, one disabled pass, assert. Nothing followed
+the *second* disabled pass, which is where the whole failure lives, and no fixture
+had the page moving rows on its own. `hostResorts` in `tests/renderHarness.ts` is
+that missing actor: it reorders the existing rows the way a column click does. Both
+new cases assert against it twice — once that it moved something, once that the
+extension left the result alone — and the first of those assertions is not
+decoration. Written the obvious way, comparing the helper's own return value to the
+table it just reordered, it compares a value to itself and passes even when the
+helper does nothing; the assertion has to name the order the bug would produce.
+
+## Splitting render.ts
+
+`render.ts` grew until it was the file every feature had to be edited in, and the
+header had to apologise for three things it held that were not about the table it
+described. It is now four files plus the pass itself. This section holds the part
+of that argument a reader does not need in order to change the code.
+
+### Why each of the four files exists
+
+Each one earns its own file for a reason that is not "render.ts was long":
+
+- **`src/decoration.ts`** — the vocabulary two files both name, and the master switch's
+  contract as a value (`REMOVABLE_ROOT_CLASSES`). Splitting it is what let
+  `render.ts` stop holding class names it does not itself use, and it gives a
+  reviewer one file to read for "what can the master switch fail to remove?".
+- **`src/links/linkRender.ts`** — the one render job used from **two** pages: the
+  workflow list, and a single workflow's own page through `src/detail/detailLinks.ts`.
+  While it lived in `render.ts`, "everything that writes to the table" had an export
+  that wrote somewhere else. Two copies of it agreed for exactly as long as it took
+  to add one field to one of them.
+- **`src/rowInfo/rowInfoRender.ts`** — the largest of the render jobs, and the only one
+  that writes **outside** the workflow-id cell: the column touches the `<thead>` and
+  every body row. Its specs were already a file of their own
+  (`tests/unit/renderRowInfo.spec.ts`) before the source was.
+- **`src/payloads/payloadButton.ts`** — the only thing in a render pass that belongs to
+  stage 03. Keeping it beside the rest of `src/payloads/` is what makes "what did 03
+  add?" answerable from a directory listing.
+
+### The age that climbed while the fact stood still
+
+The "Last event" column was briefly written the obvious way: an age computed against
+`Date.now()`, redrawn by a once-a-second ticker. The number that produced was exactly
+right about the event it named and quietly wrong about everything else. It advanced
+every second while the fact underneath it was re-read every 35, so a workflow that
+had already moved on displayed a stall climbing in real time — the most convincing
+possible way to be wrong, because the seconds ticking make it look live.
+
+Second-resolution is worth having. A second-resolution measurement of something read
+half a minute ago is not. So the ages are frozen at the reading, which has a second
+consequence worth more than the first: `syncLastEventColumn()` becomes a pure
+function of the answers it was handed, and feeding it the same answers twice writes
+nothing the second time however much wall-clock time has passed.
+
+The column was also appended to the end of each row once, and appending really is
+simpler — the end of a row has to agree with nothing. Inserting has to agree with a
+column order the Temporal UI lets the user change, which is why the position is
+computed on every pass rather than being a constant.
+
+### The button that knows nothing
+
+The `{ }` button carries no workflow id, no run id, and not even a title that names
+one. That looks like an omission and is the whole design: the Temporal UI recycles
+`<tr>` elements as the list updates, so anything stamped onto a row-scoped node can
+outlive the row it described. A button holding a stale run id opens a panel of
+somebody else's payloads — on the one rung of this ladder where the panel contains
+decoded data.
+
+Nothing on it can go stale because nothing on it is a fact. `src/payloads/tooltip.ts`
+resolves the row from the cell's own `href` at the moment of the hover. It also
+makes the button the cheapest write in a render pass: once created, every later pass
+leaves it alone.
+
+### The press that was stamped an hour early
+
+The refresh button in the column header disables itself for `FRESH_FLOOR_MS` after a
+press, because the receiver would refuse to re-fetch inside that window and a button
+that accepts a press which does nothing is worse than one that says so.
+
+It recorded the press with `options.nowMs` — the timestamp of the render pass that
+installed the handler. That is the same clock `Date.now()` reads; `content.ts` passes
+`Date.now()` in. What was wrong was *when* it had been read. A handler outlives the
+pass that installed it, and on a quiet page the table renders once and nothing touches
+it again, so a press an hour later was stamped an hour early. The next pass measured a
+floor that had already elapsed and re-enabled the button immediately.
+
+The general shape is worth keeping, because it is not specific to a clock: a value
+captured in a render pass and read from an event handler is a value read at the wrong
+time. Anything in a handler that describes *now* has to ask now.
+
+## The gates
+
+`npm run preflight`. There is no CI for this repository, so this is the only thing
+standing between a mistake and the default branch.
+
+### A Node range the dependencies never promised
+
+`package.json` said `engines.node: ">=22"`, and the README said "Node 22 or newer".
+Both were true when written. Then jsdom raised its own floor, and nothing anywhere
+noticed: npm enforces `engines` only under `--engine-strict`, and only against the
+Node that happens to be running. On a machine inside the range, every check passes
+and the declaration is never read.
+
+Measured rather than assumed, `>=22` turned out to be wider than what **27** of the
+locked packages declare — `npm run preflight` prints the number. The two a reader
+would guess (`@asamuzakjp/css-color`, `@asamuzakjp/dom-selector`, both pulled in by
+jsdom) want `^22.13.0 || >=24.0.0`; jsdom itself is stricter still. So the honest
+range is jsdom's own, `^22.22.2 || ^24.15.0 || >=26.0.0`, and it is declared in five
+places that a parity check keeps together: the root, all three projects, and
+`package-lock.json`.
+
+Who this actually hurt is the point. Everyone already working here is on a Node
+inside the range, so the declaration is dead text to them. It is live only for the
+person cloning the repository for the first time, on Node 22.4 or 23, whose install
+fails before any check of ours gets to explain itself — the one reader with the least
+context, at the one moment they have no way to tell a stale promise from a broken
+repository.
+
+`checkEngineRange()` in `scripts/preflight.mjs` compares the declared range against
+every `engines.node` in the lockfile, as interval arithmetic rather than a semver
+dependency — the ranges in the tree are unions of `^X.Y.Z`, `>=X.Y.Z` and bare `X`,
+which is a small enough grammar to do exactly. Anything outside it, including a `^0.x`
+whose real upper bound is not `1.0.0`, is reported as **unchecked**. That direction is
+deliberate: a containment check that guesses wide reports "fits" where it does not,
+which is the failure this whole file exists to avoid.
+
+Fixing the declaration left the sentences about it wrong, which is the more interesting
+half. The range was correct in five machine-readable places and still false in four
+pieces of prose: preflight's own advice to an incompatible runtime — "use Node >=22" —
+and `needs Node >= 22` in each project's install block. Each was a bare major the
+declared range no longer admits, and each was read by exactly the person the range
+exists for, telling them to install a version that would fail again. A version restated
+in prose is a copy, and a copy goes stale with nobody editing it. So the advice is now
+interpolated from `engines.node` rather than written beside it, and the three project
+READMEs link to the one statement in the root README instead of repeating it — a link
+`npm run doc:paths` checks, which a sentence about a version is not.
+
+There is deliberately no gate asserting "every Node range in the documentation matches
+`engines.node`", because this very section quotes `^22.13.0 || >=24.0.0` as the range
+that was *not* adopted. A check like that would need an exemption list, and an exemption
+list is where a gate quietly stops checking the thing it is named after. Having one
+statement to keep true is the cheaper answer.

@@ -40,7 +40,7 @@ import {
     answerTo,
     deliver,
 } from '../tooltipHarness';
-import { PANEL_CLASS } from '../../src/render';
+import { PANEL_CLASS } from '../../src/decoration';
 import { provenance, removePayloadTooltip } from '../../src/payloads/tooltip';
 
 describe('provenance', () => {
