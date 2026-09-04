@@ -13,7 +13,9 @@ never talks to Temporal at all; 02 asks the page's own API two small questions p
 *running* row, using the page's own session, and decodes no payload. 03 is where
 payloads arrive — a workflow's input and result on hover, decoded in the browser when
 they are readable and through **a codec server you name yourself** when they are not,
-which makes it the first rung that can send anything out of the browser at all.
+which makes it the first rung that sends anything anywhere on its own initiative: 02
+can put identifiers in a link for you to click, 03 POSTs payload bytes to the host in
+that field the moment you hover a row.
 
 ```
 Workflow ID                                    Type                Status
@@ -142,7 +144,7 @@ can see exactly where each one stops:
 |---|---|---|---|
 | Holds no credential of any kind | yes — nothing to leak, rotate or explain | it **reads** the page's `Authorization` header in the page's world to re-issue the page's own call. Never stored, never posted to the extension's world, never sent anywhere but Temporal's own API | the same, and the outbound half is where it matters: the codec fetch carries **no** credential of any kind — `credentials: 'omit'` as a literal — and there is no option to attach one. Temporal's own UI has two (an access token, and cookies); here the token was never built and the cookie switch was deleted rather than defaulted off, because a default protects only the honest path when the endpoint arrives over `postMessage` |
 | Issues no request at all | yes | up to two per running row: one `history-reverse` page of one event, one `DescribeWorkflowExecution`. Cached, paced, and never for a closed workflow | the same, plus **one history event per payload question** — one for a running row, two for a closed one, and nothing on render, so a hundred-row list still costs zero. Both features share one pacer, so "four Temporal requests at a time" is a property of the extension |
-| Needs no server | yes | the same — 02 talks to exactly one server, the one the page is already talking to | **no — this is where that stops.** An encrypted payload needs a codec server you name, and that field is the only thing in the repository that can send data off the machine. Empty by default; empty means nothing leaves |
+| Needs no server | yes | the same — 02 talks to exactly one server, the one the page is already talking to | **no — this is where that stops.** An encrypted payload needs a codec server you name, and that field is the only thing in the repository that sends a request BODY to a host of your choosing. 02's deep links can carry ids to another host too, but only in a URL you click — this posts payload bytes on hover. Empty by default, and with it empty 03 sends nothing 02 would not |
 | Takes no instruction from the page | yes — the page's world only ever *tells* it things | it **serves** requests over `postMessage`, which is a trust boundary and the most interesting thing in the repository. See [`02-techniques/README.md`](02-techniques/README.md#the-weakness-and-what-closing-most-of-it-took) | the same bus, now carrying decoded payloads back and a caller-named codec host out — so the ledger is worth more here than it was there. See [`03-payloads/README.md`](03-payloads/README.md#the-weakness-and-what-closing-most-of-it-took) |
 
 The full walkthrough — including the traps that cost hours to find, from the
@@ -160,7 +162,7 @@ The cards are not maintained by good intentions:
 
 | Gate | Refuses |
 |---|---|
-| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also **builds each project** and refuses a script the extension loads that no audited entry point produces — esbuild's own metafile decides that, and a script named only by an HTML page escapes every other check here. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
+| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also **builds each project** and refuses a script the extension loads that no audited entry point produces — esbuild's own metafile decides that, and a script named only by an HTML page escapes every other check here. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink. From the same metafile it also refuses a package a project's source imports without declaring it, which is the one dependency question no lockfile diff answers here |
 | `npm run lineage` | a file duplicated across projects that has drifted, or that nobody has decided may drift — see [`scripts/lineage.json`](scripts/lineage.json) |
 | `npm run leak:gate` | private IPs, key material, bearer tokens, JWTs, and URLs pointing at hosts that are not on a short public allowlist |
 | `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves. And the heading a `#fragment` names, because a wrong anchor does not 404 — GitHub leaves the reader at the top of the page, which reads as "that section was deleted" |
@@ -230,10 +232,14 @@ in no dependency at all.
 Three limits on that, stated rather than implied:
 
 - **Those tables are hand-written, and cover the bundles a user loads.** No check
-  compares them against the bundles; the review point for a new package is the
-  `package-lock.json` diff. Repository tooling under `scripts/` has its own
-  dependencies — a semver implementation, a Markdown parser, GitHub's slug
-  algorithm — which are `devDependencies` and reach no browser.
+  compares a table against its bundle. One thing is checked, by `npm run surface`:
+  every package a project's own source imports has to be declared in *that*
+  project's `dependencies`. That is the case a lockfile diff cannot show — the three
+  projects share one hoisted install, so a package 02 declares resolves fine from
+  01, and importing it there would change no `package.json` and add no lockfile
+  line. Repository tooling under `scripts/` has its own dependencies — a semver
+  implementation, a Markdown parser, GitHub's slug algorithm — which are
+  `devDependencies` and reach no browser.
 - **This is an audit, not an attestation.** Nothing here verifies a package's
   contents against its repository, pins by integrity hash beyond what
   `package-lock.json` already does, or claims that a package that has been fine so
@@ -249,7 +255,7 @@ Three limits on that, stated rather than implied:
 01-family-tree/     the tree, no permissions               ← start here
 02-techniques/      + deep links, settings, two questions  (storage)
 03-payloads/        + input and result on hover, a codec server  (storage — the
-                    same permission surface as 02, and the first rung with egress)
+                    same permission surface as 02, and the first rung that POSTs)
 sample/             Temporal SDK workflows that produce a hierarchy to look at
 scripts/            preflight and the gates, shared by every project
 docs/how-it-works.md   the mechanism, and the traps that cost hours

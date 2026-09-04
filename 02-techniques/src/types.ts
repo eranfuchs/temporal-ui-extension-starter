@@ -23,11 +23,14 @@
 // Breaking it: a field we no longer read comes back into reach because some producer
 // still sends it.
 //
-// INVARIANT: the schema library stays small enough that a reader can still account for
-// everything in dist/content.js by opening it.
-// Breaking it: zod was tried first and dominated every bundle it entered. Run
-// `npm run measure` for today's figures; the measured four-library comparison is at
-// docs/design-notes.md#two-schema-libraries-measured.
+// INVARIANT: one schema library, at every boundary, and the same one in all three
+// projects — declared in each project's own dependencies, which `npm run surface` checks.
+// Breaking it: a second validator means a reader climbing the ladder has to learn two
+// APIs to follow the same argument, and a stage that picks its own invites hand-rolled
+// `typeof` checks at the boundaries it did not think about. valibot won a measured
+// four-library comparison — docs/design-notes.md#two-schema-libraries-measured, and
+// `npm run measure` for today's figures — but staying identical across the stages is the
+// part worth protecting.
 
 import * as v from 'valibot';
 

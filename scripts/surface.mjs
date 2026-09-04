@@ -31,12 +31,18 @@
 //      esbuild entry point — including one named only by an HTML page, which no
 //      manifest check ever mentions;
 //   8. no binary file outside the generated-icon allowlist, because a gate
-//      cannot read a binary and a committed image is a file nobody reviews.
+//      cannot read a binary and a committed image is a file nobody reviews;
+//   9. every package a project's own source imports is declared in THAT project's
+//      dependencies.
 //
-// Third-party packages are deliberately NOT budgeted here. The inventory is a
-// short hand-written table in each project's README, `npm run measure` prints
-// what is actually in the bundles, and what stops a package arriving unreviewed
-// is the package-lock.json diff.
+// WHICH packages a project may have is deliberately not budgeted — that judgement
+// is the dependency table in each README and the policy in the root README, and
+// `npm run measure` prints what is really in the bundles. Rule 9 is the one
+// dependency rule kept, because it is the one a lockfile diff cannot answer: the
+// projects share a single hoisted install, so a package a SIBLING project declares
+// resolves fine from this one. Adding `import pLimit from 'p-limit'` to 01 needs no
+// package.json edit and produces no lockfile line at all; esbuild inlines it, and
+// 01's "one package reaches the browser" becomes false with nothing failing.
 //
 // Usage
 //   node scripts/surface.mjs                    check the repository
@@ -398,6 +404,7 @@ async function main(argv) {
         binaries: 0,
         bundles: 0,
         bundledPackages: new Set(),
+        directPackages: new Set(),
     };
 
     for (const project of projects) {
@@ -483,6 +490,34 @@ async function main(argv) {
                     );
                 }
             }
+
+            // ── A package our own source imports is a package this project declares ──
+            //
+            // `bundles.direct` is esbuild's answer to "which package does a file of
+            // OURS import", so this is about the project's own code and not about
+            // what its dependencies pull in. Only that direction is checked: an
+            // undeclared import is a package that reached a browser unreviewed,
+            // whereas a declared package nobody imports is untidy.
+            //
+            // devDependencies do not satisfy it. A package inside a content script
+            // ships to users; the distinction is the whole point of the field.
+            const runtimeDeps = new Set(Object.keys(project.pkg.dependencies ?? {}));
+            const buildDeps = new Set(Object.keys(project.pkg.devDependencies ?? {}));
+            for (const name of bundles.direct) {
+                checked.directPackages.add(`${project.id}:${name}`);
+                if (runtimeDeps.has(name)) continue;
+                // Absent and mis-declared need different fixes, so they get
+                // different sentences.
+                const importer = relative(root, join(project.dir, bundles.importedBy.get(name)?.[0] ?? '?'));
+                findings.push(
+                    buildDeps.has(name)
+                        ? `${project.id}: ${importer} imports "${name}", which ${project.id} declares as a ` +
+                              'devDependency — it is bundled into a content script, so it belongs in "dependencies"'
+                        : `${project.id}: ${importer} imports "${name}", which is not in ${project.id}'s ` +
+                              'package.json at all. It resolves from the hoisted install a sibling project ' +
+                              'created, so no lockfile diff shows it arriving. Declare it here, or drop the import.',
+                );
+            }
         }
 
         // ── The chrome API claim ──
@@ -558,12 +593,14 @@ async function main(argv) {
         console.log(`  manifests: ${checked.manifests}`);
         console.log(`  source files scanned for sinks: ${checked.sourceFiles} (${checked.parsed} parsed as code)`);
         console.log(`  bundles built and inspected: ${checked.bundles}`);
-        // Printed, not checked — this gate has no opinion about which packages are
-        // there. Seeing the list is how you notice one you did not expect.
+        // WHICH packages are there is printed, not checked — seeing the list is how
+        // you notice one you did not expect. What is checked is narrower and is the
+        // second line: every one our own files import is declared where it is used.
         console.log(
             `  third-party packages inside them: ${checked.bundledPackages.size}` +
                 (checked.bundledPackages.size > 0 ? ` (${[...checked.bundledPackages].sort().join(', ')})` : ''),
         );
+        console.log(`  direct imports checked against package.json: ${checked.directPackages.size}`);
         console.log(`  binary files found: ${checked.binaries}`);
         const budgeted = Object.keys(budget.projects ?? {});
         console.log(`  budgets declared: ${budgeted.length} (${budgeted.join(', ')})`);
@@ -582,7 +619,8 @@ async function main(argv) {
         console.log(
             `surface: clean — ${checked.manifests} manifest(s) within budget, ` +
                 `${checked.sourceFiles} source file(s) free of banned sinks, ` +
-                `${checked.bundles} audited bundle(s) covering every script the extensions load`,
+                `${checked.bundles} audited bundle(s) covering every script the extensions load, ` +
+                `${checked.directPackages.size} direct import(s) declared where they are used`,
         );
     }
     return 0;
@@ -881,6 +919,66 @@ function selftest() {
             'rejects a loaded script that no audited entry point produces',
             unauditedEntry.status === 1 && unauditedEntry.output.includes('popup.js'),
             `exit ${unauditedEntry.status}: ${unauditedEntry.output.trim()}`,
+        );
+
+        // ── The hoisted-sibling import ───────────────────────────────────────
+        // The whole reason rule 9 exists. The package is planted in the TREE's
+        // node_modules and not the project's, because that is where npm puts a
+        // package a SIBLING project declared — so it resolves, esbuild inlines
+        // it, and neither this project's package.json nor any lockfile diff
+        // records it arriving. A fixture with the package inside 01-a/node_modules
+        // would pass through the same code and prove nothing about the case.
+        const plantHoisted = (tree) => {
+            const pkgDir = join(tree.root, 'node_modules', 'hoisted-pkg');
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(
+                join(pkgDir, 'package.json'),
+                JSON.stringify({ name: 'hoisted-pkg', version: '1.0.0', type: 'module', main: 'index.js' }),
+            );
+            writeFileSync(join(pkgDir, 'index.js'), 'export const limit = (n) => n;\n');
+            return tree;
+        };
+        const IMPORTS_HOISTED = "import { limit } from 'hoisted-pkg';\nexport const cap = limit(4);\n";
+
+        const hoisted = drive(plantHoisted(makeTree('hoisted', { files: { 'src/content.ts': IMPORTS_HOISTED } })));
+        check(
+            'rejects an import that resolves from a hoisted sibling install',
+            hoisted.status === 1 && hoisted.output.includes('hoisted-pkg') && hoisted.output.includes('src/content.ts'),
+            `exit ${hoisted.status}: ${hoisted.output.trim()}`,
+        );
+
+        // Declared, but in the wrong field. It still ships to users inside a
+        // content script, and the message has to say something different from
+        // the case above or the fix it suggests is wrong.
+        const wrongField = drive(
+            plantHoisted(
+                makeTree('hoisteddev', {
+                    files: { 'src/content.ts': IMPORTS_HOISTED },
+                    pkg: { devDependencies: { 'hoisted-pkg': '^1.0.0' } },
+                }),
+            ),
+        );
+        check(
+            'rejects a bundled import declared only as a devDependency',
+            wrongField.status === 1 && wrongField.output.includes('devDependency'),
+            `exit ${wrongField.status}: ${wrongField.output.trim()}`,
+        );
+
+        // The negative control, and the shape every real project here has: the
+        // same import, declared. A rule that cannot pass a legitimate dependency
+        // is a rule someone deletes.
+        const declaredDep = drive(
+            plantHoisted(
+                makeTree('hoisteddeclared', {
+                    files: { 'src/content.ts': IMPORTS_HOISTED },
+                    pkg: { dependencies: { 'hoisted-pkg': '^1.0.0' } },
+                }),
+            ),
+        );
+        check(
+            'allows a direct import the project declares in dependencies',
+            declaredDep.status === 0,
+            `exit ${declaredDep.status}: ${declaredDep.output.trim()}`,
         );
 
         // A binary nobody can review. Written as a real NUL-containing file so the

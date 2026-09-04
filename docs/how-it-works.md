@@ -80,7 +80,7 @@ Two things the `01` diagram does not have to say, and these two rungs do:
   on a single workflow's page, and `03`'s `tooltip.ts` owns the hover panel. They are
   separated by *what* they draw, not by whether they are allowed to draw — and every one
   writes into the DOM the page shares with us, which is why `03`'s panel has to erase
-  its text rather than merely hide it. `grep -rln 'createElement\|classList' src/` in
+  its text rather than merely hide it. `grep -rlnE 'createElement|classList' src/` in
   any project prints the real list; run it rather than trusting a count in prose.
 
 Why the injected script has to be in the page's **own** world is the crux, and it
@@ -572,9 +572,10 @@ same, so no permission marks the difference:
   paces it, and the answers are cached per `(namespace, workflowId, runId, kind)` in a
   bounded cache that the payload switch and the master switch both empty, because what
   that cache holds is decoded personal data rather than an event id.
-- **The payload itself, to the codec server you named — and to nowhere else.** This
-  is the only egress in this repository that is not the page's own Temporal, and it
-  exists only after you type a host into the popup:
+- **The payload itself, to the codec server you named — and to nowhere else.** This is
+  the only *request* in this repository that goes anywhere but the page's own Temporal.
+  The deep links reach another host too, but only as a URL you click — the difference is
+  set out above — and this one exists only after you type a host into the popup:
 
   - **Empty by default.** With no endpoint, unreadable payloads are shown as a byte
     count and a sentence saying so. Nothing is sent, nothing is guessed from the
@@ -607,7 +608,7 @@ There is no analytics and no telemetry in any project. To check rather than
 believe:
 
 ```bash
-grep -rni 'fetch\|XMLHttpRequest\|sendBeacon\|WebSocket\|EventSource' src/
+grep -rniE 'fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource' src/
 ```
 
 Case-insensitively, or the wrapper named `pageFetch` hides from the grep meant to

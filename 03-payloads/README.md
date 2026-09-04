@@ -21,16 +21,20 @@ order-2601011200-01      Logs  { }           3m 00s · ActivityTaskStarted   Run
                                 └───────────────────────────────────────────┘
 ```
 
-The payload really is shown on one line like that — **exactly the bytes the server
-sent**, wrapped by the panel and re-indented by nothing. Displaying JSON *as* JSON has
+The payload really is shown on one line like that: **valid UTF-8 handed through with no
+JSON parsing and no re-indentation**, wrapped by the panel and reformatted by nothing.
+Bytes that are not valid UTF-8 are labelled and shown as their base64 rather than guessed
+at, and anything past `MAX_DISPLAY_CHARS` is clipped with a count of what was cut — so
+what is on screen is not always something that pastes back. Displaying JSON *as* JSON has
 its own correctness problem and belongs to
 [stage 04](../README.md#stage-04-planned--the-conveniences) with the viewer it needs. So
 does every other convenience: this rung adds a capability, not features.
 
 **Three things arrive at once here**, which is why it is a stage of its own: the
-extension decodes payloads for the first time, sends data out of the browser for the
-first time, and for the first time puts a panel on screen that can hold somebody's
-personal or financial data.
+extension decodes payloads for the first time, sends a request body to a host of your
+naming for the first time — 02 can only put identifiers in a link for you to click; this
+POSTs payload bytes on hover — and for the first time puts a panel on screen that can hold
+somebody's personal or financial data.
 
 **And the manifest asks for exactly what 02's does** — one permission, `storage`, no
 `host_permissions`, no service worker, the same three content-script matches. A `diff` of
@@ -50,9 +54,10 @@ npm run build        # from this directory
 `03-payloads/dist/`. Open a workflow list, reload the tab, hover a `{ }`. The Node range
 `npm install` needs is stated once, in [the root README](../README.md#start-with-01).
 
-With no codec server configured — the default — an encrypted payload says so and
-**nothing has left your machine**. Plain payloads are readable at that point already;
-many self-hosted setups never encrypt them at all.
+With no codec server configured — the default — an encrypted payload says so and **no
+payload byte has left your machine**: with that field empty this build sends nothing 02
+would not, and 02's one route out is a deep link you click. Plain payloads are readable at
+that point already; many self-hosted setups never encrypt them at all.
 
 ## Read these files in order
 
@@ -203,11 +208,11 @@ Every project here carries one, in a fixed shape so the projects compare line by
 | **Data it reads** | everything 02 reads, plus **the payloads themselves**: one history event per question, decoded into a workflow's input, its result, its failure message and stack trace, a termination reason |
 | **Data it writes** | `chrome.storage.sync` — toggles, link templates, the codec endpoint. No cookies, no `localStorage`, no files. **No payload is ever written to storage**; decoded text lives in one bounded in-memory cache for the life of the tab, and switching the panel off empties it |
 | **Requests it makes** | up to two per *running* row for the `Last event` column and retry badge, floored at one round per run per 5s — plus **one history event per payload question** (one for a running row, two for a closed one), on hover only. All to the page's own Temporal API. And, when you have named one, `POST {your codec server}/decode` |
-| **Data that leaves the machine** | **yes, and this is the row that changed.** Only when you have typed a codec endpoint: the *undecodable* payloads of the row you hovered, plus the namespace in `X-Namespace`, to that host and nowhere else. Never a payload this extension could read itself; never a decoded one; never row metadata; never a credential. With the field empty, nothing at all |
+| **Data that leaves the machine** | **yes, and this is the row that changed.** Only when you have typed a codec endpoint: the *undecodable* payloads of the row you hovered, plus the namespace in `X-Namespace`, to that host and nowhere else. Never a payload this extension could read itself; never a decoded one; never row metadata; never a credential. With the field empty, no payload byte goes anywhere — what remains is 02's deep link, which carries identifiers only when you click it |
 | **Payloads it decodes** | yes — that is the feature. `json/plain`, `binary/plain`, `text/plain`, `binary/null` in the browser; anything else through your codec server, or not at all |
 | **Credentials it holds** | none. It stores no token. The page's `Authorization` header is read in the page's world and attached **only** to Temporal's own API — no parameter, setting or message field can attach any credential to a codec request |
 | **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace — the same single ledger, now also gating the hover. A request naming any other run is refused *before* the page's token is spent on it |
-| **Third-party code in the bundle** | the same set as 02, none of it on the egress path. See [Dependencies](#dependencies) |
+| **Third-party code in the bundle** | the same set as 02, and none of it builds or sends the codec request — `valibot` shape-checks the message that names the endpoint, and the answer that comes back. See [Dependencies](#dependencies) |
 
 ### The row that matters: data leaves the browser
 
@@ -276,11 +281,8 @@ short form and point here.
 Two smaller limits, stated rather than omitted. `safeCodecEndpoint` returns the string you
 typed rather than a normalised `href`, so a relative segment still resolves and
 `https://codec.example.com/base/../other` posts to `/other/decode` — surprising, same
-origin, not a leak. And `readCodecResponse` validates the array and its length but not each
-payload in it, which is a robustness gap against a host the user chose, unlike the answer
-arriving over `postMessage`, which **is** validated to the leaves. Switching the feature off
-is not a revocation either: a payload already POSTed is already there, and the popup does
-not claim otherwise.
+origin, not a leak. And switching the feature off is not a revocation: a payload already
+POSTed is already there, and the popup does not claim otherwise.
 
 ### Personal data, deliberately
 
@@ -307,16 +309,22 @@ property of the bus and not of this code.
 **03 adds no dependency of its own**, which is worth a sentence rather than silence,
 because this is the rung where a reader would most expect one. It briefly had
 `jsonc-parser`, for a lossless pretty-printer and token colouring, and both went back
-out: this rung does not format a payload at all. **None of them is on the egress path** —
-the codec request is assembled, gated and sent by our own code; `valibot` runs on the
-response after it comes back, and `p-limit` never sees it.
+out: this rung does not format a payload at all. **No third-party library constructs or
+executes the codec request** — our own code assembles it, gates it and sends it, and
+`p-limit` never sees it. `valibot` *is* on that path, in the place worth naming: it
+shape-checks the inbound `payload-request` — the message that names the endpoint — before
+[`src/apiInject.ts`](src/apiInject.ts) acts on it, and it checks the server's answer on the
+way back. A shape check is not an authorisation check; whose data may be fetched is decided
+by the ledger, not by a schema.
 
 The policy behind the choices is in the [root README](../README.md#dependencies) and the
 comparisons that made them are in
-[`docs/design-notes.md`](../docs/design-notes.md#dependencies). This table is
-hand-written: what stops a package arriving unreviewed is the `package-lock.json` diff,
-`npm run measure` prints what is actually in each bundle today, and the bundle is
-unminified on purpose so `dist/*.js` is readable.
+[`docs/design-notes.md`](../docs/design-notes.md#dependencies). This table is hand-written;
+`npm run measure` prints what is actually in each bundle today, and the bundle is unminified
+on purpose so `dist/*.js` is readable. The one enforced part: `npm run surface` refuses a
+package this project's source imports without declaring it in this project's
+`dependencies`, which is the case a lockfile diff cannot show while the three projects
+share one hoisted install.
 
 ## Layout
 
@@ -342,7 +350,7 @@ src/
   rowInfo/          the two columns that cost a request
   links/            URL templates, and the anchors they become
   detail/           one workflow's own page — folds its responses, fetches nothing
-  payloads/         this stage — the panel, and the only egress in the repository
+  payloads/         this stage — the panel, and the only POST in the repository
     payloadMessages.ts  the two payload messages and their guards
     payloads.ts     pure: what can be read in the browser, and how it is formatted
     codec.ts        pure: the codec request, and what is deliberately NOT in it
@@ -362,7 +370,7 @@ tests/              the ordering rules, the DOM bugs that cost the most, the req
 
 The split is what makes the security card checkable: `payloads.ts` and `codec.ts` are pure
 and therefore testable, `src/page/pageApi.ts` is the only file that issues a request, and
-`grep -rln 'createElement\|classList' src/` lists every file that can write to the page.
+`grep -rlnE 'createElement|classList' src/` lists every file that can write to the page.
 **Reviewing "what can this thing send" means reading four files, not one** — `pageApi.ts`
 constrains the fetch but does not decide that it happens. And one rule there is worth
 stealing even though no gate enforces it: **`fetchForListedRun()` is the only function that

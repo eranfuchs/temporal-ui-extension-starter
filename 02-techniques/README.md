@@ -31,9 +31,10 @@ not merely claimed.
 **It still decodes no payload.** Nothing here reads a workflow's input, its result or a
 failure message; everything on screen is derived from event *metadata* — event types,
 ids, timestamps, attempt counts, activity type names. That boundary is what makes this
-stage self-contained: no codec server, no egress, and no setting that could add one.
-Payloads belong to the next rung, [`../03-payloads/`](../03-payloads/) — whose manifest
-is identical to this one, which is the whole reason that rung is worth reading.
+stage self-contained: no codec server, nothing POSTed anywhere, and no setting that could
+add one. Identifiers do leave, by one route only — the deep link you click, described in the
+card below. Payloads belong to the next rung, [`../03-payloads/`](../03-payloads/) — whose
+manifest is identical to this one, which is the whole reason that rung is worth reading.
 
 ## Run it
 
@@ -115,15 +116,14 @@ read as a broken extension.
 
 **The age is exact to the second, and frozen at the reading.** Exact, because `4m 12s` and
 `12s` say different things about the same `Running` status where `4m` and `now` do not.
-Frozen, because the cell makes two claims and only the first is exact — *"event #42
-happened 3m 00s ago"* and *"#42 is the newest event"* — so animating the subtraction over a
-fact re-read every 35s renders a workflow that moved on two seconds ago as a stall
-climbing convincingly to the second. Ages are measured against `observedAtMs`, the instant
-Temporal was actually read, so the column changes when the data changes and at no other
-time; the cost is that a stall reads up to one ask interval younger than it is. The format
-is two units, floored, zero-padded — `47s`, `3m 07s`, `5h 12m`, `3d 04h` — because a third
-unit pushes the UI's own columns off-screen, and `3m 9s` → `3m 10s` changes the cell's
-*width* where tabular figures only fix the width of a digit.
+Frozen, because the cell claims *"event #42 happened 3m 00s ago"* **and** *"#42 is the newest
+event"*, and only the first stays true between reads — a ticking clock over a fact re-read
+every 35s draws a convincing stall for a workflow that moved on. So ages are measured
+against `observedAtMs`, the instant Temporal was actually read: the column changes when the
+data does and at no other time, and the cost is that a stall reads up to one ask interval
+young. Two units, floored, zero-padded — `47s`, `3m 07s`, `5h 12m`, `3d 04h` — because a
+third pushes the UI's own columns off-screen and `3m 9s` → `3m 10s` changes the cell's
+*width*, which tabular figures do not fix.
 
 The **`⟳` in the column header** re-asks Temporal now for every running row on screen,
 as one flag (`fresh`) on the message the table world already sends rather than a new
@@ -198,15 +198,14 @@ A link is a label and a URL template. Tokens are filled from the row:
 Time tokens take an offset — `{startTimeIso-10m}`, `{endTimeIso+1h}` — because the window
 you want in a log tool is almost never exactly the workflow's own.
 
-**A template's scope is derived from the tokens it uses, not configured.** A template
-mentioning any activity token is an activity link and appears once per activity on a
-workflow's page; everything else is a workflow link. So there is no second list to
-maintain, no scope dropdown, and no way for the two to disagree — and a misspelled
-`{activityTyp}` stays a *visible* unknown token on a workflow-scoped link instead of
-silently moving the whole template to a page you were not editing. `templateScope` in
-`src/links/deepLink.ts` is the whole of that rule. A template that expands to something
-that is not `http(s)` does not become a link; it is rendered inert, with the reason in its
-title.
+**A template's scope is derived from the tokens it uses, not configured.** Mention any
+activity token and it is an activity link, appearing once per activity on a workflow's page;
+everything else is a workflow link. That removes the scope dropdown and the second list to
+keep in step with it, and it makes a misspelled `{activityTyp}` a *visible* unknown token on
+a workflow link rather than a template silently moved to a page you were not editing.
+`templateScope` in `src/links/deepLink.ts` is the whole of that rule. A template that
+expands to something that is not `http(s)` does not become a link; it is rendered inert,
+with the reason in its title.
 
 ## The links on a single workflow's page
 
@@ -234,12 +233,11 @@ Three decisions here are worth stealing:
   is the fact deciding whether the search results can be trusted.
 - **Anchor to meaning, then make the failure visible.** The tab bar is found as "the list
   containing a link to this workflow's history", and the activity row as "the row the UI
-  labelled Activity Id" — the UI's own name for the field, not a class name or a position.
-  This *is* the fragile kind of anchoring, and the extension behind this starter paid for
-  it: when the selectors went stale the node was not missing, it was attached to `<body>`
-  behind the app's own chrome, and it read as "the feature only appears after you toggle
-  it". So a bar that cannot find the layout is parked in a corner where it can be **seen**,
-  the popup reports that state in words, and every pass looks for the real anchor again.
+  labelled Activity Id" — the UI's own names, not class names or positions. It is still
+  fragile anchoring, and the failure mode is not a missing node: stale selectors strand it
+  on `<body>` behind the app's own chrome, which reads as "the feature only appears after
+  you toggle it". So a bar that cannot find the layout is parked where it can be **seen**,
+  the popup says so in words, and every pass looks for the real anchor again.
 - **Fold before posting, never after.** A raw history event carries `input`, `result` and
   `failure`; posting the events across for the extension's side to reduce would put all of
   that on the page's message bus. `src/detail/detail.ts` keeps ids, type names, timestamps
@@ -258,7 +256,7 @@ Every project here carries one, in a fixed shape so the projects compare line by
 | **Data it reads** | the workflow-list response the page had already fetched; the table's own `href`s; the history and describe responses a single workflow's page fetches for itself; and, per running row, one history-reverse event and one workflow description. No cookies, no `localStorage`, nothing off the page's own settings |
 | **Data it writes** | `chrome.storage.sync` — your toggles and link templates. No cookies, no `localStorage`, no files |
 | **Requests it makes** | **yes — see below.** Up to two per *running* row, to the page's own Temporal API, paced and cached. Nothing else, to nowhere else |
-| **Data that leaves the machine** | **none.** There is no codec server, no proxy and no outbound host in this build — and no setting that can add one. (A deep link sends only what you click, when you click it.) |
+| **Data that leaves the machine** | **identifiers, and only through a link you click.** This build sends no request anywhere but the page's own Temporal API — no codec server, no proxy, no setting that can add one — but a deep-link template puts a workflow id, a run id, an activity type and a time window into a URL on a host you named, and clicking it navigates your browser there. What that host learns is what the URL says, which you can read before you click. Nothing is posted, nothing is sent on render, and no credential of ours goes with it |
 | **Payloads it decodes** | none. No workflow input, result or failure message is read, decoded or displayed anywhere in this project |
 | **Credentials it holds** | none. It stores no token. The page's `Authorization` header is read in the page's world and re-sent to Temporal's own API only; it is not stored, posted to the extension, or logged — and no setting can change that |
 | **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace. A request naming any other run is refused *before* the page's token is spent on it — see [the weakness](#the-weakness-and-what-closing-most-of-it-took) |
@@ -386,10 +384,13 @@ during a block does not reset the doubling, and that resuming is not a burst.
 The repository's dependency policy is in the [root README](../README.md#dependencies), and
 the comparisons that chose these — including the one evaluation that ended in **no**
 dependency — are in [`docs/design-notes.md`](../docs/design-notes.md#dependencies). This
-table is hand-written: what stops a package arriving unreviewed is the `package-lock.json`
-diff, `npm run measure` prints what each one currently costs each bundle, and the bundle is
-unminified on purpose so `dist/*.js` is readable. Nothing here is attested beyond
-`package-lock.json`'s integrity hashes.
+table is hand-written; `npm run measure` prints what each one currently costs each bundle,
+and the bundle is unminified on purpose so `dist/*.js` is readable. One thing about it is
+enforced: `npm run surface` refuses a package this project's own source imports without
+declaring it in this project's `dependencies` — the three projects share one hoisted
+install, so an undeclared import of a sibling's package would otherwise resolve, bundle,
+and show up in no lockfile diff. Nothing here is attested beyond `package-lock.json`'s
+integrity hashes.
 
 ## Layout
 
@@ -444,7 +445,7 @@ The split around the request path is what makes the security card checkable:
 `src/page/pageApi.ts` is the only file that issues a request, and the only files that write
 to the page are `render.ts`, the two `*Render.ts` modules it calls,
 `src/detail/detailLinks.ts` and one line in `src/content.ts`.
-`grep -rln 'createElement\|classList' src/` is the check; the one other name it returns is
+`grep -rlnE 'createElement|classList' src/` is the check; the one other name it returns is
 `src/popup.ts`, which writes to the popup's own document and cannot reach the page at all.
 **Reviewing "what can this thing send" means reading one file.**
 

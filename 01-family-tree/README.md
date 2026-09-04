@@ -98,7 +98,8 @@ service worker, any reference to the `chrome` namespace under `src/`, `tests/` o
 `types`, any markup/code sink (`innerHTML`, `eval`, …), and a content-script match
 outside the allowed hosts. It also **builds the project** and reads esbuild's
 metafile, so every script the extension loads — including one named only by an HTML
-page, which escapes every other check here — is one the audit actually looked at.
+page, which escapes every other check here — is one the audit actually looked at, and
+every package a file of ours imports is one this project's `package.json` declares.
 
 The gate **parses** each file rather than searching it, because `const { storage } =
 chrome` and `cell['innerHTML'] = x` contain neither `chrome.` nor `.innerHTML`, and a
@@ -119,9 +120,10 @@ case it must accept.
   finds out the same way you would. Nothing here has been run against a self-hosted UI
   with real data in it.
 - **No supply-chain attestation.** The bundle is built unminified on purpose, so
-  `dist/content.js` is readable, including the one third-party package inside it. A
-  package cannot enter a bundle without a reviewed `package-lock.json` diff, but
-  nothing verifies a package's contents against its repository, and the lockfile's
+  `dist/content.js` is readable, including the one third-party package inside it. The
+  gate refuses a package this project's source imports without declaring it — which a
+  lockfile diff would not catch, because the three projects share one hoisted install —
+  but nothing verifies a package's contents against its repository, and the lockfile's
   integrity hashes are the only pinning there is.
 
 ## Dependencies

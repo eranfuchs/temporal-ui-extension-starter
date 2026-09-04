@@ -507,10 +507,13 @@ easier to read and harder to get wrong.** Each project's README lists what it bu
 and why, by hand; `npm run measure` prints what those packages cost the bundles a user
 actually loads.
 
-Nothing enforces that list mechanically — the same `dependencies` note in `surface.json`
-says what removing the enforcement gave up. So the review point for a new package is the
-`package-lock.json` diff, and the reason the bundles ship unminified is that `dist/*.js`
-should be readable by whoever wants to check.
+Nothing checks a table against its bundle — the same `dependencies` note in `surface.json`
+says what removing that enforcement gave up. One rule survived it, because a lockfile diff
+cannot answer it: a package a project's own source imports must be declared in *that*
+project's `dependencies`, since the three projects share one hoisted install and an import
+of a sibling's package would otherwise resolve, bundle, and appear in no diff anywhere. For
+everything else the review point is the `package-lock.json` diff, and the reason the bundles
+ship unminified is that `dist/*.js` should be readable by whoever wants to check.
 
 This section holds what neither the table nor the command can say: which alternatives were
 measured, and why the one that lost, lost. Every measurement below is a recorded experiment
@@ -879,10 +882,21 @@ just produced, resolved out of the metafile rather than from `package.json` so t
 
 Both rules were removed in the readability pass, and the honest summary is that they
 worked and cost more to read than they caught: a reader arriving at stage 02 met two
-per-package cards before reaching the two questions the stage asks Temporal. A
-hand-written table per project replaced them, with the `package-lock.json` diff as the
-review point. The `dependencies` note in `scripts/surface.json` states the loss plainly —
-nothing mechanical now announces a new *transitive* package.
+per-package cards before reaching the two questions the stage asks Temporal. A hand-written
+table per project replaced them.
+
+**The first removal went one step too far, and a review caught it.** The commit's own note
+said the `package-lock.json` diff was now what stopped a package arriving unreviewed — which
+is false in this repository, and falsest in exactly the case the deleted rules had been
+written for: the projects share one hoisted install, so `import pLimit from 'p-limit'` added
+to 01 resolves from 02's copy, needs no `package.json` edit, produces no lockfile line, and
+gets inlined into a content script. The claim was repeated in `surface.json` and in all four
+READMEs. What went back in is one rule, rule 9 — every package a project's own source
+imports is declared in that project's `dependencies` — reusing the `direct` set
+`analyseBundles()` already computes, with the hoisted-sibling tree as its self-test fixture
+and the declared case as the negative control. The version, licence and transitive
+machinery stayed deleted; the `dependencies` note in `scripts/surface.json` states that
+loss plainly — nothing mechanical announces a new *transitive* package.
 
 **Not checked is not clean.** When a card's installed `package.json` could not be read, the
 rule reported that rather than passing the card — not a hypothetical direction, because
