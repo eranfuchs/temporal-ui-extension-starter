@@ -71,7 +71,7 @@ can be compared line by line.
 | **Data it writes** | nothing. No `chrome.storage`, no cookies, no `localStorage`, no files |
 | **Requests it makes** | none. It never originates a request |
 | **Data that leaves the machine** | none. There is no outbound anything — no analytics, no telemetry, no deep links |
-| **Third-party code in the bundle** | one package, `valibot`, and nothing behind it. Budgeted, and checked against what esbuild actually inlined — see [Dependencies](#dependencies) |
+| **Third-party code in the bundle** | one package, `valibot`, and nothing behind it — see [Dependencies](#dependencies) |
 
 Two of those rows are load-bearing and worth stating as arguments rather than
 facts:
@@ -91,46 +91,38 @@ npm run surface        # from the repository root
 ```
 
 `scripts/surface.mjs` compares each manifest against the budget declared in
-`scripts/surface.json` and fails if a project exceeds it. For this project the
-permission budget is empty, so the gate fails on the first `permissions` entry,
-the first `host_permissions` entry, a service worker, any reference to the
-`chrome` namespace under `src/`, `tests/` or `public/`, an `@types/chrome` entry
-in *this project's* `package.json`, a `"chrome"` entry in its `tsconfig.json`
-`types`, any of the markup/code sinks (`innerHTML`, `eval`, …), a content-script
-match outside the allowed hosts, and `<all_urls>` outright. The dependency budget
-is not empty — it names `valibot` — and the gate reads **esbuild's metafile** to
-decide, so it fails on a package in a bundle that the budget does not name, on a
-budgeted package no bundle actually contains, and on an import that resolves only
-because a sibling project installed it.
+`scripts/surface.json` and fails if a project exceeds it. This project's budget is
+empty, so the gate fails on the first `permissions` or `host_permissions` entry, a
+service worker, any reference to the `chrome` namespace under `src/`, `tests/` or
+`public/`, an `@types/chrome` dependency or a `"chrome"` entry in `tsconfig.json`
+`types`, any markup/code sink (`innerHTML`, `eval`, …), and a content-script match
+outside the allowed hosts. It also **builds the project** and reads esbuild's
+metafile, so every script the extension loads — including one named only by an HTML
+page, which escapes every other check here — is one the audit actually looked at.
 
-"Any reference" is meant literally, and it is why the gate **parses** each file
-rather than searching it: `const { storage } = chrome` and `cell['innerHTML'] = x`
-contain neither `chrome.` nor `.innerHTML`, and a `//` inside a string used to
-hide everything after it on the line. A parser also cannot mistake the sentence
-above for a sink, which the patterns it replaced did.
-`npm run surface:selftest` drives it against a case per rule that it must reject
-*and* a case it must accept, because a gate that has quietly stopped detecting its
-own failure case is worse than no gate.
+The gate **parses** each file rather than searching it, because `const { storage } =
+chrome` and `cell['innerHTML'] = x` contain neither `chrome.` nor `.innerHTML`, and a
+`//` inside a string used to hide everything after it on the line.
+`npm run surface:selftest` drives it against a case per rule it must reject *and* a
+case it must accept.
 
 ### What has not been done
 
-- **No independent security review.** This is not unreviewed code: every change is
-  reviewed as it is written, the message boundary carries specs that forge a message
-  and assert it is refused, and `npm run preflight` re-runs the banned-sink,
-  permission, dependency and secret-scan gates on every pass. What is missing is an
-  outside pair of eyes. The mechanism comes from an extension used internally, but
-  this code is a clean-room rewrite and nobody outside this repository has audited it.
-- **Tested against one version of Temporal Cloud, on one tenant.** That is what any
-  extension against a UI it does not own can honestly claim: the next Cloud release
-  can move the list URL, the row markup or the bootstrap order, and this code finds
-  out the same way you would. Nothing here has been run against a self-hosted UI with
-  real data in it.
-- **No supply-chain attestation.** Build it yourself from source; the bundle is
-  built unminified on purpose, so `dist/content.js` is readable — including the one
-  third-party package inside it. What the repository guarantees is that a package
-  cannot enter a bundle without a reviewed diff; it does not verify any package's
-  contents against its repository, and `package-lock.json` integrity hashes are the
-  only pinning there is.
+- **No independent security review.** Every change is reviewed as it is written, the
+  message boundary carries specs that forge a message and assert it is refused, and
+  `npm run preflight` re-runs the banned-sink, permission and secret-scan gates on
+  every pass. What is missing is an outside pair of eyes: the mechanism comes from an
+  extension used internally, but this code is a clean-room rewrite and nobody outside
+  this repository has audited it.
+- **Tested against one version of Temporal Cloud, on one tenant.** The next Cloud
+  release can move the list URL, the row markup or the bootstrap order, and this code
+  finds out the same way you would. Nothing here has been run against a self-hosted UI
+  with real data in it.
+- **No supply-chain attestation.** The bundle is built unminified on purpose, so
+  `dist/content.js` is readable, including the one third-party package inside it. A
+  package cannot enter a bundle without a reviewed `package-lock.json` diff, but
+  nothing verifies a package's contents against its repository, and the lockfile's
+  integrity hashes are the only pinning there is.
 
 ## Dependencies
 
@@ -143,13 +135,11 @@ audit-surface argument behind it, are in the
 | **Version** | 1.4.2 — MIT |
 | **What it is for** | Runtime schema validation. Every boundary this extension reads across — the page's own workflow-list response, and the `postMessage` from the page world — is `safeParse`d against a schema before any field is read, so a shape that changed is an `issues` list handled at the boundary instead of an `undefined` that surfaces four calls later as something else |
 | **Bundles it enters** | `dist/content.js` and `dist/inject.js`, both of them |
-| **Packages it brings with it** | none. valibot has no dependencies of its own, so the bundled set is exactly the one package |
+| **Packages it brings with it** | none. valibot has no dependencies of its own |
 | **What stays ours** | the schemas, and every decision they inform. A parse result is evidence about the **shape** of a value and never about where it came from — see `src/types.ts` |
 
-`npm run measure` prints what it currently costs each bundle; it is the larger part
-of both of them, and the numbers move whenever the schemas change, so run the
-command rather than trusting a figure written here. Why valibot and not zod, with
-the measurements that decided it, is in
+This table is hand-written; `npm run measure` prints what the package currently costs
+each bundle. Why valibot and not zod, with the measurements that decided it, is in
 [`docs/design-notes.md`](../docs/design-notes.md#two-schema-libraries-measured).
 
 ## Layout
@@ -176,27 +166,23 @@ tests/          the ordering rules, and the two DOM bugs that cost the most
 ```
 
 `find src -name '*.ts' | xargs wc -l` prints the size. `tsconfig.json` sets
-`"types": []` — this project needs no ambient type package, not even
-`@types/chrome`, and the typechecker is where that claim is enforced rather than
-asserted.
+`"types": []` — this project needs no ambient type package, not even `@types/chrome`,
+and the typechecker is where that claim is enforced rather than asserted.
 
 ## What it deliberately does not do
 
 Deep links to your log tool, a settings pane, a last-event column and a
-retrying-activity badge are [`../02-techniques/`](../02-techniques/). Workflow
-input and result on hover, decoded through your codec server, are the rung above
-that — [`../03-payloads/`](../03-payloads/), the payload stage. The conveniences —
-JSON highlighting, column reordering, filtering and the rest — are the rung above
-*that*, [listed in full in the root README](../README.md#stage-04-planned--the-conveniences),
-and not in this repository yet.
+retrying-activity badge are [`../02-techniques/`](../02-techniques/). Workflow input
+and result on hover, decoded through your codec server, are the rung above that —
+[`../03-payloads/`](../03-payloads/). The conveniences are the rung above *that*,
+[listed in the root README](../README.md#stage-04-planned--the-conveniences), and not
+in this repository yet.
 
-Each step up the ladder costs something: 02 asks for `storage`, and — the part no
-manifest key shows — it **originates requests**, because two of the facts it puts
-on screen are in no response the page had already fetched. 03 asks for the same
-`storage` and nothing more, while gaining decoded payloads and a host of your
-choosing to send the unreadable ones to; its manifest is 02's, which is the sharpest
-thing this ladder has to say. This one asks for nothing and requests nothing, and
-that is the point of having it separately.
+Each step costs something: 02 asks for `storage` and — the part no manifest key shows
+— it **originates requests**, because two of the facts it puts on screen are in no
+response the page had already fetched. 03 gains decoded payloads and a host of your
+choosing to send the unreadable ones to, on 02's manifest exactly, which is the
+sharpest thing this ladder has to say. This one asks for nothing and requests nothing.
 
 ## Commands
 

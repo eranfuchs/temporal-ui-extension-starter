@@ -7,9 +7,10 @@
 // and chooses the origin. Read the trust-boundary note at the top of that file
 // before changing anything here; this file is one of its callers, not the gate.
 //
-// The history fetch is paced by the SAME instance as the per-row questions (see
-// src/page/requestPacing.ts). A second pacer here would have been the natural thing to
-// write and would have quietly doubled the concurrency cap the README declares.
+// INVARIANT: the history fetch is paced by the SAME instance as the per-row questions,
+// src/page/requestPacing.ts.
+// Breaking it: a second pacer here is the natural thing to write, and it quietly
+// doubles the concurrency cap the README declares.
 //
 // The codec POST is NOT inside that slot, and the README says four TEMPORAL
 // requests for that reason. `pacer.run()` wraps the history fetch only; by the time
@@ -27,13 +28,9 @@
 // path, but an unauthenticated bus cannot tell an honest hover from a forged one and
 // no amount of validation in this file changes that. Closing it needs the request to
 // arrive by a channel a page script cannot write — chrome.scripting.executeScript,
-// and therefore host_permissions, which this project deliberately does not take.
-//
-// Stated once at full width, with the argument for accepting it and the reason an
-// earlier flattering version of it was wrong: the security card in README.md,
-// "The weakness, and what closing most of it took". One copy on purpose — this used
-// to be a second full-length version of the same argument, which is three places to
-// keep true and reads as anxiety rather than as a bound.
+// and therefore host_permissions, which this project deliberately does not take. The
+// argument for accepting it is stated once, at full width, in README.md under "The
+// weakness, and what closing most of it took".
 
 import { fetchFailureMessage, fetchForListedRun, fetchFromPageWorld, replyToPage } from '../page/pageApi';
 import {

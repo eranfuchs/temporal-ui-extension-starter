@@ -1,50 +1,27 @@
 // MAIN world: the only part of this extension that makes requests of its own
-// VOLUME. It is where "we can call the API too" meets "and here is the bill".
+// VOLUME — "we can call the API too", and here is the bill.
 //
-// The split with rowInfoClient.ts is deliberate and is the interesting design
-// decision in this feature:
+// The split with rowInfoClient.ts is the design decision in this feature. The
+// ISOLATED world decides WHAT to ask about — it can see the table, so it knows which
+// rows are on screen and which of them are Running; this file decides WHEN to fire
+// and remembers the answers, because it alone knows how many requests are already in
+// the air and it is where the page's credentials are, so it is where a 429 arrives.
+// Neither half can do the other's job: a pacer in the ISOLATED world would be one
+// pacer PER TAB with no idea what the page itself is already doing, and a row
+// selector in the MAIN world would be pacing whatever a forged message asked for.
 //
-//   • the ISOLATED world decides WHAT to ask about — it can see the table, so it
-//     knows which rows are on screen and which of them are Running;
-//   • this file decides WHEN to fire and remembers the answers — it is the only
-//     place that knows how many requests are already in the air, and it is where
-//     the page's credentials are, so it is where a 429 arrives.
+// INVARIANT: everything that keeps this from being a load generator lives on THIS
+// side of the boundary — the TTL cache and its entry bound, in-flight coalescing, the
+// `fresh` floor, and the concurrency cap and 429/503 backoff in src/page/pacer.ts
+// (whose single instance, shared with the payload fetch, is in
+// src/page/requestPacing.ts; in 02, where row info was the only requesting feature,
+// it was a const in this file). Each of them is commented where it stands.
+// Breaking it: a bound applied by the caller is a bound only the honest asker keeps,
+// because the caller is a postMessage away from anything running in the page.
 //
-// Neither half can do the other's job. A pacer in the ISOLATED world would be one
-// pacer PER TAB with no idea what the page itself is already doing; a row selector
-// in the MAIN world would have to be told the rows over postMessage and would
-// then be pacing whatever a forged message asked for.
-//
-// FOUR THINGS KEEP THIS FROM BEING A LOAD GENERATOR, and every one of them is on
-// this side of the boundary rather than in the caller:
-//
-//   1. A TTL CACHE, per (run, field). A render pass happens on every DOM mutation
-//      — dozens per second while the Temporal UI re-renders — and without this,
-//      each one would be a fresh round of requests. The refresh control in the
-//      column header is the one thing that may bypass it, via `fresh` on the
-//      request; FRESH_FLOOR_MS puts a floor under that, because the message can be
-//      posted by anything in the page and not only by the button.
-//   2. IN-FLIGHT COALESCING. Ten render passes during one slow request must
-//      produce one request, not ten. The pending promise is the dedupe key.
-//   3. A CONCURRENCY CAP, and
-//   4. BACKOFF ON 429/503 honouring Retry-After — both in src/page/pacer.ts, which
-//      exists as a separate module because it is about TIME and therefore needs an
-//      injected clock to be testable at all. It was inline here, untested, and
-//      wrong: read the note at the top of that file before copying either idea.
-//      The single INSTANCE of it, shared with the payload fetch, is in
-//      src/page/requestPacing.ts — in 02, where row info was the only requesting
-//      feature, it was a const in this file.
-//
-// It also refreshes for free: the Temporal UI polls its own workflow list, every
-// poll re-renders the table, every re-render asks again, and the TTL decides
-// whether that becomes a request. Nothing here holds a timer of its own.
-//
-// EVERY ANSWER IS DATED, and that is not bookkeeping. `observedAtMs` on the reply is
-// when the DATA was read — off the cached answer, so a cache hit reports the age of
-// the fact and not the age of the message — and it is what the column measures its
-// age against. Without it the renderer would subtract the event's timestamp from the
-// current clock and print a number that climbs once a second, which is a live
-// measurement of a run this file reads at most every 35 seconds.
+// Nothing here holds a timer. The Temporal UI polls its own workflow list, every
+// poll re-renders the table, every re-render asks again, and the TTL decides whether
+// that becomes a request — so the column refreshes for free.
 
 import { fetchFailureMessage, fetchForListedRun, replyToPage } from '../page/pageApi';
 import { pacer, refuse } from '../page/requestPacing';

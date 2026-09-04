@@ -1,18 +1,13 @@
 // The shapes that matter: what Temporal's API returns, what crosses between our
 // two worlds, and the row we draw.
 //
-// WHY THE FIRST TWO ARE SCHEMAS AND NOT INTERFACES
-//
-// An interface is a promise the compiler checks at BUILD time about data that
-// arrives at RUN time. For our own row type that is exactly right — we build it,
-// so the compiler can hold us to it. For the other two it is not: one comes off
-// the network and one comes from a postMessage on a page we do not own. Writing
-// `data as WorkflowsMessage` tells the compiler to stop asking questions at the
-// one point where the answers were never checked.
-//
-// So the boundary shapes are schemas, parsed on arrival, and their TypeScript
-// types are INFERRED from them — one description instead of a declaration and a
-// validator that can disagree.
+// The first two are SCHEMAS and not interfaces. An interface is a promise the compiler
+// checks at BUILD time about data that arrives at RUN time — exactly right for our own
+// row type, which we build, and wrong for a response off the network and a postMessage
+// on a page we do not own. `data as WorkflowsMessage` tells the compiler to stop asking
+// questions at the one point where the answers were never checked. So the boundary
+// shapes are parsed on arrival and their TypeScript types are INFERRED from them: one
+// description instead of a declaration and a validator that can disagree.
 //
 // SHAPE IS NOT PROVENANCE. This is the sentence to keep. Parsing proves the data
 // LOOKS right; it says nothing about who sent it. Any script on the page can post
@@ -20,18 +15,18 @@
 // content.ts checks `event.source` as well, and why nothing here is described as
 // authentication or authorisation.
 //
-// THE UNKNOWN-KEY POLICY: unknown keys are STRIPPED, which is what valibot's
-// object() does, and what this repository wants in both directions. Temporal may
-// add fields without breaking us — it does, regularly — and a field we no longer
-// read cannot come back into reach just because some producer still sends it. What
-// comes out of a parse is only what is declared below, so a message carrying an
-// `authorization` key does not leave one lying around for later code to find.
+// INVARIANT: unknown keys are STRIPPED, which is what valibot's object() does, and what
+// this repository wants in both directions. What comes out of a parse is only what is
+// declared below, so a message carrying an `authorization` key does not leave one lying
+// around for later code to find, and Temporal can add fields without breaking us — it
+// does, regularly.
+// Breaking it: a field we no longer read comes back into reach because some producer
+// still sends it.
 //
-// INVARIANT: the schema library stays small enough that a reader can still
-// account for everything in dist/content.js by opening it.
+// INVARIANT: the schema library stays small enough that a reader can still account for
+// everything in dist/content.js by opening it.
 // Breaking it: zod was tried first and dominated every bundle it entered. Run
-// `npm run measure` for today's figures; the measured four-library comparison,
-// and why bundle size is a first-class criterion in a teaching repository, is at
+// `npm run measure` for today's figures; the measured four-library comparison is at
 // docs/design-notes.md#two-schema-libraries-measured.
 
 import * as v from 'valibot';

@@ -1,36 +1,31 @@
-// Two questions about a single run that the workflow-list response cannot
-// answer, and the pure code that asks them.
-//
-// This is the file to read if you want to know what "we can make our own API
-// calls" actually costs. Everything else in this extension is a piggyback: it
-// reads a response the page was fetching anyway. These two are not. They are the
-// reason src/page/pageApi.ts exists.
+// Two questions about a single run that the workflow-list response cannot answer, and
+// the pure code that asks them. This is the file to read if you want to know what "we
+// can make our own API calls" actually costs: everything else in this extension reads a
+// response the page was fetching anyway, and these two are the reason
+// src/page/pageApi.ts exists.
 //
 //   • LAST EVENT — what this workflow did most recently. One
 //     GetWorkflowExecutionHistoryReverse with maximumPageSize=1 per run.
 //   • RETRYING ACTIVITY — is an activity stuck in a retry loop, and on which
 //     attempt. One DescribeWorkflowExecution per run.
 //
-// WHY THE SECOND ONE CANNOT PIGGYBACK, WHICH IS THE WHOLE JUSTIFICATION.
+// The second cannot piggyback, which is the whole justification. `pendingActivities` is
+// returned by DescribeWorkflowExecution and by nothing else — not in the list response,
+// not in the history — nor can it be reconstructed from the history tail: an activity on
+// attempt 900 had its ActivityTaskScheduled event written ~900 events ago, so a tail of
+// any sane size misses exactly the workflows this badge exists to find.
 //
-// `pendingActivities` is returned by DescribeWorkflowExecution and by nothing
-// else — it is not in the list response and not in the history. Nor can it be
-// reconstructed from the history tail: an activity on attempt 900 had its
-// ActivityTaskScheduled event written ~900 events ago, so a tail of any sane size
-// misses exactly the workflows this badge exists to find. There is no cheaper
-// question that answers it.
-//
-// NO FAILURE MESSAGE IS READ HERE, DELIBERATELY.
-//
-// `pendingActivities[].lastFailure.message` is right there next to `attempt`, and
-// the internal extension this starter reimplements does show it. This one
-// does not, and will not: a failure message is application data — it routinely
-// carries account numbers, customer ids, upstream response bodies — and this
-// project's 02 stage is the one that reads history WITHOUT reading anybody's data.
-// Attempt count, the activity TYPE (a name from the workflow's own source) and a
-// next-retry time are enough to find a stuck workflow, and none of the three is
-// user data. `activityId` is skipped for the same reason: unlike the type, it is
-// chosen by the caller and is regularly built out of a business identifier.
+// INVARIANT: no failure message is read here. `pendingActivities[].lastFailure.message`
+// is right there next to `attempt`, and the internal extension this starter reimplements
+// does show it; this one does not, and will not. A failure message is application data —
+// it routinely carries account numbers, customer ids, upstream response bodies — and 02
+// is the stage that reads history WITHOUT reading anybody's data. Attempt count, the
+// activity TYPE (a name from the workflow's own source) and a next-retry time are enough
+// to find a stuck workflow, and none of the three is user data. `activityId` is skipped
+// for the same reason: unlike the type, it is chosen by the caller and is regularly built
+// out of a business identifier.
+// Breaking it: the security card stops being true, because the extension is then moving
+// somebody's data out of the response and onto the page's message bus.
 //
 // Everything in this file is pure. The requests are in rowInfoServe.ts (MAIN
 // world, where the page's own credentials are) and the decision about WHICH rows
@@ -97,8 +92,8 @@ export const rowInfoRequestSchema = v.object({
     // pass; true only when the user pressed the refresh control in the column
     // header.
     //
-    // This flag switches OFF the TTL cache, which is the first of the four things
-    // that keep this feature from being a load generator (see rowInfoServe.ts) —
+    // This flag switches OFF the TTL cache, one of the guards that keep this
+    // feature from being a load generator (see rowInfoServe.ts) —
     // and anything running in the page can post this message, so a flag that
     // switched it off on request would have switched it off for whoever asked, as
     // often as they liked. FRESH_FLOOR_MS above is what stops that, enforced by

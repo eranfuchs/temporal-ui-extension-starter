@@ -6,15 +6,14 @@ you do not own. **Three of them are in this repository**, as the first three run
 of a ladder; the table below says what each rung costs, and what stage 04 is planned
 to add.
 
-No backend of ours. No credentials to configure or store. No changes to Temporal.
-They work on Temporal Cloud and on a local `temporal server start-dev` without a
-line of configuration, because they read the API responses the page is already
-fetching. 01 never talks to Temporal at all; 02 asks the page's own API two small
-questions per *running* row, using the page's own session, and still holds no
-credential of its own — and still decodes no payload. 03 is where payloads arrive:
-a workflow's input and result on hover, decoded in the browser when they are
-readable and through **a codec server you name yourself** when they are not, which
-makes it the first rung that can send anything out of the browser at all.
+No backend of ours. No credentials to configure or store. No changes to Temporal. They
+work on Temporal Cloud and on a local `temporal server start-dev` without a line of
+configuration, because they read the API responses the page is already fetching. 01
+never talks to Temporal at all; 02 asks the page's own API two small questions per
+*running* row, using the page's own session, and decodes no payload. 03 is where
+payloads arrive — a workflow's input and result on hover, decoded in the browser when
+they are readable and through **a codec server you name yourself** when they are not,
+which makes it the first rung that can send anything out of the browser at all.
 
 ```
 Workflow ID                                    Type                Status
@@ -38,14 +37,13 @@ npm install                    # once, at the root: every project shares it
 cd 01-family-tree && npm run build
 ```
 
-**Node `^22.22.2 || ^24.15.0 || >=26.0.0`** (`node --version`). Not a preference, and
-not a round number either: the jsdom specs cannot start on Node 20, and the way
-they fail is to vanish from the totals while the run still reports every
-collected test as passing. The odd-looking range is jsdom's own `engines.node`,
-which is the narrowest in the lockfile — so an `--engine-strict` install on a
-Node outside it can fail before `preflight` gets a chance to say anything.
-`preflight` checks both halves: that the declared range is no wider than every
-locked dependency allows, and that the Node actually running can host the specs.
+**Node `^22.22.2 || ^24.15.0 || >=26.0.0`** (`node --version`). Not a round number: the
+jsdom specs cannot start on Node 20, and the way they fail is to vanish from the totals
+while the run reports every collected test as passing. The range is jsdom's own
+`engines.node`, the narrowest in the lockfile, so an `--engine-strict` install outside it
+fails before `preflight` can say anything. `preflight` checks both halves — that the
+declared range is no wider than the locked dependencies allow, and that the Node running
+can host the specs.
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select
 `01-family-tree/dist/`. Open a workflow list and reload the tab.
@@ -69,43 +67,31 @@ visible. Three rungs are here; stage 04 is planned:
 | [`03-payloads/`](03-payloads/), the **payload stage** | each workflow's input and result on hover, decoded through your own codec server | `storage` — **the same permission surface as 02** | the above, plus one history event per question — one for a running row, two for a closed one — and, only once you have named one, the codec server you typed into the popup | none |
 | stage 04, conveniences — planned, not written | payload viewing and JSON highlighting, column reordering, a larger page size, expand-to-families, family focus, per-column copy, NOT filtering and additive filtering — [the full list](#stage-04-planned--the-conveniences) | `storage` | no new destination | none |
 
-The "requests" column is there because it is the one cost the manifest does
-**not** show. 02 declares no `host_permissions` and still originates requests: it
-makes them from the page's own world, where a host permission would buy nothing
-(Chrome treats a content-script fetch as cross-origin even with one). A permission
-diff is not a capability diff.
+The "requests" column is there because it is the one cost the manifest does **not**
+show. 02 declares no `host_permissions` and still originates requests, from the page's
+own world, where a host permission would buy nothing (Chrome treats a content-script
+fetch as cross-origin even with one).
 
-The line between 02 and 03 is drawn at one place, and it is not a permission
-either: **02 never decodes a payload.** Everything it shows is derived from event
-metadata — event types, ids, timestamps, attempt counts, activity type names — so
-there is no codec server, no outbound host, and no way for a workflow's input,
-result or failure message to reach the screen or the wire. 03 crosses that line on
-purpose, which is why the codec server, the first outbound host and the whole
-personal-data question arrive together, in one project, rather than being spread
-across the ladder.
+The line between 02 and 03 is not a permission either: **02 never decodes a payload.**
+Everything it shows is derived from event metadata — event types, ids, timestamps,
+attempt counts, activity type names — so there is no codec server, no outbound host, and
+no way for a workflow's input, result or failure message to reach the screen or the wire.
+03 crosses that line on purpose, which is why the codec server, the first outbound host
+and the whole personal-data question arrive together in one project.
 
-03 carries what most teams actually came for — seeing a workflow's input and result
-without leaving the list — which is why it is a stage of its own and not a bag of
-extras. The conveniences that were once bundled with it are stage 04's problem; none
-of them changes what the extension can reach.
-
-**And 03's manifest asks for exactly what 02's does.** Same one permission, same
-absent `host_permissions`, same absent service worker, same three content-script
-matches — every capability-bearing key is identical, and the diff is the name, the
-description, the version and the button's tooltip — while the extension gains payload
-decoding, an outbound host and a panel that can hold somebody's personal data. If you
-read one diff in this repository, read that one: it is the clearest statement the
-ladder makes that **a permission diff is not a capability diff**.
+**And 03's manifest asks for exactly what 02's does.** Same one permission, same absent
+`host_permissions`, same absent service worker, same three content-script matches — every
+capability-bearing key is identical, and the diff is the name, the description, the
+version and the button's tooltip — while the extension gains payload decoding, an
+outbound host and a panel that can hold somebody's personal data. If you read one diff in
+this repository, read that one.
 
 **Stage 04 is not written yet**, and there is no empty directory standing in for it.
-The list below is what it is planned to carry; every claim in the three rows above it
-is about code that is in this tree.
 
 ### Stage 04, planned — the conveniences
 
-This is the one authoritative copy of the scope. Everywhere else in the repository
-that mentions stage 04 links here, because four prose copies of a roadmap is four
-things to update and three that will not be.
+The one authoritative copy of the scope; everywhere else in the repository that mentions
+stage 04 links here.
 
 - **Separate input and output payload affordances** — one control per direction,
   rather than one panel showing both.
@@ -126,11 +112,10 @@ things to update and three that will not be.
 None of it needs a new permission or a new destination: `storage`, and the requests
 03 already makes.
 
-That ladder is the argument this repository is making: a genuinely useful view
-costs zero permissions, and every permission after that should be traceable to a
-feature you can name. Read `01`, then diff it against `02`, then diff `02` against
-`03` — those diffs *are* the lesson about what each capability costs, and the second
-one is the lesson that a capability can cost nothing in the manifest.
+That ladder is the argument this repository is making: a genuinely useful view costs zero
+permissions, and every permission after that should be traceable to a feature you can
+name. Read `01`, diff it against `02`, then diff `02` against `03` — those diffs *are* the
+lesson, and the second one is the lesson that a capability can cost nothing in a manifest.
 
 ## How it works
 
@@ -175,7 +160,7 @@ The cards are not maintained by good intentions:
 
 | Gate | Refuses |
 |---|---|
-| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also refuses a **third-party package inside a bundle that the budget does not name**, which esbuild's own metafile decides rather than `package.json` — see [Dependencies](#dependencies). Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
+| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also **builds each project** and refuses a script the extension loads that no audited entry point produces — esbuild's own metafile decides that, and a script named only by an HTML page escapes every other check here. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink |
 | `npm run lineage` | a file duplicated across projects that has drifted, or that nobody has decided may drift — see [`scripts/lineage.json`](scripts/lineage.json) |
 | `npm run leak:gate` | private IPs, key material, bearer tokens, JWTs, and URLs pointing at hosts that are not on a short public allowlist |
 | `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves. And the heading a `#fragment` names, because a wrong anchor does not 404 — GitHub leaves the reader at the top of the page, which reads as "that section was deleted" |
@@ -183,12 +168,10 @@ The cards are not maintained by good intentions:
 
 Every gate ships with a self-test — `npm run surface:selftest`,
 `npm run lineage:selftest`, `npm run leak:selftest`, `npm run doc:selftest`,
-`npm run preflight:selftest` — driving it against a case per rule it must reject
-and a case it must accept. A gate that has quietly stopped detecting its own
-failure case is worse than no gate: it converts an unchecked risk into a false
-assurance. The last one on that list is the newest, and it was missing for the
-worst possible reason: `preflight` runs the other four and was the only gate here
-trusted purely on the strength of looking correct.
+`npm run preflight:selftest` — driving it against a case per rule it must reject and a
+case it must accept. A gate that has quietly stopped detecting its own failure case is
+worse than no gate: it converts an unchecked risk into a false assurance. The last is the
+newest, and was missing for the worst reason — `preflight` runs the other four.
 
 ### Every feature ships on, except one
 
@@ -225,11 +208,11 @@ suite but ours, and no reviewers but us. The rule now is a judgement instead:
 > where using one makes the example easier to read and harder to get wrong.
 
 **A dependency diff is not a manifest permission diff, but it is still an
-audit-surface diff. The repository budgets and reports both.** A package cannot
-grant itself a permission — the manifest is the only thing that can, and it is
-budgeted separately — but it does run inside the extension's own origin with the
-extension's own privileges, so "which packages, and how did they get in" is a
-question with an answer here rather than an install log.
+audit-surface diff.** A package cannot grant itself a permission — the manifest is
+the only thing that can, and that *is* budgeted, in `scripts/surface.json` — but a
+package does run inside the extension's own origin with the extension's own
+privileges, so "which packages, and how did they get in" is a question with an
+answer here rather than an install log.
 
 | | Enters the bundles | Arrives behind another package |
 |---|---|---|
@@ -237,27 +220,25 @@ question with an answer here rather than an install log.
 | [02](02-techniques/README.md#dependencies) | `valibot`, `p-limit` | `yocto-queue` |
 | [03](03-payloads/README.md#dependencies) | `valibot`, `p-limit` — the same set as 02 | `yocto-queue` |
 
-Each project's README carries a **dependency card** with the version, the licence,
-what the package is for, which bundles it is in, and what stayed
-application-owned. `npm run measure` prints what each one currently costs each
-bundle, from the same esbuild metafile the gate reads;
+Each project's README carries a short table naming the version, what the package is
+for, and what stayed application-owned. `npm run measure` prints what each one
+currently costs each bundle, read from esbuild's metafile;
 [`docs/design-notes.md`](docs/design-notes.md#dependencies) records the
 alternatives that were measured and lost, including the two evaluations that ended
 in no dependency at all.
 
 Three limits on that, stated rather than implied:
 
-- **The budget covers the bundles a user loads.** Repository tooling under
-  `scripts/` has its own dependencies — a semver implementation, a Markdown
-  parser, GitHub's slug algorithm — which are `devDependencies` and reach no
-  browser. Lower stakes, not zero: a gate that is wrong in the accepting direction
-  is worse than no gate, which is why each one has a self-test.
+- **Those tables are hand-written, and cover the bundles a user loads.** No check
+  compares them against the bundles; the review point for a new package is the
+  `package-lock.json` diff. Repository tooling under `scripts/` has its own
+  dependencies — a semver implementation, a Markdown parser, GitHub's slug
+  algorithm — which are `devDependencies` and reach no browser.
 - **This is an audit, not an attestation.** Nothing here verifies a package's
   contents against its repository, pins by integrity hash beyond what
   `package-lock.json` already does, or claims that a package that has been fine so
-  far will stay fine. What it does guarantee is that a *new* package appearing in a
-  bundle is a diff someone has to approve, including one that arrives as a
-  dependency of a dependency.
+  far will stay fine. In particular, a package that arrives as a dependency of a
+  dependency appears in the lockfile diff and nowhere else.
 - **Not one line of it is minified.** Every bundle ships readable with a source
   map, so what a package contributes can be read in `dist/` rather than taken on
   trust.
@@ -292,7 +273,7 @@ Run at the **repository root**; each one runs in every project.
 | `npm run build` | Bundle each project's `src/` into its `dist/` |
 | `npm test` | Unit + jsdom specs |
 | `npm run typecheck` | `tsc --noEmit`, over `src/` **and** `tests/` |
-| `npm run surface` | The permission budget, sinks, dependencies, binaries |
+| `npm run surface` | The permission budget, sinks, entry points, binaries |
 | `npm run measure` | Source, test and bundle sizes per project, and what each third-party package costs each bundle |
 | `npm run lineage` | Files duplicated across projects |
 | `npm run leak:gate` | Scan tracked files for anything that should not be published |

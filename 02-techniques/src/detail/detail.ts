@@ -1,38 +1,35 @@
 // ONE workflow's own page: what can be known about it, and its activities,
 // WITHOUT this extension asking Temporal anything at all.
 //
-// The list-page features above this one are split between a piggyback (the tree,
-// which reads a response the page was fetching anyway) and two questions of our
-// own (src/rowInfo/rowInfo.ts, which costs a request per running row). This file is back
-// to the piggyback, and it is the purest example of it in the repository: a
-// workflow's page already fetches its history and already fetches
-// DescribeWorkflowExecution — that is where its event list, its status and its
-// pending-activity table come from. Both answers pass through the fetch wrapper
-// this extension already installed. Reading them costs one clone and one parse.
+// The purest piggyback in the repository. A workflow's page already fetches its
+// history and already fetches DescribeWorkflowExecution — that is where its event
+// list, its status and its pending-activity table come from — and both answers pass
+// through the fetch wrapper this extension already installed. Reading them costs one
+// clone and one parse.
 //
 // THE TWO RESPONSES ANSWER DIFFERENT QUESTIONS, AND THAT IS NOT AN ACCIDENT.
 //
 //   • HISTORY names every activity that has been SCHEDULED, with its id, its type
 //     and the moment it was scheduled — including the ones that finished hours
 //     ago, which are the ones somebody debugging usually wants a log link for.
-//   • DESCRIBE is the only place a PENDING activity's attempt count exists.
-//     Temporal deliberately does not write ActivityTaskStarted into the history
-//     until the activity has completed or failed for the last time — "to avoid
-//     filling the Event History with noise" — and the docs point at the Describe
-//     API for a pending attempt count instead:
-//     https://docs.temporal.io/encyclopedia/retry-policies
+//   • DESCRIBE is the only place a PENDING activity's attempt count exists. Temporal
+//     deliberately does not write ActivityTaskStarted into the history until the
+//     activity has completed or failed for the last time — "to avoid filling the
+//     Event History with noise" — and points at the Describe API for a pending
+//     attempt count instead: https://docs.temporal.io/encyclopedia/retry-policies
 //
-// So an activity that is retrying right now appears in the history as a bare
-// ActivityTaskScheduled with no attempt count anywhere near it. That is not a hole
-// in this fold, and it is the same fact that forces the list page's retry badge to
-// call Describe (see the note at the top of src/rowInfo/rowInfo.ts). Folding both
-// responses into one shape is how the links end up with both halves.
+// So an activity retrying right now appears in the history as a bare
+// ActivityTaskScheduled with no attempt count anywhere near it. That is the same fact
+// that forces the list page's retry badge to call Describe (see the top of
+// src/rowInfo/rowInfo.ts), and folding both responses into one shape is how the links
+// end up with both halves.
 //
-// NO PAYLOAD IS READ HERE. Every activity event carries `input`, `result` or
-// `failure`, all of them application data and some of them encrypted; this fold
-// walks straight past them. What crosses the postMessage boundary is the reduced
-// shape below and nothing else — reduce at the boundary, not after crossing it,
-// or a "small" message quietly carries a customer's data onto the page bus.
+// INVARIANT: no payload is read here. Every activity event carries `input`, `result`
+// or `failure`, all of them application data and some of them encrypted; this fold
+// walks straight past them, and what crosses the postMessage boundary is the reduced
+// shape below and nothing else.
+// Breaking it: reduce after crossing instead of at the boundary, and a "small" message
+// quietly carries a customer's data onto the page bus.
 //
 // Everything in this file is pure. src/detail/detailWatch.ts does the observing (MAIN
 // world) and src/detail/detailLinks.ts does the drawing (ISOLATED world).

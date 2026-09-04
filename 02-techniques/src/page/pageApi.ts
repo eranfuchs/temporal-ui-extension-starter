@@ -21,42 +21,31 @@
 //      are kept apart even though the parsing is identical.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// THIS FILE IS A TRUST BOUNDARY, AND IT IS THE INTERESTING ONE IN THIS REPO
+// THIS FILE IS A TRUST BOUNDARY
 //
-// It holds authority its callers do not: the page's origin and the page's own
-// Authorization header. Its callers take instructions over window.postMessage,
-// which carries NO sender identity that cannot be forged — `event.source ===
-// window` only means "this page", and any script in this page can say that: the
-// Temporal UI itself, an npm dependency of it, or another installed extension's
-// content script, which shares the DOM and the message bus with ours.
-// `MESSAGE_SOURCE` and every field of every request are published in this
-// repository.
+// It holds authority its callers do not — the page's origin and the page's own
+// Authorization header — while they take instructions over window.postMessage,
+// which carries NO sender identity that cannot be forged. `event.source ===
+// window` only means "this page", and any script in this page can say that.
 //
-// A component that holds authority and applies it to whatever it is asked to do
-// is a confused deputy. The first version of this was one: it answered any
-// (namespace, workflowId, runId) in a message, so a forged message could read ANY
-// workflow's input or result with the page's bearer and receive the DECODED text
-// back on a channel the forger is listening to — including workflows the user
-// never opened, in another namespace they happen to have access to.
-//
-// Two things close that, and neither is a shape check:
-//
-//   • THE LEDGER. We fetch only for a run the PAGE ITSELF listed, in the
-//     namespace it listed it under, learned by parsing the list RESPONSE here.
-//     The bound is "what this page already fetched", which is exactly the bound
-//     the piggyback claims everywhere else in this repository.
-//   • NO TOKEN EGRESS. The bearer is attached to Temporal's own API and to
-//     nothing else, ever; there is no setting that changes that. It is reachable
-//     only through fetchForListedRun() below, which chooses the URL's origin
-//     itself and takes only a ROUTE from its caller.
-//
-// The Authorization header never leaves this module: not stored, not posted in
-// any message, not readable from the extension's own world.
+// INVARIANT: fetch only for a run the PAGE ITSELF listed, in the namespace it
+// listed it under, learned by parsing the list RESPONSE here — the ledger. The
+// bound is "what this page already fetched", the same bound the piggyback claims
+// everywhere else in this repository.
+// INVARIANT: the bearer goes to Temporal's own API and nowhere else, ever, with
+// no setting that changes it. It is reachable only through fetchForListedRun()
+// below, which chooses the URL's origin itself and takes only a ROUTE from its
+// caller; it is never stored, never posted in a message, and not readable from
+// the extension's own world.
+// Breaking either: a forged message reads ANY workflow the user's session can
+// reach, with the page's bearer, on a channel the forger is listening to — a
+// textbook confused deputy, which the first version of this was. Neither is a
+// shape check, and a shape check does not substitute for either. The full
+// argument is "the weakness, and what closing most of it took" in README.md.
 //
 // Note what is NOT claimed. This gate cannot be *forgotten* — there is no other
 // way to reach the bearer, so a new feature that fetches must pass it. It does
-// not sandbox its callers, who are our own code in the same bundle. Those are
-// different properties and only the first one is enforced here.
+// not sandbox its callers, who are our own code in the same bundle.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { safeParse } from 'valibot';

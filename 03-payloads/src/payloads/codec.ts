@@ -4,42 +4,21 @@
 // RESPONSIBILITY: plan the one request in this repository that leaves the browser
 // for a host the user named, and check its reply. Pure — every function here is a
 // value in and a value out. The fetch itself is src/payloads/payloadServe.ts's, through
-// fetchFromPageWorld() in src/page/pageApi.ts.
+// fetchFromPageWorld() in src/page/pageApi.ts, which issues it from the PAGE's world
+// because a content script cannot make it at all: the CORS reason, and why an
+// already-working codec server therefore needs no reconfiguration, are in README.md.
 //
 // This is the file to read if the question is "what can this extension send, and
 // where?". It is short on purpose.
 //
-// ─────────────────────────────────────────────────────────────────────────────
-// WHY THE FETCH HAPPENS IN THE PAGE'S WORLD, NOT THE EXTENSION'S
-//
-// A content script cannot make this request. Chrome's own documentation:
-// "Cross-origin requests are always treated as such in content scripts, even if
-// the extension has host permissions." The request would carry the extension's
-// origin, which nobody has allowed:
-//
-//   • On Temporal Cloud the API is NOT on cloud.temporal.io — it is on the
-//     tenant host, so this is a cross-origin request even for the page itself.
-//     It succeeds for the page because the tenant host sends the page's origin
-//     back in Access-Control-Allow-Origin. It would fail for us.
-//   • A codec server is configured with
-//     `Access-Control-Allow-Origin: https://cloud.temporal.io` because that is
-//     what the Temporal UI needs. Again: the page's origin, not ours.
-//
-// So the fetch is made from the MAIN world, where our request is
-// indistinguishable from one the Temporal UI would have made itself. The
-// consequence is the thing worth copying: **an already-working codec server needs
-// no reconfiguration for this extension**, and we still declare no
-// host_permissions, because a page-world fetch is the page's request, not ours.
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// NO CREDENTIAL IS REACHABLE FROM ANY FUNCTION HERE, and that is enforced one layer
-// down rather than promised here: codecDecodeCall() returns an
-// UnauthenticatedPost, a type with no `credentials` field, and
-// fetchFromPageWorld() writes `credentials: 'omit'` as a literal and refuses an
-// Authorization, Cookie or Proxy-Authorization header outright. The rule lives with
-// the function that SENDS the request rather than the one that describes it, so it
-// holds for the next caller too. The two switches that were deleted to get here are
-// in docs/design-notes.md.
+// INVARIANT: no credential is reachable from any function here, enforced one layer
+// down rather than promised here — codecDecodeCall() returns an UnauthenticatedPost, a
+// type with no `credentials` field, and fetchFromPageWorld() writes
+// `credentials: 'omit'` as a literal and refuses an Authorization, Cookie or
+// Proxy-Authorization header outright. The rule lives with the function that SENDS the
+// request rather than the one that describes it, so it holds for the next caller too.
+// Breaking it: the user's Temporal session leaves for a host typed into a settings
+// field. The two switches deleted to get here are in docs/design-notes.md.
 //
 // The consequence, stated plainly because it is a real limitation: a codec server
 // that authenticates its callers cannot be used from this extension. That is the

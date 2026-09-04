@@ -11,10 +11,8 @@
 //  1. BOTH SITES ARE ANCHORED TO MEANING, NOT POSITION — rule 1 at the top of
 //     render.ts. The activity anchor is the UI's own label, the words "Activity Id":
 //     a label is what the UI calls a field, so it survives a restyle in a way a
-//     generated class name does not. This file used to draw a floating card instead,
-//     on the argument that a workflow's page has no such anchor; that premise was
-//     false, and what the card cost is under "The floating card was the wrong
-//     answer" in docs/design-notes.md.
+//     generated class name does not. The floating card this used to draw instead, and
+//     what it cost, are in docs/design-notes.md.
 //  2. A BAR THAT CANNOT FIND ITS ANCHOR IS PARKED WHERE IT CAN BE SEEN.
 //     LINK_BAR_ADRIFT_CLASS, counted by the popup, with every pass looking for the
 //     real anchor again and moving the bar the moment it appears. The failure this
@@ -26,13 +24,10 @@
 //  3. IT FETCHES NOTHING. Everything here comes from responses the page fetched for
 //     itself, folded in the MAIN world by detailWatch.ts. No request, no cache, no
 //     pacing, and no ledger check — a ledger entry is authority to spend the page's
-//     bearer, and this feature never spends it. src/rowInfo/rowInfo.ts is the file to read
-//     for the other case.
-//
-//     This shows on screen, which is why it is worth stating: on a tab already open
-//     on a workflow when the extension loaded, the bar says it has observed nothing
-//     and asks for a reload rather than going and fetching the history itself. That
-//     is the trade this stage of the starter kit is demonstrating.
+//     bearer, and this feature never spends it. src/rowInfo/rowInfo.ts is the file to
+//     read for the other case. It shows on screen: on a tab already open on a workflow
+//     when the extension loaded, the bar says it has observed nothing and asks for a
+//     reload rather than fetching the history itself.
 
 import { safeParse } from 'valibot';
 

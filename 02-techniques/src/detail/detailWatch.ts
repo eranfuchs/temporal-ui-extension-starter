@@ -1,38 +1,27 @@
 // MAIN world: notice when the page fetches ONE workflow's history or description,
 // fold it (src/detail/detail.ts), and post the result across.
 //
-// This is the whole MAIN-world half of the detail-page feature, and it is short
-// because it borrows: the fetch wrapper is already installed by pageApi.ts, the
-// URL rules and the folds are pure functions in detail.ts, and the answer travels
-// on the same postMessage channel every other feature uses.
+// The whole MAIN-world half of the detail-page feature, short because it borrows: the
+// fetch wrapper is already installed by pageApi.ts, the URL rules and the folds are
+// pure functions in detail.ts, and the answer travels on the same postMessage channel
+// every other feature uses. It fetches nothing, which is most of why rowInfoServe.ts —
+// a cache, a concurrency cap, a backoff — is several times its size.
 //
-// IT FETCHES NOTHING. Compare rowInfoServe.ts, which is four times this size
-// entirely because it makes requests of its own and therefore needs a cache, a
-// concurrency cap and a backoff. The difference between piggybacking and asking is
-// most of that file.
+// INVARIANT: the watcher is registered UNCONDITIONALLY, even when the links are
+// switched off; what the setting gates is the RENDERING. inject.ts sets the same
+// precedent for the tree.
+// Breaking it: gating on an "enable" message from the ISOLATED world loses data. That
+// side has to read settings out of chrome.storage first, and the page's own history
+// fetch can easily land before that read returns — so the watcher misses the only
+// history response the page makes for that workflow and the links sit half-drawn until
+// the user navigates again, intermittently and only sometimes. What the gate would
+// save is one clone and one deferred JSON.parse per history page loaded.
 //
-// WHY THE WATCHER IS REGISTERED UNCONDITIONALLY, even when the links are switched
-// off. It costs one clone and one deferred JSON.parse per history page the user
-// loads — small, but not nothing on a workflow with a hundred thousand events.
-//
-// The alternative was an "enable" message from the ISOLATED world, so that a user
-// with the feature off pays zero. It was rejected because it loses data: the
-// ISOLATED script has to read settings out of chrome.storage first, and the page's
-// own history fetch can easily land before that read returns. The watcher would
-// then miss the only history response the page makes for that workflow, and the
-// links would sit half-drawn until the user navigated again — an intermittent,
-// timing-dependent failure, which is the kind this project spends its comments
-// trying to avoid.
-//
-// inject.ts already sets the precedent: it watches the page's list calls whether
-// or not the tree is enabled. Observation is unconditional here too, and what the
-// settings gate is the RENDERING.
-//
-// FOLD BEFORE POSTING, NEVER AFTER. A raw history event carries `input`, `result`
-// and `failure` — application data, some of it encrypted — and posting the events
-// across for the ISOLATED side to reduce would put all of it on the page's message
-// bus. detail.ts's fold keeps ids, type names, timestamps and attempt counts and
-// nothing else. Reduce at the boundary.
+// INVARIANT: fold before posting, never after. A raw history event carries `input`,
+// `result` and `failure` — application data, some of it encrypted — and detail.ts's
+// fold keeps ids, type names, timestamps and attempt counts and nothing else.
+// Breaking it: posting the events across for the ISOLATED side to reduce puts all of
+// it on the page's message bus.
 
 import {
     detailRefFromApiUrl,

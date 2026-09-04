@@ -119,7 +119,7 @@ runCheck('lineage self-test', NODE, ['scripts/lineage.mjs', '--selftest', '--qui
 
 // The permission ladder is this repository's main argument, and an argument that
 // is only stated in a README is one nobody notices going false.
-runCheck('surface (permissions, sinks, dependencies, binaries)', NODE, ['scripts/surface.mjs'], { unverifiedExit: 2 });
+runCheck('surface (permissions, sinks, entry points, binaries)', NODE, ['scripts/surface.mjs'], { unverifiedExit: 2 });
 runCheck('surface self-test', NODE, ['scripts/surface.mjs', '--selftest', '--quiet']);
 
 // Documentation is how anyone finds their way around three near-identical

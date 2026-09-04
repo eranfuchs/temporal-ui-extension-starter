@@ -1,54 +1,30 @@
 // Templated deep-links: "open this workflow in OUR log tool".
 //
-// This is the part of the extension most teams will actually adopt first.
-// Everyone correlates a Temporal workflow against logs, and everyone does it by
-// copying an id out of the UI and pasting it into a different tab. A per-row
-// button that carries the id AND the workflow's time window removes that step.
-//
-// The template is a string in extension settings, so pointing this at Splunk,
-// Loki/Grafana, Datadog, CloudWatch, Kibana or an internal tool is a settings
-// change and not a code change.
+// A link is a label and a URL template held in extension settings, so pointing
+// this at Splunk, Loki/Grafana, Datadog, CloudWatch, Kibana or an internal tool is
+// a settings change and not a code change. Everything here is pure: a row and a
+// template in, a URL out.
 //
 // Token syntax:  {name}  {name:raw}  {name-10m}  {name:raw+1h}
 //
-//   {workflowId}      percent-encoded, ready to drop into a query string
-//   {workflowId:raw}  verbatim — for the rare tool that wants it unencoded
+//   {workflowId}        percent-encoded, ready to drop into a query string
+//   {workflowId:raw}    verbatim — for the rare tool that wants it unencoded
 //   {startTimeIso-10m}  the start time, shifted 10 minutes earlier
 //
-// The offset exists because a log query needs a WINDOW, and the useful window
-// is almost never exactly the workflow's own start and end: the request that
-// triggered it was logged before it started, and the failure you are chasing is
-// often logged after it closed.
+// The offset is there because a log query needs a WINDOW, and the useful window is
+// almost never the workflow's own: the request that triggered the run was logged
+// before it started, and the failure is often logged after it closed. The full
+// vocabulary, and why an activity's ID rather than its TYPE identifies it, are in
+// README.md.
 //
-// ── TWO SCOPES, ONE VOCABULARY ───────────────────────────────────────────────
-//
-// A template that mentions an ACTIVITY token is a link about one activity, and a
-// template that does not is a link about the whole workflow. That is the only
-// difference between them, and it is DERIVED from the template's own text
-// (templateScope below) rather than declared in a second settings field.
-//
-// The alternative — a `scope: 'workflow' | 'activity'` dropdown beside every
-// template — was written first and thrown away. It could disagree with the
-// template, so every consumer needed a rule for "activity-scoped but uses no
-// activity token" and for its opposite, and the popup grew a control whose only
-// job was to be kept in sync with a string the user had already typed.
-//
-// The workflow list therefore shows workflow-scoped links only (an activity token
-// has nothing to fill from a table row), and a workflow's own page shows both: the
-// workflow-scoped ones beside its tabs, and the activity-scoped ones inside each
-// activity's own panel. Add `{activityId}` to a template and it moves between the
-// two, with nothing else to change.
-//
-// ── AN ACTIVITY IS IDENTIFIED BY ITS ID, NEVER BY ITS TYPE ───────────────────
-//
-// `{activityType}` is in the vocabulary because a log backend may index it, but it
-// is not an identity: a workflow that calls `chargeCard` three times produces three
-// activities of that type, and a link keyed on the type alone opens a search that
-// matches all three. `{activityId}` and `{activityEventId}` are unique within the
-// run — see activityByPanelId() in src/detail/detail.ts for which of them the page can
-// actually be matched on — and `{activityScheduled…}`/`{activityClosed…}` bound the
-// window to the one execution, which is what makes the link exact even on a backend
-// that only ever indexed the type.
+// INVARIANT: a template's scope is DERIVED from its own text (templateScope below),
+// never declared in a second settings field. A template mentioning an activity
+// token is a link about one activity; any other template is a link about the whole
+// workflow.
+// Breaking it: two sources of truth that can disagree, so every consumer needs a
+// rule for "activity-scoped but uses no activity token" and for its opposite, and a
+// misspelled {activityTyp} silently moves a template to a page you were not editing
+// instead of staying a visible unknown token on the one you were.
 
 import * as v from 'valibot';
 

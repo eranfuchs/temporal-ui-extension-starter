@@ -27,16 +27,16 @@
 //      @types/chrome dependency and no "chrome" in tsconfig's types;
 //   6. no source file uses a markup or code-execution sink (innerHTML, eval, …),
 //      found by PARSING the file rather than by matching lines of it;
-//   7. no UNBUDGETED third-party code enters a bundle — every package esbuild
-//      actually inlines is one this project declares and its budget allows,
-//      transitive packages included, and every declared runtime dependency
-//      really is bundled;
-//   8. every bundled package is DOCUMENTED in its project's README dependency
-//      card, at the version and licence of the copy that was actually inlined —
-//      because the budget above stops an unreviewed package arriving, and nothing
-//      else stops the card describing last month's one;
-//   9. no binary file outside the generated-icon allowlist, because a gate
+//   7. every script the extension actually loads is produced by an audited
+//      esbuild entry point — including one named only by an HTML page, which no
+//      manifest check ever mentions;
+//   8. no binary file outside the generated-icon allowlist, because a gate
 //      cannot read a binary and a committed image is a file nobody reviews.
+//
+// Third-party packages are deliberately NOT budgeted here. The inventory is a
+// short hand-written table in each project's README, `npm run measure` prints
+// what is actually in the bundles, and what stops a package arriving unreviewed
+// is the package-lock.json diff.
 //
 // Usage
 //   node scripts/surface.mjs                    check the repository
@@ -362,139 +362,6 @@ function loadedScripts(projectDir, manifest) {
     return wanted;
 }
 
-// A dependency card in a project README: the two-column table whose header row is
-// just the package name in backticks, and whose first row states the version and
-// licence.
-//
-//     | | `valibot` |
-//     |---|---|
-//     | **Version** | 1.4.2 — MIT |
-//
-// Loose about the rest of the table on purpose. This gate has an opinion about which
-// packages are documented and at what version, and none at all about how the prose
-// beside them is worded.
-const CARD_RE = /^\| *\| *`([^`]+)` *\|\r?\n\|[-| ]+\|\r?\n\| *\*\*Version\*\* *\| *([^\s|]+) *—? *([^|]*?) *\|/gm;
-
-function dependencySection(readme) {
-    const lines = readme.split('\n');
-    const start = lines.findIndex((line) => /^## +Dependencies *$/.test(line));
-    if (start < 0) return null;
-    const rest = lines.slice(start + 1);
-    const end = rest.findIndex((line) => /^## +/.test(line));
-    return (end < 0 ? rest : rest.slice(0, end)).join('\n');
-}
-
-// What the budget cannot check: whether the README still describes the packages that
-// are in the bundles TODAY. The budget stops an unreviewed package arriving; a card
-// naming a version that was bumped six weeks ago passes every other check here and
-// misinforms exactly the reader it was written for. Versions and licences are read
-// out of the package.json of the copy esbuild reported inlining, so this cannot drift
-// from the audit even if a second copy is installed somewhere in the tree.
-//
-// Direct packages need a card of their own — they are choices. A transitive one needs
-// only to be NAMED, with its version, inside the section: it belongs in the card of
-// whichever package dragged it in, and giving it its own card would read as a choice
-// somebody made.
-function checkDependencyCards(project, bundles) {
-    const findings = [];
-    const readmePath = join(project.dir, 'README.md');
-    const section = existsSync(readmePath) ? dependencySection(readFileSync(readmePath, 'utf8')) : null;
-    if (section === null) {
-        // A project that bundles nothing has nothing to document, and demanding a
-        // section anyway would be demanding a heading over an empty list. Whether it
-        // should have a README at all is another gate's business.
-        if (bundles.bundled.length === 0) return { checked: 0, findings: [] };
-        return {
-            checked: 0,
-            findings: [
-                `${project.id}: bundles ${bundles.bundled.join(', ')} but README.md has no "## Dependencies" section — ` +
-                    'a package a reader cannot look up is one nobody reviews',
-            ],
-        };
-    }
-
-    // packageRoots holds the path esbuild reported, which is relative to the project
-    // being built — the same resolution scripts/measure.mjs uses, so the two cannot
-    // disagree about which copy they read.
-    const metadataOf = (name) => {
-        const root = bundles.packageRoots.get(name);
-        if (!root) return null;
-        const path = join(project.dir, root, 'package.json');
-        if (!existsSync(path)) return null;
-        try {
-            return JSON.parse(readFileSync(path, 'utf8'));
-        } catch {
-            return null;
-        }
-    };
-
-    const cards = new Map();
-    for (const [, name, version, license] of section.matchAll(CARD_RE)) {
-        cards.set(name, { version, license });
-    }
-
-    let count = 0;
-    for (const name of bundles.direct) {
-        const card = cards.get(name);
-        if (!card) {
-            findings.push(
-                `${project.id}: bundles "${name}" but README.md's "## Dependencies" section has no card for it. ` +
-                    'Add one — the budget says a reviewer allowed it, the card says what a reader gets.',
-            );
-            continue;
-        }
-        count++;
-        const meta = metadataOf(name);
-        if (!meta) {
-            findings.push(
-                `${project.id}: could not read the installed package.json for "${name}", so its card was not checked ` +
-                    'against anything. Not checked is not clean.',
-            );
-            continue;
-        }
-        if (meta.version && card.version !== meta.version) {
-            findings.push(
-                `${project.id}: README.md's card for "${name}" says version ${card.version}, but the copy in the ` +
-                    `bundles is ${meta.version}`,
-            );
-        }
-        if (meta.license && !card.license.includes(meta.license)) {
-            findings.push(
-                `${project.id}: README.md's card for "${name}" says licence "${card.license}", but the package ` +
-                    `declares ${meta.license}`,
-            );
-        }
-    }
-
-    for (const name of bundles.transitive) {
-        const meta = metadataOf(name);
-        const version = meta?.version;
-        if (!section.includes(name)) {
-            findings.push(
-                `${project.id}: bundles "${name}" behind another package, and README.md's "## Dependencies" section ` +
-                    'never mentions it. Name it in the card of whatever brought it in.',
-            );
-            continue;
-        }
-        count++;
-        if (version && !section.includes(version)) {
-            findings.push(
-                `${project.id}: README.md mentions "${name}" but not its bundled version ${version}`,
-            );
-        }
-    }
-
-    for (const name of cards.keys()) {
-        if (!bundles.bundled.includes(name)) {
-            findings.push(
-                `${project.id}: README.md has a dependency card for "${name}", which no bundle contains. ` +
-                    'A card for a package that is not there is worse than none: it describes attack surface nobody has.',
-            );
-        }
-    }
-
-    return { checked: count, findings };
-}
 
 async function main(argv) {
     const rootIdx = argv.indexOf('--root');
@@ -530,7 +397,6 @@ async function main(argv) {
         parsed: 0,
         binaries: 0,
         bundles: 0,
-        dependencyCards: 0,
         bundledPackages: new Set(),
     };
 
@@ -591,109 +457,31 @@ async function main(argv) {
             }
         }
 
-        // ── What actually enters a bundle ──
+        // ── What the browser actually loads ──
         //
-        // This rule used to read package.json and stop there, under the heading
-        // "no runtime dependencies". Two things were wrong with that. It could
-        // not see an import at all — a package resolved from a hoisted install
-        // and inlined by esbuild left package.json untouched — and it treated a
-        // declaration as evidence of shipping, which is backwards in both
-        // directions. So the budget is compared against what esbuild says it put
-        // in the bundles, and the declarations are checked for being TRUE rather
-        // than for being empty.
-        const depBudget = declared.runtime_dependencies;
-        if (!depBudget) {
-            findings.push(
-                `${project.id}: budget has no "runtime_dependencies" — add one, including ` +
-                    '{ "direct": [], "also_bundled": [] } if the project bundles nothing but its own code. ' +
-                    'An absent budget must not read as an unlimited one.',
-            );
+        // Every script the extension loads has to be one of the audited entry
+        // points, or the audit reported on bundles that are not the ones the
+        // browser runs. A file named only by an HTML page is the case that
+        // escapes every other check here: preflight verifies manifest-named
+        // files exist in dist/, and popup.js is named by popup.html, not by the
+        // manifest. Answered by building, because the question is what esbuild
+        // produces and a config file can say anything.
+        const bundles = await analyseBundles(project.dir);
+        if (!bundles.ok) {
+            // Same rule as an unparseable source file: not checked is not clean.
+            findings.push(`${project.id}: ${bundles.why}`);
         } else {
-            const allowedDirect = new Set(depBudget.direct ?? []);
-            const allowedTransitive = new Set(depBudget.also_bundled ?? []);
-            const declaredDeps = new Set();
-            for (const key of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
-                for (const name of Object.keys(project.pkg[key] ?? {})) declaredDeps.add(name);
-            }
+            checked.bundles += bundles.entries.length;
+            for (const name of bundles.bundled) checked.bundledPackages.add(name);
 
-            for (const name of declaredDeps) {
-                if (!allowedDirect.has(name)) {
+            const produced = new Set(bundles.entries.map((entry) => entry.output.split('/').pop()));
+            for (const wanted of loadedScripts(project.dir, manifest)) {
+                if (!produced.has(wanted)) {
                     findings.push(
-                        `${project.id}: package.json declares runtime dependency "${name}", which its budget does not ` +
-                            'allow. Either it is not needed, or scripts/surface.json needs a reviewed edit saying why it is.',
+                        `${project.id}: loads "${wanted}", but no entry point in esbuild.config.mjs produces it — ` +
+                            'so nothing checked what goes into it',
                     );
                 }
-            }
-            for (const name of allowedDirect) {
-                if (!declaredDeps.has(name)) {
-                    findings.push(
-                        `${project.id}: budget allows direct dependency "${name}" but package.json does not declare it — ` +
-                            'a budget line nothing uses is a permission nobody reviewed. Remove it, or declare the dependency.',
-                    );
-                }
-            }
-
-            const bundles = await analyseBundles(project.dir);
-            if (!bundles.ok) {
-                // Same rule as an unparseable source file: not checked is not clean.
-                findings.push(`${project.id}: ${bundles.why}`);
-            } else {
-                checked.bundles += bundles.entries.length;
-                for (const name of bundles.bundled) checked.bundledPackages.add(name);
-
-                for (const name of bundles.direct) {
-                    if (declaredDeps.has(name)) continue;
-                    const importers = (bundles.importedBy.get(name) ?? []).slice(0, 3).join(', ');
-                    findings.push(
-                        `${project.id}: bundles "${name}", imported by ${importers}, but package.json does not declare it. ` +
-                            'It resolves today only because some other package installed it; declare it and budget it, ' +
-                            'or stop importing it.',
-                    );
-                }
-                for (const name of bundles.transitive) {
-                    if (allowedTransitive.has(name)) continue;
-                    findings.push(
-                        `${project.id}: bundles "${name}", which no source file of ours imports — it arrived through a ` +
-                            'dependency of a dependency. If that is expected, add it to "also_bundled"; the point of ' +
-                            'listing it is that a version bump pulling in something new does not pass unnoticed.',
-                    );
-                }
-                for (const name of allowedTransitive) {
-                    if (!bundles.bundled.includes(name)) {
-                        findings.push(
-                            `${project.id}: budget lists "${name}" under "also_bundled" but no bundle contains it — remove it`,
-                        );
-                    }
-                }
-                for (const name of declaredDeps) {
-                    if (!bundles.bundled.includes(name)) {
-                        findings.push(
-                            `${project.id}: declares runtime dependency "${name}" but no bundle contains it. ` +
-                                'A declaration is not evidence of shipping: either it belongs in devDependencies, ' +
-                                'or the code that was going to use it never landed.',
-                        );
-                    }
-                }
-
-                // Every script the extension actually loads has to be one of the
-                // audited entry points, or the audit reported on bundles that are
-                // not the ones the browser runs. A file named only by an HTML page
-                // is the case that escapes every other check here: preflight
-                // verifies manifest-named files exist in dist/, and popup.js is
-                // named by popup.html, not by the manifest.
-                const produced = new Set(bundles.entries.map((entry) => entry.output.split('/').pop()));
-                for (const wanted of loadedScripts(project.dir, manifest)) {
-                    if (!produced.has(wanted)) {
-                        findings.push(
-                            `${project.id}: loads "${wanted}", but no entry point in esbuild.config.mjs produces it — ` +
-                                'so nothing checked what goes into it',
-                        );
-                    }
-                }
-
-                const cards = checkDependencyCards(project, bundles);
-                checked.dependencyCards += cards.checked;
-                findings.push(...cards.findings);
             }
         }
 
@@ -770,11 +558,12 @@ async function main(argv) {
         console.log(`  manifests: ${checked.manifests}`);
         console.log(`  source files scanned for sinks: ${checked.sourceFiles} (${checked.parsed} parsed as code)`);
         console.log(`  bundles built and inspected: ${checked.bundles}`);
+        // Printed, not checked — this gate has no opinion about which packages are
+        // there. Seeing the list is how you notice one you did not expect.
         console.log(
             `  third-party packages inside them: ${checked.bundledPackages.size}` +
                 (checked.bundledPackages.size > 0 ? ` (${[...checked.bundledPackages].sort().join(', ')})` : ''),
         );
-        console.log(`  dependency-card entries checked against the installed copy: ${checked.dependencyCards}`);
         console.log(`  binary files found: ${checked.binaries}`);
         const budgeted = Object.keys(budget.projects ?? {});
         console.log(`  budgets declared: ${budgeted.length} (${budgeted.join(', ')})`);
@@ -793,8 +582,7 @@ async function main(argv) {
         console.log(
             `surface: clean — ${checked.manifests} manifest(s) within budget, ` +
                 `${checked.sourceFiles} source file(s) free of banned sinks, ` +
-                `${checked.bundles} bundle(s) carrying no unbudgeted third-party code, ` +
-                `${checked.dependencyCards} documented package(s) at the version installed`,
+                `${checked.bundles} audited bundle(s) covering every script the extensions load`,
         );
     }
     return 0;
@@ -829,50 +617,19 @@ function selftest() {
                 externally_connectable: false,
                 content_security_policy: false,
                 chrome_api: false,
-                runtime_dependencies: { direct: [], also_bundled: [] },
                 why: 'fixture',
             },
         },
     };
 
-    // A package in the fixture's node_modules, resolved by esbuild exactly the way
-    // a real one is. Real resolution matters here: the rule under test is about
-    // what esbuild actually inlines, so a stubbed metafile would test the stub.
-    // `spec` is the module source, or `{ source, ...manifest }` when a case needs to
-    // pin a version or a licence — rule 8 reads both out of this file. `packageJson:
-    // false` writes none at all, which resolution still handles (it falls back to
-    // index.js) and which leaves rule 8 with nothing to check a card against.
-    const makePackage = (treeRoot, name, spec) => {
-        const { source, packageJson = true, ...fields } = typeof spec === 'string' ? { source: spec } : spec;
-        const packageDir = join(treeRoot, 'node_modules', name);
-        mkdirSync(packageDir, { recursive: true });
-        if (packageJson) {
-            writeFileSync(
-                join(packageDir, 'package.json'),
-                JSON.stringify({ name, version: '1.0.0', main: 'index.js', ...fields }),
-            );
-        }
-        writeFileSync(join(packageDir, 'index.js'), source);
-    };
-
-    // A README carrying a dependency card per named package, in the shape rule 8
-    // reads. Written by the fixture rather than hand-typed per case so that a change
-    // to the card format is one edit here rather than five edits below. The trailing
-    // `## Layout` heading is load-bearing: it proves the section reader stops at the
-    // next heading instead of swallowing the rest of the file.
-    const makeReadme = (cards, note = '') =>
-        `# fixture\n\n## Dependencies\n\n${cards
-            .map(([name, version, license]) => `| | \`${name}\` |\n|---|---|\n| **Version** | ${version} — ${license} |\n`)
-            .join('\n')}${note ? `\n${note}\n` : ''}\n## Layout\n\nNothing.\n`;
-
     // Builds a one-project tree. `manifest` and `budget` are merged over the
     // baseline so each fixture states only the thing it is testing.
-    const makeTree = (name, { manifest = {}, budget = {}, files = {}, pkg = {}, packages = {}, readme } = {}) => {
+    const makeTree = (name, { manifest = {}, budget = {}, files = {}, pkg = {} } = {}) => {
         const treeRoot = join(dir, name);
         const projectDir = join(treeRoot, '01-a');
         mkdirSync(join(projectDir, 'public'), { recursive: true });
         mkdirSync(join(projectDir, 'src'), { recursive: true });
-        // Every fixture is buildable, because the dependency rule answers its
+        // Every fixture is buildable, because the entry-point rule answers its
         // question by building. One entry point, matching the base manifest's
         // content.js.
         writeFileSync(
@@ -881,7 +638,6 @@ function selftest() {
                 'export const options = { entryPoints: ENTRY_POINTS, outdir: "dist", bundle: true, ' +
                 'format: "iife", target: "chrome110", minify: false, sourcemap: true, logLevel: "silent" };\n',
         );
-        for (const [packageName, source] of Object.entries(packages)) makePackage(treeRoot, packageName, source);
         writeFileSync(
             join(projectDir, 'public', 'manifest.json'),
             JSON.stringify({ ...BASE_MANIFEST, ...manifest }, null, 2),
@@ -890,7 +646,6 @@ function selftest() {
             join(projectDir, 'package.json'),
             JSON.stringify({ name: '01-a', version: '0.0.0', ...pkg }, null, 2),
         );
-        if (readme !== undefined) writeFileSync(join(projectDir, 'README.md'), readme);
         writeFileSync(join(projectDir, 'src', 'content.ts'), files['src/content.ts'] ?? 'const rows = [];\n');
         for (const [path, contents] of Object.entries(files)) {
             if (path === 'src/content.ts') continue;
@@ -1112,276 +867,6 @@ function selftest() {
             'rejects @types/chrome where the chrome API is not budgeted',
             types.status === 1 && types.output.includes('@types/chrome'),
             `exit ${types.status}: ${types.output.trim()}`,
-        );
-
-        // ── Rule 7: what actually enters a bundle ────────────────────────────
-        // Six cases, because there are six different ways this can be wrong and
-        // five of them used to pass. The old rule read package.json and nothing
-        // else, so it could not see an import at all.
-
-        const USES_LIB = "import value from 'fake-lib';\ndocument.title = String(value);\n";
-
-        // Every fixture below this line bundles fake-lib, and rule 8 wants a card for
-        // anything bundled. Only the rule-8 cases vary it, so the rest share one.
-        const LIB_CARD = makeReadme([['fake-lib', '1.0.0', 'MIT']]);
-
-        // KNOWN-GOOD: declared, budgeted, imported, bundled, documented. All five agree.
-        const allowedDep = drive(
-            makeTree('depok', {
-                files: { 'src/content.ts': USES_LIB },
-                pkg: { dependencies: { 'fake-lib': '^1' } },
-                packages: { 'fake-lib': 'export default 1;\n' },
-                budget: { projects: { '01-a': { runtime_dependencies: { direct: ['fake-lib'], also_bundled: [] } } } },
-                readme: LIB_CARD,
-            }),
-        );
-        check(
-            'accepts a dependency that is declared, budgeted and bundled',
-            allowedDep.status === 0,
-            `exit ${allowedDep.status}: ${allowedDep.output.trim()}`,
-        );
-
-        // The hoisted-install hole, and the reason this rule had to start reading
-        // bundles: nothing is declared, yet the package ships.
-        const undeclared = drive(
-            makeTree('depundeclared', {
-                files: { 'src/content.ts': USES_LIB },
-                packages: { 'fake-lib': 'export default 1;\n' },
-                readme: LIB_CARD,
-            }),
-        );
-        check(
-            'rejects a package that is imported and bundled but never declared',
-            undeclared.status === 1 && undeclared.output.includes('does not declare it'),
-            `exit ${undeclared.status}: ${undeclared.output.trim()}`,
-        );
-
-        const unbudgetedDep = drive(
-            makeTree('depunbudgeted', {
-                files: { 'src/content.ts': USES_LIB },
-                pkg: { dependencies: { 'fake-lib': '^1' } },
-                packages: { 'fake-lib': 'export default 1;\n' },
-                readme: LIB_CARD,
-            }),
-        );
-        check(
-            'rejects a declared dependency the budget does not allow',
-            unbudgetedDep.status === 1 && unbudgetedDep.output.includes('budget does not allow'),
-            `exit ${unbudgetedDep.status}: ${unbudgetedDep.output.trim()}`,
-        );
-
-        // A package nobody chose. This is what a version bump looks like when it
-        // starts pulling in something new, and it is invisible in package.json.
-        const transitive = drive(
-            makeTree('deptransitive', {
-                files: { 'src/content.ts': USES_LIB },
-                pkg: { dependencies: { 'fake-lib': '^1' } },
-                packages: {
-                    'fake-lib': "import helper from 'fake-helper';\nexport default helper + 1;\n",
-                    'fake-helper': 'export default 41;\n',
-                },
-                budget: { projects: { '01-a': { runtime_dependencies: { direct: ['fake-lib'], also_bundled: [] } } } },
-                // Documented, so the budget is the only thing left to object to.
-                readme: makeReadme([['fake-lib', '1.0.0', 'MIT']], 'fake-helper 1.0.0 arrives behind it.'),
-            }),
-        );
-        check(
-            'rejects a transitive package that reaches a bundle unlisted',
-            transitive.status === 1 && transitive.output.includes('fake-helper') && transitive.output.includes('also_bundled'),
-            `exit ${transitive.status}: ${transitive.output.trim()}`,
-        );
-
-        // The reverse error: a declaration treated as evidence of shipping.
-        const unusedDep = drive(
-            makeTree('depunused', {
-                pkg: { dependencies: { 'fake-lib': '^1' } },
-                packages: { 'fake-lib': 'export default 1;\n' },
-                budget: { projects: { '01-a': { runtime_dependencies: { direct: ['fake-lib'], also_bundled: [] } } } },
-            }),
-        );
-        check(
-            'reports a declared dependency that no bundle contains',
-            unusedDep.status === 1 && unusedDep.output.includes('no bundle contains it'),
-            `exit ${unusedDep.status}: ${unusedDep.output.trim()}`,
-        );
-
-        // A budget with no dependency section must not read as an empty one.
-        const noDepBudget = makeTree('depnobudget');
-        writeFileSync(
-            noDepBudget.budgetPath,
-            JSON.stringify(
-                {
-                    ...BASE_BUDGET,
-                    projects: { '01-a': { ...BASE_BUDGET.projects['01-a'], runtime_dependencies: undefined } },
-                },
-                null,
-                2,
-            ),
-        );
-        const noDepBudgetRun = drive(noDepBudget);
-        check(
-            'rejects a project whose budget omits runtime_dependencies',
-            noDepBudgetRun.status === 1 && noDepBudgetRun.output.includes('runtime_dependencies'),
-            `exit ${noDepBudgetRun.status}: ${noDepBudgetRun.output.trim()}`,
-        );
-
-        // ── Rule 8: the cards that describe what rule 7 allowed ──────────────
-        // Rule 7 answers "may this package be here?". Rule 8 answers "does the
-        // README still describe the one that IS here?" — the question that goes
-        // stale on its own, silently, while every other check stays green. Each
-        // case below is a way a card can be wrong without a single import
-        // changing, so the budget cannot see any of them.
-        const LIB_DEP = {
-            files: { 'src/content.ts': USES_LIB },
-            pkg: { dependencies: { 'fake-lib': '^1' } },
-            packages: { 'fake-lib': 'export default 1;\n' },
-            budget: { projects: { '01-a': { runtime_dependencies: { direct: ['fake-lib'], also_bundled: [] } } } },
-        };
-
-        const noSection = drive(
-            makeTree('cardnosection', { ...LIB_DEP, readme: '# fixture\n\n## Layout\n\nNothing.\n' }),
-        );
-        check(
-            'rejects a bundling project whose README has no "## Dependencies" section',
-            noSection.status === 1 && noSection.output.includes('"## Dependencies" section'),
-            `exit ${noSection.status}: ${noSection.output.trim()}`,
-        );
-
-        // A mention somewhere else in the README is not documentation of a
-        // dependency, and reading past the next heading would have accepted it.
-        const outsideSection = drive(
-            makeTree('cardoutside', {
-                ...LIB_DEP,
-                readme: '# fixture\n\n## Dependencies\n\nNone yet.\n\n## Layout\n\n| | `fake-lib` |\n|---|---|\n| **Version** | 1.0.0 — MIT |\n',
-            }),
-        );
-        check(
-            'does not accept a card that sits below the section it belongs in',
-            outsideSection.status === 1 && outsideSection.output.includes('has no card for it'),
-            `exit ${outsideSection.status}: ${outsideSection.output.trim()}`,
-        );
-
-        // The whole reason this rule reads package.json instead of trusting prose:
-        // a bump changes the bundle and nothing else notices.
-        const staleVersion = drive(
-            makeTree('cardversion', { ...LIB_DEP, readme: makeReadme([['fake-lib', '9.9.9', 'MIT']]) }),
-        );
-        check(
-            'rejects a card whose version is not the version in the bundle',
-            staleVersion.status === 1 && staleVersion.output.includes('says version 9.9.9'),
-            `exit ${staleVersion.status}: ${staleVersion.output.trim()}`,
-        );
-
-        const wrongLicense = drive(
-            makeTree('cardlicense', {
-                ...LIB_DEP,
-                packages: { 'fake-lib': { source: 'export default 1;\n', license: 'Apache-2.0' } },
-                readme: makeReadme([['fake-lib', '1.0.0', 'MIT']]),
-            }),
-        );
-        check(
-            'rejects a card whose licence is not the licence the package declares',
-            wrongLicense.status === 1 && wrongLicense.output.includes('declares Apache-2.0'),
-            `exit ${wrongLicense.status}: ${wrongLicense.output.trim()}`,
-        );
-
-        // A budgeted transitive still has to be findable by a reader. Version 2.5.0
-        // rather than 1.0.0 so that "the section contains the version" cannot be
-        // satisfied by the direct package's card sitting above it.
-        const HELPER_DEP = {
-            files: { 'src/content.ts': USES_LIB },
-            pkg: { dependencies: { 'fake-lib': '^1' } },
-            packages: {
-                'fake-lib': "import helper from 'fake-helper';\nexport default helper + 1;\n",
-                'fake-helper': { source: 'export default 41;\n', version: '2.5.0' },
-            },
-            budget: {
-                projects: {
-                    '01-a': { runtime_dependencies: { direct: ['fake-lib'], also_bundled: ['fake-helper'] } },
-                },
-            },
-        };
-
-        const silentTransitive = drive(
-            makeTree('cardtransitive', { ...HELPER_DEP, readme: LIB_CARD }),
-        );
-        check(
-            'rejects a budgeted transitive the section never mentions',
-            silentTransitive.status === 1 && silentTransitive.output.includes('never mentions it'),
-            `exit ${silentTransitive.status}: ${silentTransitive.output.trim()}`,
-        );
-
-        const namelessVersion = drive(
-            makeTree('cardtransitiveversion', {
-                ...HELPER_DEP,
-                readme: makeReadme([['fake-lib', '1.0.0', 'MIT']], 'fake-helper arrives behind it.'),
-            }),
-        );
-        check(
-            'rejects a mentioned transitive whose version is missing',
-            namelessVersion.status === 1 && namelessVersion.output.includes('not its bundled version 2.5.0'),
-            `exit ${namelessVersion.status}: ${namelessVersion.output.trim()}`,
-        );
-
-        // KNOWN-GOOD: a transitive named with its version, inside the section, in
-        // the card of the package that brought it. No card of its own — it was
-        // nobody's choice.
-        const namedTransitive = drive(
-            makeTree('cardtransitiveok', {
-                ...HELPER_DEP,
-                readme: makeReadme([['fake-lib', '1.0.0', 'MIT']], 'fake-helper 2.5.0 arrives behind it.'),
-            }),
-        );
-        check(
-            'accepts a transitive named with its version in the section',
-            namedTransitive.status === 0,
-            `exit ${namedTransitive.status}: ${namedTransitive.output.trim()}`,
-        );
-
-        // The reverse rot, and the more misleading one: a card describing surface
-        // that was removed. Nothing else here can tell you the package is gone.
-        const ghostCard = drive(
-            makeTree('cardghost', {
-                ...LIB_DEP,
-                readme: makeReadme([
-                    ['fake-lib', '1.0.0', 'MIT'],
-                    ['fake-gone', '3.0.0', 'MIT'],
-                ]),
-            }),
-        );
-        check(
-            'rejects a card for a package no bundle contains',
-            ghostCard.status === 1 && ghostCard.output.includes('fake-gone'),
-            `exit ${ghostCard.status}: ${ghostCard.output.trim()}`,
-        );
-
-        // The direction a card rule loses most quietly: a card that could not be
-        // CHECKED must not report as checked. This is not hypothetical — every card
-        // in the repository reported "could not be read" while this rule was being
-        // written, because the path it joined was wrong, and a rule that shrugged at
-        // that would have reported eight documented packages and verified none.
-        const unreadable = drive(
-            makeTree('cardunreadable', {
-                ...LIB_DEP,
-                packages: { 'fake-lib': { source: 'export default 1;\n', packageJson: false } },
-                readme: LIB_CARD,
-            }),
-        );
-        check(
-            'refuses to call a card checked when the installed package cannot be read',
-            unreadable.status === 1 && unreadable.output.includes('Not checked is not clean'),
-            `exit ${unreadable.status}: ${unreadable.output.trim()}`,
-        );
-
-        // KNOWN-GOOD, and the boundary of the rule: 01 bundling nothing must not be
-        // asked for a heading over an empty list.
-        const nothingToDocument = drive(
-            makeTree('cardnone', { readme: '# fixture\n\n## Layout\n\nNothing.\n' }),
-        );
-        check(
-            'asks for no section from a project that bundles nothing',
-            nothingToDocument.status === 0,
-            `exit ${nothingToDocument.status}: ${nothingToDocument.output.trim()}`,
         );
 
         // An audit that inspects fewer bundles than the extension loads is an

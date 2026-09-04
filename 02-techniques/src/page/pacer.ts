@@ -1,30 +1,14 @@
-// The load control for the only feature in this repository that makes requests of
-// its own volume: what keeps a screen of rows from becoming a screen of requests,
-// and what happens when the server says "slow down".
+// The load control for the features that make requests of their own volume: what
+// keeps a screen of rows from becoming a screen of requests, and what happens when
+// the server says "slow down".
 //
-// TWO THINGS LIVE HERE, AND THE SPLIT IS THE POINT.
-//
-//   The slot accounting — "run at most four of these at a time, queue the rest,
-//   start the next one when one finishes" — is p-limit's. It is a generic
-//   algorithm with no Temporal in it, and this file used to contain a hand-written
-//   version that was WRONG in a way no test could catch, because it had no tests:
-//
-//       while (active >= MAX_CONCURRENT) await waitForASlot();
-//       const pause = blockedUntil - Date.now();
-//       if (pause > 0) await sleep(pause);       // ← the slot is NOT held yet
-//       active++;
-//
-//   Check, then wait, then reserve. During a backoff nothing is running, so
-//   `active` is 0, so EVERY caller passed the check, slept, and woke together: a
-//   hundred rows became a hundred simultaneous requests at the exact moment the
-//   server had asked for fewer. The cap held in the only case where it was never
-//   needed and failed in the only case where it was.
-//
-//   The pacing POLICY is ours, and stays ours, because every line of it is a
-//   decision about a specific server: which Retry-After forms to read, how long a
-//   wait to believe, what to do when the server says slow down without saying how
-//   long for, and which of two overlapping delays wins. No library knows any of
-//   that, and a reader porting this to their own backend changes only this half.
+// The split is the point. The slot accounting — "run at most four of these at a time,
+// queue the rest, start the next one when one finishes" — is p-limit's, because it is
+// a generic algorithm with no Temporal in it. The pacing POLICY is ours and stays
+// ours: which Retry-After forms to read, how long a wait to believe, what to do when
+// the server says slow down without saying how long for, and which of two overlapping
+// delays wins. No library knows any of that, and a reader porting this to their own
+// backend changes only this half.
 //
 // INVARIANT: the pacing library supplies slots and nothing else. In particular a
 // server-directed Retry-After is never expressed as a library rate limit.
@@ -32,16 +16,20 @@
 // asked for, and dressing the second as the first buries the half a reader forks.
 // p-queue was measured against p-limit here; see docs/design-notes.md#two-queue-libraries-measured.
 //
-// HOW THE ORIGINAL BUG STAYS FIXED: the backoff sleep happens INSIDE the limited
-// task, so a caller waiting out a Retry-After is holding its slot — p-limit counts
-// it in `activeCount`, not `pendingCount`. A backoff therefore parks at most
-// `maxConcurrent` callers and the rest stay queued behind them, which is both
-// original rules at once: nothing fetches before the block expires, and the expiry
-// cannot release the queue as a burst, because the queue never had more than four
-// callers in it to release.
+// INVARIANT: the backoff sleep happens INSIDE the limited task, so a caller waiting
+// out a Retry-After is HOLDING its slot — p-limit counts it in `activeCount`, not
+// `pendingCount`. A backoff therefore parks at most `maxConcurrent` callers and the
+// rest stay queued behind them: nothing fetches before the block expires, and the
+// expiry cannot release the queue as a burst.
+// Breaking it: check the slots, then sleep, then reserve — which is what the
+// hand-written version here did, untested. During a backoff nothing is running, so
+// `active` is 0, so every caller passes the check, sleeps, and wakes together: a
+// hundred rows became a hundred simultaneous requests at the exact moment the server
+// had asked for fewer. The cap held in the only case where it was never needed and
+// failed in the only case where it was.
 //
-// The clock and sleep are injected for one reason: every invariant above is about
-// TIME, and a test that cannot control time can only assert the shape of the code.
+// The clock and sleep are injected because every invariant above is about TIME, and a
+// test that cannot control time can only assert the shape of the code.
 // tests/unit/pacer.spec.ts drives all of them with a fake clock and no timers.
 
 import pLimit from 'p-limit';

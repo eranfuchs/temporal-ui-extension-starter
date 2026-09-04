@@ -54,8 +54,8 @@ function measureTree(dir) {
 const kb = (bytes) => `${(bytes / 1024).toFixed(1)}kb`;
 
 // The version and license of the copy esbuild actually inlined, read from the package
-// directory the metafile pointed at. UNKNOWN rather than a guess: a dependency card
-// that states a license nobody read is worse than one that says it could not find it.
+// directory the metafile pointed at. UNKNOWN rather than a guess: a README stating a
+// license nobody read is worse than this command admitting it could not find one.
 function describePackage(projectDir, relativeRoot) {
     try {
         const pkg = JSON.parse(readFileSync(join(projectDir, relativeRoot, 'package.json'), 'utf8'));
@@ -66,9 +66,9 @@ function describePackage(projectDir, relativeRoot) {
 }
 
 // One row per third-party package in a project's bundles: what it is, where it came
-// from, which bundles carry it and what it costs each of them. This is the shape the
-// per-stage dependency cards in the READMEs are written from, so that a card and this
-// command cannot disagree without one of them being edited.
+// from, which bundles carry it and what it costs each of them. Nothing checks the
+// hand-written dependency tables in the READMEs against this, so this output is how a
+// reader confirms one — and how the author writes the next version of it.
 function describeBundledPackages(projectDir, bundles) {
     const rows = [];
     for (const name of bundles.bundled) {

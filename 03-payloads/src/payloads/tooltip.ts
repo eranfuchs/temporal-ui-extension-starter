@@ -4,18 +4,16 @@
 // payload. It owns the panel's markup, its position, the pointer and keyboard
 // gestures that open and close it, and the rendering of an answer. It asks
 // src/payloads/payloadClient.ts for the answer and never fetches anything itself — the
-// fetch is payloadServe.ts's, in the page's world, for the CORS reasons set out at
-// the top of codec.ts.
+// fetch is payloadServe.ts's, in the page's world, for the CORS reason in README.md.
 //
 // ISOLATED world. That matters for more than imports: the panel lives on
 // document.body, which is the page's DOM, not one of our own. See rule 5.
 //
-// FIVE RULES here — all about the element and the gesture. The four about which
-// ANSWER may be believed are the client's, at the top of src/payloads/payloadClient.ts, and
-// are numbered as invariants so a citation says which file it means. Each of these
-// five was broken at least once by the code written to uphold it, and the incidents
-// are in docs/design-notes.md under "The payload panel" — required reading before
-// deleting one.
+// FIVE RULES here, all about the element and the gesture; the four about which ANSWER
+// may be believed are the client's, numbered as invariants so a citation says which
+// file it means. Each of these five was broken at least once by the code written to
+// uphold it — the incidents are in docs/design-notes.md under "The payload panel",
+// and the numbering is cited from tests, so renumber nothing.
 //
 //  1. NOTHING IS FETCHED ON RENDER. A table of 100 rows must cost zero requests
 //     until a pointer lands on one. The only entry points are pointerover,

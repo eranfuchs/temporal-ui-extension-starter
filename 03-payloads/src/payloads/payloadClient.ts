@@ -2,10 +2,9 @@
 //
 // RESPONSIBILITY: turn "what was this run's input?" into at most one message, and
 // return the answer that belongs to that question. Nothing here touches the DOM,
-// and nothing here fetches — the fetch is payloadServe.ts's, in the page's world,
-// for the CORS reasons set out at the top of codec.ts. src/payloads/tooltip.ts owns the
-// element and decides WHEN to ask; this file owns what happens between asking and
-// answering.
+// and nothing here fetches — the fetch is payloadServe.ts's, in the page's world, for
+// the CORS reason in README.md. src/payloads/tooltip.ts owns the element and decides
+// WHEN to ask; this file owns what happens between asking and answering.
 //
 // It is the second client of a pattern src/rowInfo/rowInfoClient.ts established, kept
 // separate rather than generalised: the two ask different questions, and the
