@@ -803,8 +803,8 @@ refusing to format rather than dropping anything, and exported so the spec could
 reach it. A guard that cannot be tested is a comment.
 
 **What 03 does instead, now.** Nothing: `decodePayload()` stops after UTF-8 and the
-panel shows the bytes that arrived. No formatter of any kind, and therefore no
-formatter that can be wrong. That gap is the feature stage 04 buys back, at which
+panel shows what came back, with nothing re-indenting it. No formatter of any kind,
+and therefore no formatter that can be wrong. That gap is the feature stage 04 buys back, at which
 point the table above says what the applier costs and the survey below says what the
 scanner options are.
 
@@ -891,8 +891,8 @@ in *coverage* over the regex heuristic it replaced — but both are comfort, not
 correctness, and neither is what this rung is about. So the dependency went out,
 `jsonText.ts` with it, and then the heuristic went out too: 03 does not format a
 payload at all. Displaying JSON *as JSON* is one whole job, and it belongs to the rung
-that has time to do it properly rather than to the one whose subject is getting the
-bytes in front of you unaltered.
+that has time to do it properly rather than to the one whose subject is getting a
+payload in front of you with no formatter in between.
 
 What that cost and saved, measured: 03's bundles went from 307.3kb to 233.1kb over the
 two removals, the project's declared dependencies from three to two, and 03 now adds
@@ -1075,12 +1075,16 @@ no bundle contains — were each caught by exactly the case written for them. Th
 silently skipping a package whose metadata could not be read, survived: there was no case
 for it. There is now.
 
-Writing the cards also found something no check was looking for. `jsonc-parser` reaches
-`dist/popup.js`, which has no payload panel and no JSON to scan, because the popup imports
-`safeCodecEndpoint` from `src/payloads/codec.ts` and the module-level declarations come
-with it. Splitting that file to shed them would trade a coherent "what can this extension
-send, and where?" unit for a smaller popup, so 03's card says so plainly instead. A card
-that has to admit something is a card doing its job.
+Writing the cards also found something no check was looking for — and the finding has
+since been overtaken, so it is recorded here as history rather than as current state.
+`jsonc-parser` was reaching `dist/popup.js`, which has no payload panel and no JSON to
+scan, because the popup imports `safeCodecEndpoint` from `src/payloads/codec.ts` and the
+module-level declarations came with it. Splitting that file to shed them would have traded
+a coherent "what can this extension send, and where?" unit for a smaller popup, so 03's
+card said so plainly instead. The dependency then left 03 altogether along with the
+formatting it was there for — the section above — so there is no card left to read that
+admission in. What survives is the general point: a card that has to admit something is a
+card doing its job.
 
 ### A hostname with no letters in it
 

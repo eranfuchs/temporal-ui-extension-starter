@@ -162,7 +162,19 @@ export type Settings = v.InferOutput<typeof settingsSchema>;
 // object. One declaration rather than two, so a default cannot be changed in the
 // schema and missed here — which is the mistake the note under withActivityScope is
 // about, one level down.
-export const DEFAULT_SETTINGS: Settings = v.parse(settingsSchema, {});
+//
+// A FUNCTION, for the same reason the `links` fallback above is one: every caller that
+// might KEEP what it gets needs its own objects. loadSettings() returns this whole
+// thing when the stored object is unusable, and the popup edits a link in place — so a
+// shared one made two fallback loads alias one array, and an edit in the first tab
+// changed what the second load returned.
+export function defaultSettings(): Settings {
+    return v.parse(settingsSchema, {});
+}
+
+// The comparison value, for anything that only READS one — the storage defaults
+// argument, a test asserting what shipped. Never handed to a caller as its own copy.
+export const DEFAULT_SETTINGS: Settings = defaultSettings();
 
 // A NEW DEFAULT DOES NOT REACH AN EXISTING USER. This is the bug that made the
 // per-activity links invisible on a live tenant where everything else worked, and it
@@ -193,9 +205,13 @@ export function withActivityScope(links: DeepLinkTemplate[]): DeepLinkTemplate[]
 }
 
 export async function loadSettings(): Promise<Settings> {
+    // One fresh copy per load, used both as the storage defaults and as the recovery
+    // value below. See the note on defaultSettings(): the recovery value is returned to
+    // a caller that may edit it, so it cannot be the module-level constant.
+    const shipped = defaultSettings();
     // chrome.storage's typings want a plain record for the defaults argument, so
     // the shape is widened here rather than cast at the call site.
-    const defaults: Record<string, unknown> = { ...DEFAULT_SETTINGS };
+    const defaults: Record<string, unknown> = { ...shipped };
     // Parsed, never cast. The old version of this line asserted `as Partial<Settings>`
     // over whatever storage returned and then re-derived every field by hand; the
     // schema does the deriving, and the assertion is gone with it. A stale
@@ -206,10 +222,10 @@ export async function loadSettings(): Promise<Settings> {
     // ITSELF can be the wrong thing: every field inside settingsSchema recovers on its
     // own, but a non-object — which is what a storage read fails to as much as
     // succeeds to — fails the parse outright, and throwing here would take out a render
-    // pass whose only symptom is "the extension stopped working". Falling back to
-    // DEFAULT_SETTINGS also means the failure mode carries an empty codecEndpoint.
+    // pass whose only symptom is "the extension stopped working". Falling back to the
+    // shipped defaults also means the failure mode carries an empty codecEndpoint.
     const parsed = v.safeParse(settingsSchema, await chrome.storage.sync.get(defaults));
-    const settings = parsed.success ? parsed.output : DEFAULT_SETTINGS;
+    const settings = parsed.success ? parsed.output : shipped;
     return {
         ...settings,
         // NOT a schema default, and this is the distinction worth keeping: a fallback

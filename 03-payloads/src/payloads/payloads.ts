@@ -126,14 +126,32 @@ function eventsOf(history: unknown): unknown[] {
 }
 
 // A history response is a document from outside, so its payload elements are
-// validated rather than cast. An array whose elements do not hold up is treated as
-// no payloads at all: this runs while BUILDING the panel's question, before anything
-// is on screen, and the panel already has a shape for "nothing to show here". The
-// codec path is the one that raises instead — see readCodecResponse — because there
-// a reader is waiting on an answer that was asked for.
+// validated rather than cast.
+//
+// ABSENT AND MALFORMED ARE DIFFERENT ANSWERS, and this is where they part company.
+// No `payloads` property is a workflow that recorded nothing — normal, and the panel
+// has a shape for it. A property that IS there and does not hold up is a history this
+// extension cannot read, and reporting that as "nothing recorded" would be a
+// confident wrong answer: byte-identical, on screen, to an argument-less workflow.
+//
+// So it throws. An earlier version returned `[]` here on the argument that nothing was
+// on screen yet — which is wrong about the order of events: this runs AFTER the hover
+// and after the history fetch, with the panel open and reading `Loading…`.
+// servePayloadRequest() already turns a thrown message into visible text, so the
+// reader is told rather than misinformed.
+//
+// WHOLE OR NOTHING within a present array — see rawPayloadsSchema for why one bad
+// element costs the array.
 function payloadsIn(container: unknown): RawPayload[] {
-    const payloads = v.safeParse(rawPayloadsSchema, asObject(container)?.['payloads']);
-    return payloads.success ? payloads.output : [];
+    const raw = asObject(container)?.['payloads'];
+    if (raw === undefined || raw === null) return [];
+    const payloads = v.safeParse(rawPayloadsSchema, raw);
+    if (!payloads.success) {
+        throw new Error(
+            'The history holds a payload list in a shape this extension cannot read, so nothing is shown rather than something wrong.',
+        );
+    }
+    return payloads.output;
 }
 
 // A Temporal failure is a linked list: the interesting message is usually the
@@ -192,7 +210,7 @@ export function decodePayload(payload: RawPayload): string {
         const bytes = base64Bytes(payload.data);
         return `(${encoding || 'unknown encoding'} — ${bytes} bytes, not decoded here. Set a codec server in the popup to read it.)`;
     }
-    // EXACTLY THE BYTES THE SERVER SENT, whatever the encoding claims. Nothing here
+    // NO PARSING AND NO REFORMATTING, whatever the encoding claims. Nothing here
     // re-indents, re-orders or re-serialises a payload — not even one that says it is
     // JSON. `JSON.parse` turns every number into an IEEE double, so a round-trip
     // silently rewrites a 20-digit account id into a different 20-digit account id
@@ -227,17 +245,24 @@ export function clip(text: string): string {
 // base64 → text, via bytes. `atob` alone gives one char per BYTE, which mangles
 // every non-ASCII character in a payload; TextDecoder is what makes it UTF-8.
 //
-// `fatal: true`, AND THAT IS THE WHOLE POINT OF THIS FUNCTION'S HONESTY. The default
-// decoder is lossy in silence: every byte it cannot interpret becomes U+FFFD, so a
-// `binary/plain` payload holding 0xff renders as `` and the panel has quietly shown
-// the reader something the server did not send. This rung's claim is that a payload
-// is displayed unaltered, and a replacement character is an alteration — the one kind
-// that looks like data.
+// WHAT THIS FUNCTION CLAIMS, exactly: valid UTF-8 is handed back with no JSON parsing
+// and no reformatting; anything else is LABELLED and shown as its base64. Not "the
+// exact bytes the server sent" — that was the claim written here first, and it was
+// wrong in three ways at once, each of them silent.
 //
-// So a payload that is not UTF-8 is NAMED as such and shown as its base64 instead,
-// which is lossless and pastes back into a request. Same for base64 that does not
-// decode at all: the old code returned the raw string as though it were the decoded
-// text, which reads as a successful decode of something else entirely.
+// `fatal: true` closes the worst one. The default decoder is lossy without saying so:
+// every byte it cannot interpret becomes U+FFFD, so a `binary/plain` payload holding
+// 0xff renders as `` and the panel has shown the reader a character the server never
+// sent — an alteration that looks like data. Fatal turns it into a named case.
+//
+// `ignoreBOM: true` closes the second. A leading EF BB BF is a real character of a
+// real payload, and the default decoder eats it: `EF BB BF 61` decoded as `"a"`, so a
+// payload whose first byte mattered came back one character short with nothing
+// flagged. It is the same failure as the replacement character, one direction over.
+//
+// The third is not fixable here and is stated instead: formatPayloads() clips at
+// MAX_DISPLAY_CHARS, so a long payload — or the base64 of an unreadable one — is a
+// prefix, and says so. What is on screen is not always something that pastes back.
 export function base64ToText(data: string): string {
     let bytes: Uint8Array;
     try {
@@ -248,7 +273,7 @@ export function base64ToText(data: string): string {
         return `(not valid base64 — ${data.length} characters, shown as they arrived.)\n${data}`;
     }
     try {
-        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     } catch {
         return `(not UTF-8 text — ${bytes.length} bytes, shown as base64.)\n${data}`;
     }

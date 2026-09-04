@@ -220,6 +220,39 @@ describe('sending an encrypted payload to the codec server in the popup', () => 
         expect(reachedNetwork.filter((seen) => seen.url.includes('codec'))).toHaveLength(0);
     });
 
+    it('says a malformed history could not be read, rather than showing an empty panel', async () => {
+        // THE PANEL IS ALREADY OPEN BY THE TIME THIS IS DECIDED, which is what the pure
+        // extractor's first version got wrong: it returned no payloads for a history it
+        // could not read, and render() turns no payloads and no note into
+        // "(nothing recorded)" — the same words a workflow started with no arguments
+        // gets. Asserted here rather than only in payloads.spec.ts because the claim is
+        // about what the reader sees, and the extractor cannot see that far.
+        fake.forwardHistoryBody = {
+            history: {
+                events: [
+                    {
+                        eventId: '1',
+                        workflowExecutionStartedEventAttributes: { input: { payloads: [{ data: {} }] } },
+                    },
+                ],
+            },
+        };
+
+        const result = await askPayload(via(TYPED));
+
+        expect(result.error).toMatch(/cannot read/);
+        expect(result.text).not.toContain('nothing recorded');
+        // And nothing was sent anywhere on the way to failing. A response whose shape is
+        // not the documented one is the last thing to forward to a host named in a
+        // message: planCodecCall reads `metadata.encoding` to decide what leaves, and it
+        // never got the chance to read this one.
+        expect(decodeCalls()).toHaveLength(0);
+        // Paired with evidence the hover really ran, so the line above is not the vacuous
+        // green a hover that died earlier would also produce.
+        expect(forwardCalls()).toHaveLength(1);
+        expect(forwardCalls()[0]!.authorization).toBe(BEARER);
+    });
+
     it('will not send a payload for a run the page never listed', async () => {
         // The residual weakness, bounded — and bounded is not the same as small, which
         // is why the note in payloadServe.ts states the width instead of this test's

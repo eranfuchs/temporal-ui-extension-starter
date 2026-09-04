@@ -165,18 +165,28 @@ Two details in `src/payloads/payloads.ts` are worth stealing:
   needs both spellings for every case and silently matches neither when a third
   appears. `workflowExecutionStartedEventAttributes` is one string in both — and it
   is also the only place the payloads can be.
-- **A payload is shown as the bytes that arrived, and nothing re-formats it.**
+- **Valid UTF-8 is displayed with no JSON parsing and no reformatting.**
   `JSON.parse` turns every number into an IEEE double, so an id of
   `12345678901234567890` comes back as `12345678901234567000` and `JSON.stringify`
   writes that back out — the value on screen is then simply *wrong*, in a way that
   looks exactly like real data, and account numbers and transaction ids are precisely
   the fields long enough for it to happen to. `decodePayload` therefore does base64,
   then UTF-8, then stops. A one-line JSON payload is displayed as one line. That is
-  deliberate and it is a real cost: this rung's job is to get the payload in front of
-  you **unaltered**, and typesetting it safely needs a lossless formatter, which needs
-  a JSON lexer, which needs a dependency — stage 04's trade, with the viewer it
-  belongs to. See
+  deliberate and it is a real cost: typesetting it safely needs a lossless formatter,
+  which needs a JSON lexer, which needs a dependency — stage 04's trade, with the
+  viewer it belongs to. See
   [`docs/design-notes.md`](../docs/design-notes.md#every-json-viewer-wanted-a-parsed-value).
+- **What is *not* readable is labelled, not guessed at.** Bytes that are not UTF-8,
+  and base64 that does not decode, are named as such and shown as base64 — so the
+  panel never puts a character on screen that the server did not send. Everything,
+  including that base64, is subject to `MAX_DISPLAY_CHARS`: what you see is not a
+  promise that it pastes back into a request.
+- **A history it cannot read says so, rather than looking empty.** A missing payload
+  list is a workflow that recorded nothing; a payload list in a shape Temporal does
+  not document is an error the panel reports. Those two used to produce the same
+  words, which made an unreadable response indistinguishable from an argument-less
+  workflow. A malformed list is rejected whole and never filtered — dropping element
+  2 of 3 would relabel the two that remain.
 
 A failure is a linked list, so `describeFailure` walks `cause` and joins the chain —
 the useful message is usually the innermost one, and the outermost is "activity task
@@ -402,9 +412,9 @@ created, every later render pass leaves it alone.
 
 Keyboard-reachable (it is a real `<button>`, so Tab opens it and Escape closes it),
 `role="tooltip"`, `aria-live="polite"` because the body arrives after a round trip.
-Every value reaches the DOM through `textContent`, inside a `<pre>` — a payload is
-shown as the exact bytes that arrived, so whatever whitespace the server chose is the
-whitespace on screen.
+Every value reaches the DOM through `textContent`, inside a `<pre>` — nothing
+re-indents a payload, so whatever whitespace the server chose is the whitespace on
+screen.
 
 ## Security card
 
@@ -717,7 +727,7 @@ before that template existed keeps it out permanently; `withActivityScope` in
 
 ## Dependencies
 
-Four packages reach the browser: three chosen, one a consequence of a choice. The
+Three packages reach the browser: two chosen, one a consequence of a choice. The
 repository's dependency policy, and the audit-surface argument behind it, are in the
 [root README](../README.md#dependencies). **None of them is on the egress path** —
 that is the row of the security card this section exists to support.

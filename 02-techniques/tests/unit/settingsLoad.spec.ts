@@ -20,7 +20,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { templateScope } from '../../src/links/deepLink';
-import { DEFAULT_ACTIVITY_LINK, DEFAULT_LINKS, loadSettings, type Settings } from '../../src/settings';
+import {
+    DEFAULT_ACTIVITY_LINK,
+    DEFAULT_LINKS,
+    DEFAULT_SETTINGS,
+    loadSettings,
+    type Settings,
+} from '../../src/settings';
 
 // The cast is over the STUB, not over anything under test: @types/chrome describes the
 // whole API and this supplies the one method loadSettings calls.
@@ -88,22 +94,37 @@ describe('loadSettings', () => {
         expect(links).toEqual([WORKFLOW_LINK]);
     });
 
-    it('gives every fallback load its own objects, sharing no leaf with the next', async () => {
+    it('gives every fallback load its own objects, whichever of the two fallbacks ran', async () => {
         // valibot hands a fallback back BY REFERENCE. With a bare array as the
         // fallback, both loads below returned the SAME array holding the SAME link
         // objects — and popup.ts edits a link in place, so one popup's edit changed
         // what the next load produced, without anything being stored. Reproduced
         // before the fix; this pins the fix rather than the library.
-        const first = (await load({ links: 'corrupt', linkScopesSeeded: true })).links;
-        const second = (await load({ links: 'corrupt', linkScopesSeeded: true })).links;
+        //
+        // TWO FALLBACKS CAN RUN HERE, and the first version of this test drove only one
+        // of them. `links: 'corrupt'` takes the field fallback inside the schema. A stored
+        // value that is not an object at all fails the parse outright and takes
+        // loadSettings' own recovery, which was still handing back the module-level
+        // DEFAULT_SETTINGS — so two loads went on sharing their leaves by the other
+        // route, with this test green. Both are driven below, and DEFAULT_SETTINGS is
+        // asserted not to be what a caller gets: it is the one object a popup edit could
+        // corrupt for every later load in the page.
+        for (const stored of [{ links: 'corrupt', linkScopesSeeded: true }, null]) {
+            const which = JSON.stringify(stored);
+            const first = (await load(stored)).links;
+            const second = (await load(stored)).links;
 
-        expect(first).toEqual(second);
-        expect(first).not.toBe(second);
-        expect(first[0]).not.toBe(second[0]);
+            expect(first, which).toEqual(second);
+            expect(first, which).not.toBe(second);
+            expect(first[0], which).not.toBe(second[0]);
+            expect(first, which).not.toBe(DEFAULT_SETTINGS.links);
+            expect(first[0], which).not.toBe(DEFAULT_SETTINGS.links[0]);
 
-        // The consequence, stated as the thing a reader would actually notice.
-        first[0]!.label = 'edited in one popup';
-        expect(second[0]!.label).not.toBe('edited in one popup');
+            // The consequence, stated as the thing a reader would actually notice.
+            first[0]!.label = 'edited in one popup';
+            expect(second[0]!.label, which).not.toBe('edited in one popup');
+            expect(DEFAULT_SETTINGS.links[0]!.label, which).not.toBe('edited in one popup');
+        }
     });
 
     it('falls back to the shipped pair when the stored links are not a list at all', async () => {

@@ -7,8 +7,8 @@
 // OUTPUT rather than an error, which is the only kind worth writing a long test
 // about:
 //   • pretty-printing a long integer silently changes its value, which is why this
-//     rung does not pretty-print at all — a payload is displayed as the bytes that
-//     arrived, and the spec asserts the round-trip it declines to do;
+//     rung does not pretty-print at all — a readable payload is displayed with no JSON
+//     parsing and no reformatting, and the spec asserts the round-trip it declines;
 //   • matching on eventType instead of the attributes key works on one Temporal
 //     version and quietly finds nothing on the next.
 
@@ -49,31 +49,45 @@ describe('extractInput', () => {
         expect(extractInput({ events })).not.toBeNull();
     });
 
-    it('shows no payloads rather than malformed ones when an element is not a payload', () => {
+    it('raises rather than reporting a malformed payload list as nothing recorded', () => {
         // A history response is a document from outside. These elements used to be
         // CAST to RawPayload and handed straight on: `null` to encodingOf(), a
-        // non-string `data` to atob(). The panel has a shape for "nothing to show",
-        // and it is the right one here — nothing is on screen yet, so there is no
-        // reader waiting on an answer to raise at. (The codec path, where there IS
-        // one, throws instead; see codec.spec.ts.)
+        // non-string `data` to atob(). Validating them was the first half of the fix.
+        //
+        // Returning `[]` was the WRONG second half, and this test is the one that says
+        // so: `[]` is exactly what a workflow started with no arguments produces, so
+        // the panel said "(nothing recorded)" about a history it could not read — the
+        // two cases were byte-identical on screen. It throws now, and the reader is
+        // told; see the serving-path half of this in apiInjectCodec.spec.ts.
         for (const bad of [null, 42, { data: {} }, { metadata: { encoding: 5 } }]) {
             const events = [
                 event('workflowExecutionStartedEventAttributes', { input: { payloads: [bad] } }),
             ];
-            expect(extractInput({ events })!.payloads, JSON.stringify(bad)).toEqual([]);
+            expect(() => extractInput({ events }), JSON.stringify(bad)).toThrow(/cannot read/);
         }
     });
 
     it('does not drop the good elements of a list quietly', () => {
         // Whole or nothing: one bad element out of two costs both, because dropping
         // it would renumber the argument that survives — "── 1 of 2 ──" would label
-        // the second argument as the first.
+        // the second argument as the first. And not quietly, which is the other word
+        // in this test's name: the argument that survives is not shown alone.
         const events = [
             event('workflowExecutionStartedEventAttributes', {
                 input: { payloads: [payload('json/plain', '{"a":1}'), { data: {} }] },
             }),
         ];
-        expect(extractInput({ events })!.payloads).toEqual([]);
+        expect(() => extractInput({ events })).toThrow(/cannot read/);
+    });
+
+    it('tells a payload list that is absent apart from one that is malformed', () => {
+        // The other side of the throw above, and the reason it has to be narrow: every
+        // one of these is a workflow that recorded nothing, which is normal. A rule that
+        // raised on all of them would turn "no arguments" into an error message.
+        for (const input of [undefined, null, {}, { payloads: null }, { payloads: [] }]) {
+            const events = [event('workflowExecutionStartedEventAttributes', { input })];
+            expect(extractInput({ events })!.payloads, JSON.stringify(input)).toEqual([]);
+        }
     });
 
     it('returns null when the response holds no started event', () => {
@@ -270,18 +284,34 @@ describe('base64 helpers', () => {
     });
 
     it('never silently replaces a byte it cannot decode', () => {
-        // THE CLAIM THIS RUNG MAKES IS THAT A PAYLOAD IS SHOWN UNALTERED. The default
-        // TextDecoder is lossy in silence: 0xff becomes U+FFFD, and the panel has then
-        // shown the reader a character the server never sent — an alteration that looks
-        // like data. `fatal: true` turns that into a named case.
+        // THE CLAIM THIS FUNCTION MAKES IS THAT UNREADABLE BYTES ARE LABELLED, NOT
+        // GUESSED AT. The default TextDecoder is lossy in silence: 0xff becomes U+FFFD,
+        // and the panel has then shown the reader a character the server never sent — an
+        // alteration that looks like data. `fatal: true` turns that into a named case.
         const loneHighByte = btoa('ÿþ');
         const shown = base64ToText(loneHighByte);
 
         expect(shown).not.toContain('�');
         expect(shown).toContain('not UTF-8 text');
         expect(shown).toContain('2 bytes');
-        // Lossless: the base64 is right there, and it pastes back into a request.
+        // And the base64 is shown beneath the label rather than dropped, which is what
+        // makes the panel usable for a payload nothing here can read. Subject to
+        // MAX_DISPLAY_CHARS like everything else, so it is not a promise that what is on
+        // screen can be pasted back — see clip().
         expect(shown).toContain(loneHighByte);
+    });
+
+    it('keeps a byte-order mark instead of eating it', () => {
+        // The same failure as the replacement character, one direction over. The default
+        // decoder strips a leading EF BB BF, so `EF BB BF 61` came back as "a": a payload
+        // whose first character mattered was one character short, with nothing said about
+        // it and no way to tell from the panel. `ignoreBOM: true` makes it a character
+        // again. Reproduced against the fatal-only decoder before the option was added.
+        //
+        // Both sides are written as escapes rather than typed literally, for the reason
+        // the protobuf fixture above gives: a byte-order mark is invisible in a diff, and
+        // an assertion nobody can see is an assertion nobody reviews.
+        expect(base64ToText(btoa(String.fromCharCode(0xef, 0xbb, 0xbf, 0x61)))).toBe('\ufeffa');
     });
 
     it('still decodes real UTF-8, multi-byte characters included', () => {
