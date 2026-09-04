@@ -80,10 +80,34 @@ describe('extractInput', () => {
         expect(() => extractInput({ events })).toThrow(/cannot read/);
     });
 
+    it('raises for a payload container that is present but not a message', () => {
+        // ONE LEVEL UP FROM THE TEST ABOVE, and the case the first fix missed. It reached
+        // the list through `asObject(container)?.['payloads']`, so a container that was
+        // not an object collapsed to `undefined` on the way in and `input: "bad"` came
+        // back as "nothing recorded" — the exact output the throw above exists to
+        // prevent, arriving by the other door. Reproduced against that version before
+        // this test was written.
+        //
+        // proto3's JSON mapping is what makes these unreadable rather than empty rather
+        // than a matter of taste: a message field is encoded as an object or as `null`,
+        // and `input` is a `temporal.api.common.v1.Payloads` message. The array is in the
+        // list deliberately — it is the plausible near miss, because the thing inside a
+        // `Payloads` IS an array, so a response that hoisted it would look right.
+        for (const input of ['bad', 42, true, [payload('json/plain', '{"a":1}')]]) {
+            const events = [event('workflowExecutionStartedEventAttributes', { input })];
+            expect(() => extractInput({ events }), JSON.stringify(input)).toThrow(/cannot read/);
+        }
+    });
+
     it('tells a payload list that is absent apart from one that is malformed', () => {
-        // The other side of the throw above, and the reason it has to be narrow: every
-        // one of these is a workflow that recorded nothing, which is normal. A rule that
-        // raised on all of them would turn "no arguments" into an error message.
+        // The other side of both throws above, and the reason they have to be narrow:
+        // every one of these is a workflow that recorded nothing, which is normal. A rule
+        // that raised on all of them would turn "no arguments" into an error message.
+        //
+        // The two `null`s are not leniency. proto3 JSON accepts `null` for any field: for
+        // the `input` message it means unset, and for the repeated `payloads` it means the
+        // empty list. Reading either as an error would report a legal response as a broken
+        // one — which is this fix's own failure mode pointed the other way.
         for (const input of [undefined, null, {}, { payloads: null }, { payloads: [] }]) {
             const events = [event('workflowExecutionStartedEventAttributes', { input })];
             expect(extractInput({ events })!.payloads, JSON.stringify(input)).toEqual([]);
@@ -156,6 +180,34 @@ describe('extractOutcome', () => {
         // scheduled. Nothing to report, and not an error.
         const events = [event('workflowTaskScheduledEventAttributes', { attempt: 1 })];
         expect(extractOutcome({ events })).toBeNull();
+    });
+
+    it('raises for an unreadable result or details, not only for an unreadable input', () => {
+        // payloadsIn() is reached from THREE fields, and every test of it above drives
+        // only `input`. That cannot distinguish a fix in the shared function from a fix
+        // in the one call site — so the outcome fields are driven here, at both levels:
+        // a container that is not a message, and a list that is not a list of payloads.
+        const unreadable: Array<[string, string, unknown]> = [
+            ['workflowExecutionCompletedEventAttributes', 'result', 'bad'],
+            ['workflowExecutionCompletedEventAttributes', 'result', { payloads: [{ data: {} }] }],
+            ['workflowExecutionTerminatedEventAttributes', 'details', 42],
+            ['workflowExecutionTerminatedEventAttributes', 'details', { payloads: 'bad' }],
+            ['workflowExecutionCanceledEventAttributes', 'details', [payload('json/plain', '{}')]],
+        ];
+        for (const [attributes, field, value] of unreadable) {
+            const events = [event(attributes, { [field]: value })];
+            const label = `${field}=${JSON.stringify(value)}`;
+            expect(() => extractOutcome({ events }), label).toThrow(/cannot read/);
+        }
+    });
+
+    it('reports nothing recorded for an outcome that legitimately carries none', () => {
+        // The narrowness check for the outcome fields, matching the input one: a cancel
+        // with no details is the ordinary case and must not read as an error.
+        for (const details of [undefined, null, {}, { payloads: null }, { payloads: [] }]) {
+            const events = [event('workflowExecutionCanceledEventAttributes', { details })];
+            expect(extractOutcome({ events })!.payloads, JSON.stringify(details)).toEqual([]);
+        }
     });
 });
 

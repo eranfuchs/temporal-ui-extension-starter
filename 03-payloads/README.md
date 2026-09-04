@@ -181,12 +181,21 @@ Two details in `src/payloads/payloads.ts` are worth stealing:
   panel never puts a character on screen that the server did not send. Everything,
   including that base64, is subject to `MAX_DISPLAY_CHARS`: what you see is not a
   promise that it pastes back into a request.
-- **A history it cannot read says so, rather than looking empty.** A missing payload
-  list is a workflow that recorded nothing; a payload list in a shape Temporal does
-  not document is an error the panel reports. Those two used to produce the same
-  words, which made an unreadable response indistinguishable from an argument-less
-  workflow. A malformed list is rejected whole and never filtered — dropping element
-  2 of 3 would relabel the two that remain.
+- **A history it cannot read says so, rather than looking empty.** Those two used to
+  produce the same words, which made an unreadable response indistinguishable from an
+  argument-less workflow. Where the line falls is proto3's JSON mapping rather than
+  our preference, because `input`, `result` and `details` are all `Payloads` messages
+  holding one repeated field:
+
+  | In the response | Shown |
+  |---|---|
+  | the container is absent, or `null` | nothing recorded — `null` is a legal encoding of an unset message field, so both spellings mean the same workflow |
+  | the container is a string, a number or an array | an error — a message is encoded as an object or as `null`, never as a scalar |
+  | `payloads` is absent, `null`, or `[]` | nothing recorded |
+  | `payloads`, or one element of it, is malformed | an error |
+
+  A malformed list is rejected whole and never filtered — dropping element 2 of 3
+  would relabel the two that remain.
 
 A failure is a linked list, so `describeFailure` walks `cause` and joins the chain —
 the useful message is usually the innermost one, and the outermost is "activity task
@@ -698,7 +707,7 @@ type-check, and is exactly the change to refuse in review.
   answered any of it, and a synthetic 429 is exactly as considerate as the person who
   wrote it.
 - **No supply-chain attestation.** Build it yourself; the bundle is unminified on
-  purpose, so `dist/*.js` is readable, including the four third-party packages
+  purpose, so `dist/*.js` is readable, including the three third-party packages
   inside it. What the repository guarantees is that a package cannot enter a bundle
   without a reviewed diff; it does not verify any package's contents against its
   repository, and `package-lock.json` integrity hashes are the only pinning there

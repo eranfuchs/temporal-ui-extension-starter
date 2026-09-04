@@ -253,6 +253,26 @@ describe('sending an encrypted payload to the codec server in the popup', () => 
         expect(forwardCalls()[0]!.authorization).toBe(BEARER);
     });
 
+    it('says the same about a payload container that is not a message at all', async () => {
+        // The same claim one level up the response, and a separate test because the first
+        // fix for the case above passed that one while still failing this one: it looked
+        // inside the container for a malformed LIST, so a container that was not an object
+        // never reached the check and `input: "bad"` was reported as "(nothing recorded)"
+        // by this very path. The panel is the only place that distinction is visible,
+        // which is why it is pinned here and not only in payloads.spec.ts.
+        fake.forwardHistoryBody = {
+            history: { events: [{ eventId: '1', workflowExecutionStartedEventAttributes: { input: 'bad' } }] },
+        };
+
+        const result = await askPayload(via(TYPED));
+
+        expect(result.error).toMatch(/cannot read/);
+        expect(result.text).not.toContain('nothing recorded');
+        expect(decodeCalls()).toHaveLength(0);
+        expect(forwardCalls()).toHaveLength(1);
+        expect(forwardCalls()[0]!.authorization).toBe(BEARER);
+    });
+
     it('will not send a payload for a run the page never listed', async () => {
         // The residual weakness, bounded — and bounded is not the same as small, which
         // is why the note in payloadServe.ts states the width instead of this test's

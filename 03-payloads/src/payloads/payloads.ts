@@ -129,29 +129,56 @@ function eventsOf(history: unknown): unknown[] {
 // validated rather than cast.
 //
 // ABSENT AND MALFORMED ARE DIFFERENT ANSWERS, and this is where they part company.
-// No `payloads` property is a workflow that recorded nothing — normal, and the panel
-// has a shape for it. A property that IS there and does not hold up is a history this
-// extension cannot read, and reporting that as "nothing recorded" would be a
-// confident wrong answer: byte-identical, on screen, to an argument-less workflow.
+// A workflow that recorded nothing is normal and the panel has a shape for it. A
+// history this extension cannot read is not, and reporting it as "nothing recorded"
+// would be a confident wrong answer: byte-identical, on screen, to an argument-less
+// workflow. So the unreadable cases throw, and servePayloadRequest() turns the
+// message into visible text.
 //
-// So it throws. An earlier version returned `[]` here on the argument that nothing was
-// on screen yet — which is wrong about the order of events: this runs AFTER the hover
-// and after the history fetch, with the panel open and reading `Loading…`.
-// servePayloadRequest() already turns a thrown message into visible text, so the
-// reader is told rather than misinformed.
+// FOUR CASES, and the boundary between them is proto3's JSON mapping rather than our
+// preference — `input`, `result` and `details` are all `temporal.api.common.v1.Payloads`
+// message fields holding one repeated `payloads`:
+//
+//   container absent, or `null`          → nothing recorded. `null` is a legal
+//                                          encoding of an unset message field, so
+//                                          both spellings mean the same thing; this
+//                                          is the wire format, not laxity.
+//   container present, not an object     → THROW. A message is encoded as an object
+//                                          or as `null`, never as a string, a number
+//                                          or an array.
+//   `payloads` absent, `null`, or `[]`   → nothing recorded. `null` and `[]` are both
+//                                          the empty repeated field.
+//   `payloads` present and malformed     → THROW.
+//
+// The middle case is the one two versions of this function got wrong, each silently.
+// The first returned `[]` for everything unreadable, on the argument that nothing was
+// on screen yet — wrong about the order of events, since this runs AFTER the hover and
+// the history fetch, with the panel open and reading `Loading…`. The second threw for a
+// malformed `payloads` but reached it through `asObject(container)?.['payloads']`, so a
+// scalar container collapsed to `undefined` on the way and `input: "bad"` reported
+// "nothing recorded" again — the same wrong answer, one level up, and invisible because
+// the fix looked like it covered the field it was written for.
 //
 // WHOLE OR NOTHING within a present array — see rawPayloadsSchema for why one bad
 // element costs the array.
 function payloadsIn(container: unknown): RawPayload[] {
-    const raw = asObject(container)?.['payloads'];
+    if (container === undefined || container === null) return [];
+    const holder = asObject(container);
+    if (!holder) throw unreadableHistory();
+    const raw = holder['payloads'];
     if (raw === undefined || raw === null) return [];
     const payloads = v.safeParse(rawPayloadsSchema, raw);
-    if (!payloads.success) {
-        throw new Error(
-            'The history holds a payload list in a shape this extension cannot read, so nothing is shown rather than something wrong.',
-        );
-    }
+    if (!payloads.success) throw unreadableHistory();
     return payloads.output;
+}
+
+// One message for every unreadable shape, because the reader can do nothing different
+// about a scalar container than about a bad element, and naming which field failed
+// would put a fragment of somebody's history into the panel.
+function unreadableHistory(): Error {
+    return new Error(
+        'The history holds a payload list in a shape this extension cannot read, so nothing is shown rather than something wrong.',
+    );
 }
 
 // A Temporal failure is a linked list: the interesting message is usually the
@@ -252,8 +279,11 @@ export function clip(text: string): string {
 //
 // `fatal: true` closes the worst one. The default decoder is lossy without saying so:
 // every byte it cannot interpret becomes U+FFFD, so a `binary/plain` payload holding
-// 0xff renders as `` and the panel has shown the reader a character the server never
-// sent — an alteration that looks like data. Fatal turns it into a named case.
+// 0xff renders as the replacement character — U+FFFD, the black-diamond question mark
+// — and the panel has shown the reader a character the server never sent: an
+// alteration that looks like data. Fatal turns it into a named case. (Named here
+// rather than shown, for the reason the BOM fixture gives in payloads.spec.ts: a
+// character nobody can see in a diff is a character nobody reviews.)
 //
 // `ignoreBOM: true` closes the second. A leading EF BB BF is a real character of a
 // real payload, and the default decoder eats it: `EF BB BF 61` decoded as `"a"`, so a
