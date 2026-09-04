@@ -32,8 +32,8 @@
 //      manifest check ever mentions;
 //   8. no binary file outside the generated-icon allowlist, because a gate
 //      cannot read a binary and a committed image is a file nobody reviews;
-//   9. every package a project's own source imports is declared in THAT project's
-//      dependencies.
+//   9. every third-party package that enters a bundle through a project's own source
+//      is declared in THAT project's dependencies.
 //
 // WHICH packages a project may have is deliberately not budgeted — that judgement
 // is the dependency table in each README and the policy in the root README, and
@@ -404,7 +404,7 @@ async function main(argv) {
         binaries: 0,
         bundles: 0,
         bundledPackages: new Set(),
-        directPackages: new Set(),
+        directDeclarations: new Set(),
     };
 
     for (const project of projects) {
@@ -491,20 +491,23 @@ async function main(argv) {
                 }
             }
 
-            // ── A package our own source imports is a package this project declares ──
+            // ── A package that enters a bundle through our own source is declared ──
             //
             // `bundles.direct` is esbuild's answer to "which package does a file of
-            // OURS import", so this is about the project's own code and not about
-            // what its dependencies pull in. Only that direction is checked: an
-            // undeclared import is a package that reached a browser unreviewed,
-            // whereas a declared package nobody imports is untidy.
+            // OURS import", read from the metafile, so the rule covers the project's
+            // own code and not what its dependencies pull in. Two things it therefore
+            // does not see, both deliberately: an import erased before bundling (a
+            // type-only one) and an import in source no entry point reaches. Neither
+            // arrives in a browser, which is what this rule is about.
             //
-            // devDependencies do not satisfy it. A package inside a content script
-            // ships to users; the distinction is the whole point of the field.
+            // Only that direction is checked: an undeclared import is a package that
+            // reached a browser unreviewed, whereas a declared package nobody imports
+            // is untidy. devDependencies do not satisfy it — a package inside a
+            // content script ships to users, which is the whole point of the field.
             const runtimeDeps = new Set(Object.keys(project.pkg.dependencies ?? {}));
             const buildDeps = new Set(Object.keys(project.pkg.devDependencies ?? {}));
             for (const name of bundles.direct) {
-                checked.directPackages.add(`${project.id}:${name}`);
+                checked.directDeclarations.add(`${project.id}:${name}`);
                 if (runtimeDeps.has(name)) continue;
                 // Absent and mis-declared need different fixes, so they get
                 // different sentences.
@@ -600,7 +603,9 @@ async function main(argv) {
             `  third-party packages inside them: ${checked.bundledPackages.size}` +
                 (checked.bundledPackages.size > 0 ? ` (${[...checked.bundledPackages].sort().join(', ')})` : ''),
         );
-        console.log(`  direct imports checked against package.json: ${checked.directPackages.size}`);
+        // A project/package pair, not an import statement: several files importing
+        // one package are one declaration to check.
+        console.log(`  direct runtime package declarations checked: ${checked.directDeclarations.size}`);
         console.log(`  binary files found: ${checked.binaries}`);
         const budgeted = Object.keys(budget.projects ?? {});
         console.log(`  budgets declared: ${budgeted.length} (${budgeted.join(', ')})`);
@@ -620,7 +625,7 @@ async function main(argv) {
             `surface: clean — ${checked.manifests} manifest(s) within budget, ` +
                 `${checked.sourceFiles} source file(s) free of banned sinks, ` +
                 `${checked.bundles} audited bundle(s) covering every script the extensions load, ` +
-                `${checked.directPackages.size} direct import(s) declared where they are used`,
+                `${checked.directDeclarations.size} bundled package(s) declared by the project that imports them`,
         );
     }
     return 0;

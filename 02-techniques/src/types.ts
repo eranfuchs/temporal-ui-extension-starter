@@ -23,14 +23,11 @@
 // Breaking it: a field we no longer read comes back into reach because some producer
 // still sends it.
 //
-// INVARIANT: one schema library, at every boundary, and the same one in all three
-// projects — declared in each project's own dependencies, which `npm run surface` checks.
-// Breaking it: a second validator means a reader climbing the ladder has to learn two
-// APIs to follow the same argument, and a stage that picks its own invites hand-rolled
-// `typeof` checks at the boundaries it did not think about. valibot won a measured
-// four-library comparison — docs/design-notes.md#two-schema-libraries-measured, and
-// `npm run measure` for today's figures — but staying identical across the stages is the
-// part worth protecting.
+// INVARIANT: where a boundary is described by a schema, it is the same library in every
+// project. Not every read uses one — some are small local guards — and `npm run surface`
+// does not check this; what it checks is narrower, that a package reaching a bundle is
+// declared by the project importing it.
+// Breaking it: two APIs to learn for one job, on a ladder meant to be read in order.
 
 import * as v from 'valibot';
 

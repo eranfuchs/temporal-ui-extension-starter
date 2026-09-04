@@ -317,14 +317,10 @@ shape-checks the inbound `payload-request` — the message that names the endpoi
 way back. A shape check is not an authorisation check; whose data may be fetched is decided
 by the ledger, not by a schema.
 
-The policy behind the choices is in the [root README](../README.md#dependencies) and the
-comparisons that made them are in
-[`docs/design-notes.md`](../docs/design-notes.md#dependencies). This table is hand-written;
-`npm run measure` prints what is actually in each bundle today, and the bundle is unminified
-on purpose so `dist/*.js` is readable. The one enforced part: `npm run surface` refuses a
-package this project's source imports without declaring it in this project's
-`dependencies`, which is the case a lockfile diff cannot show while the three projects
-share one hoisted install.
+The policy behind the choices, and what the one enforced rule does and does not cover, are
+in the [root README](../README.md#dependencies); the comparisons that made them are in
+[`docs/design-notes.md`](../docs/design-notes.md#dependencies). `npm run measure` prints
+what is actually in each bundle today.
 
 ## Layout
 

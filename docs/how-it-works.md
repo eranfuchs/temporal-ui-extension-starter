@@ -80,8 +80,9 @@ Two things the `01` diagram does not have to say, and these two rungs do:
   on a single workflow's page, and `03`'s `tooltip.ts` owns the hover panel. They are
   separated by *what* they draw, not by whether they are allowed to draw — and every one
   writes into the DOM the page shares with us, which is why `03`'s panel has to erase
-  its text rather than merely hide it. `grep -rlnE 'createElement|classList' src/` in
-  any project prints the real list; run it rather than trusting a count in prose.
+  its text rather than merely hide it. `cd 03-payloads && grep -rlnE 'createElement|classList' src/`
+  prints the real list — the same command in any project, from that project's directory.
+  Run it rather than trusting a count in prose.
 
 Why the injected script has to be in the page's **own** world is the crux, and it
 is easy to get backwards. An API call made from page JavaScript needs no
@@ -573,9 +574,10 @@ same, so no permission marks the difference:
   bounded cache that the payload switch and the master switch both empty, because what
   that cache holds is decoded personal data rather than an event id.
 - **The payload itself, to the codec server you named — and to nowhere else.** This is
-  the only *request* in this repository that goes anywhere but the page's own Temporal.
-  The deep links reach another host too, but only as a URL you click — the difference is
-  set out above — and this one exists only after you type a host into the popup:
+  the only **non-navigation** request the extension initiates to a host other than the
+  page's Temporal API, and the only one that carries a body. A deep link reaches another
+  host too — following a link is a request like any other — but only through a URL you
+  chose to click. This one exists only after you type a host into the popup:
 
   - **Empty by default.** With no endpoint, unreadable payloads are shown as a byte
     count and a sentence saying so. Nothing is sent, nothing is guessed from the
@@ -608,10 +610,12 @@ There is no analytics and no telemetry in any project. To check rather than
 believe:
 
 ```bash
-grep -rniE 'fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource' src/
+grep -rniE 'fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource' \
+  01-family-tree/src 02-techniques/src 03-payloads/src
 ```
 
-Case-insensitively, or the wrapper named `pageFetch` hides from the grep meant to
+Named in full because there is no `src/` at the repository root, and
+case-insensitively, or the wrapper named `pageFetch` hides from the grep meant to
 find it. In `01-family-tree` every hit is `window.fetch`, the page's own —
 captured, wrapped, and called on the page's behalf so its result can be handed
 straight back to it. In `02-techniques` most of the hits are comments *about* not

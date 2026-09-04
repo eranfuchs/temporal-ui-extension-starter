@@ -6,7 +6,7 @@ Temporal workflow list, with parent/child families grouped and drawn.
 **It asks for no permissions at all.** Its `manifest.json` has no `permissions`
 key, no `host_permissions` key, and no service worker. There is no `chrome.*`
 call anywhere in `src/` — you can check with
-`grep -rn 'chrome\.' src/`, which finds only the comment saying so.
+`grep -rnE 'chrome\.' src/`, which finds only the comment saying so.
 
 ```
 Workflow ID                                    Type                Status
@@ -90,22 +90,16 @@ facts:
 npm run surface        # from the repository root
 ```
 
-`scripts/surface.mjs` compares each manifest against the budget declared in
-`scripts/surface.json` and fails if a project exceeds it. This project's budget is
-empty, so the gate fails on the first `permissions` or `host_permissions` entry, a
-service worker, any reference to the `chrome` namespace under `src/`, `tests/` or
-`public/`, an `@types/chrome` dependency or a `"chrome"` entry in `tsconfig.json`
-`types`, any markup/code sink (`innerHTML`, `eval`, …), and a content-script match
-outside the allowed hosts. It also **builds the project** and reads esbuild's
-metafile, so every script the extension loads — including one named only by an HTML
-page, which escapes every other check here — is one the audit actually looked at, and
-every package a file of ours imports is one this project's `package.json` declares.
+This project's budget in [`../scripts/surface.json`](../scripts/surface.json) is
+**empty**, which is the stage-specific part: the gate fails on the first `permissions`
+or `host_permissions` entry, a service worker, any reference to the `chrome` namespace
+under `src/`, `tests/` or `public/`, an `@types/chrome` dependency, and a `"chrome"`
+entry in `tsconfig.json`'s `types`.
 
-The gate **parses** each file rather than searching it, because `const { storage } =
-chrome` and `cell['innerHTML'] = x` contain neither `chrome.` nor `.innerHTML`, and a
-`//` inside a string used to hide everything after it on the line.
-`npm run surface:selftest` drives it against a case per rule it must reject *and* a
-case it must accept.
+What every gate refuses — sinks and `chrome` references found by **parsing** each file
+rather than searching it, every loaded script traced to an audited entry point, the
+one dependency rule — and why each ships with a self-test, is in the
+[root README](../README.md#security).
 
 ### What has not been done
 
@@ -120,11 +114,11 @@ case it must accept.
   finds out the same way you would. Nothing here has been run against a self-hosted UI
   with real data in it.
 - **No supply-chain attestation.** The bundle is built unminified on purpose, so
-  `dist/content.js` is readable, including the one third-party package inside it. The
-  gate refuses a package this project's source imports without declaring it — which a
-  lockfile diff would not catch, because the three projects share one hoisted install —
-  but nothing verifies a package's contents against its repository, and the lockfile's
-  integrity hashes are the only pinning there is.
+  `dist/content.js` is readable, including the one third-party package inside it. What
+  the gate does and does not check is in the
+  [root README](../README.md#dependencies); nothing verifies a package's contents
+  against its repository, and the lockfile's integrity hashes are the only pinning
+  there is.
 
 ## Dependencies
 

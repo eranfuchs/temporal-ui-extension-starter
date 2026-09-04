@@ -351,14 +351,13 @@ being refused.
 npm run surface        # from the repository root
 ```
 
-`scripts/surface.mjs` compares this project's manifest against the budget in
-[`../scripts/surface.json`](../scripts/surface.json) and fails on a second permission, any
-`host_permissions` entry, a service worker, `web_accessible_resources`,
-`externally_connectable`, a content-script match outside the three allowed hosts, and any
-of the markup/code sinks (`innerHTML`, `outerHTML`, `insertAdjacentHTML`,
-`document.write`, `eval`, `new Function`, string `setTimeout`/`setInterval`). Those are
-found by **parsing** each file, so `cell['innerHTML'] = x` and an assignment wrapped over
-two lines are caught, and the sentence you are reading is not mistaken for one.
+This project's budget in [`../scripts/surface.json`](../scripts/surface.json) is one
+permission and no host permissions — the stage-specific part, so the gate fails on a
+second permission, any `host_permissions` entry, a service worker,
+`web_accessible_resources`, `externally_connectable`, and a content-script match outside
+the three allowed hosts. What every gate refuses — the markup/code sinks, found by
+**parsing** each file rather than searching it, every loaded script traced to an audited
+entry point, the one dependency rule — is in the [root README](../README.md#security).
 
 Every value this extension writes reaches the DOM through `textContent`. That matters more
 here than in 01: an activity type name and a workflow id are authored by whoever started
@@ -381,16 +380,12 @@ be fetched. For `p-limit`: every rule that is about *Temporal* rather than about
 when it asks for nothing, the rule that the longest overlapping block wins, that a success
 during a block does not reset the doubling, and that resuming is not a burst.
 
-The repository's dependency policy is in the [root README](../README.md#dependencies), and
-the comparisons that chose these — including the one evaluation that ended in **no**
-dependency — are in [`docs/design-notes.md`](../docs/design-notes.md#dependencies). This
-table is hand-written; `npm run measure` prints what each one currently costs each bundle,
-and the bundle is unminified on purpose so `dist/*.js` is readable. One thing about it is
-enforced: `npm run surface` refuses a package this project's own source imports without
-declaring it in this project's `dependencies` — the three projects share one hoisted
-install, so an undeclared import of a sibling's package would otherwise resolve, bundle,
-and show up in no lockfile diff. Nothing here is attested beyond `package-lock.json`'s
-integrity hashes.
+The dependency policy, the one part of it `npm run surface` enforces, and what the
+hand-written table above is and is not evidence of are in the
+[root README](../README.md#dependencies). The comparisons that chose these packages —
+including the one evaluation that ended in **no** dependency — are in
+[`docs/design-notes.md`](../docs/design-notes.md#dependencies), and `npm run measure`
+prints what each costs each bundle today.
 
 ## Layout
 

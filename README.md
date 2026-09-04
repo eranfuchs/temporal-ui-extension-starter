@@ -162,7 +162,7 @@ The cards are not maintained by good intentions:
 
 | Gate | Refuses |
 |---|---|
-| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also **builds each project** and refuses a script the extension loads that no audited entry point produces — esbuild's own metafile decides that, and a script named only by an HTML page escapes every other check here. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink. From the same metafile it also refuses a package a project's source imports without declaring it, which is the one dependency question no lockfile diff answers here |
+| `npm run surface` | a manifest that exceeds its declared budget in [`scripts/surface.json`](scripts/surface.json) — a permission, a host permission, a service worker, `<all_urls>`, a match outside the two allowed hosts, a reference to the `chrome` namespace in a project budgeted without one, a markup/code sink (`innerHTML`, `eval`, …), or a binary file no reviewer can read. It also **builds each project** and refuses a script the extension loads that no audited entry point produces — esbuild's own metafile decides that, and a script named only by an HTML page escapes every other check here. Sinks and `chrome` references are found by **parsing** each file, not by matching lines of it: `cell['innerHTML']`, an assignment wrapped over two lines and `const { storage } = chrome` all read the same to a parser, and a sink named inside a string or a comment is not a sink. From the same metafile it also refuses a third-party package that enters a bundle through a project's own source without that project declaring it, which is the one dependency question no lockfile diff answers here |
 | `npm run lineage` | a file duplicated across projects that has drifted, or that nobody has decided may drift — see [`scripts/lineage.json`](scripts/lineage.json) |
 | `npm run leak:gate` | private IPs, key material, bearer tokens, JWTs, and URLs pointing at hosts that are not on a short public allowlist |
 | `npm run doc:paths` | a link, a cited file path, or an `npm run …` command that does not exist — in any Markdown file **and** in the comments of any `.css`, `.html` or `.ts` file, because regrouping `src/` left dead citations in two stylesheets that a Markdown-only gate had reported clean. Plus the one kind of rot a path check cannot see: a quoted spec block — `` `sending an encrypted payload to the codec server in the popup` `` — cited beside a spec file that no longer contains it, which is what splitting a large spec produces while every old filename still resolves. And the heading a `#fragment` names, because a wrong anchor does not 404 — GitHub leaves the reader at the top of the page, which reads as "that section was deleted" |
@@ -233,13 +233,15 @@ Three limits on that, stated rather than implied:
 
 - **Those tables are hand-written, and cover the bundles a user loads.** No check
   compares a table against its bundle. One thing is checked, by `npm run surface`:
-  every package a project's own source imports has to be declared in *that*
-  project's `dependencies`. That is the case a lockfile diff cannot show — the three
-  projects share one hoisted install, so a package 02 declares resolves fine from
-  01, and importing it there would change no `package.json` and add no lockfile
-  line. Repository tooling under `scripts/` has its own dependencies — a semver
-  implementation, a Markdown parser, GitHub's slug algorithm — which are
-  `devDependencies` and reach no browser.
+  every third-party package that enters a bundle through a project's own source has
+  to be declared in *that* project's `dependencies`. That is the case a lockfile diff
+  cannot show — the three projects share one hoisted install, so a package 02 declares
+  resolves fine from 01, and importing it there would change no `package.json` and add
+  no lockfile line. The answer comes from esbuild's metafile, so what it covers is
+  what actually reaches a browser: an import erased before bundling, or one in source
+  no entry point reaches, is not its business. Repository tooling under `scripts/` has
+  its own dependencies — a semver implementation, a Markdown parser, GitHub's slug
+  algorithm — which are `devDependencies` and reach no browser.
 - **This is an audit, not an attestation.** Nothing here verifies a package's
   contents against its repository, pins by integrity hash beyond what
   `package-lock.json` already does, or claims that a package that has been fine so
