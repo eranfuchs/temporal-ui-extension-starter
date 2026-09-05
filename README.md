@@ -97,10 +97,11 @@ stage 04 links here.
 
 - **Separate input and output payload affordances** — one control per direction,
   rather than one panel showing both.
-- **JSON highlighting**, and the value viewer it implies: collapsible values, colour
-  per value rather than per panel, and lossless formatting so a 20-digit id survives.
-  03 briefly had a version of this and it was removed; the library survey that stage
-  04 should start from is in
+- **JSON highlighting**, and the value viewer it implies: colour per value rather than
+  per panel, flat and always fully drawn (no expand/collapse — every value is on
+  screen the moment the panel opens), and lossless formatting so a 20-digit id
+  survives. 03 briefly had a version of this and it was removed; the library survey
+  that stage 04 should start from is in
   [`docs/design-notes.md`](docs/design-notes.md#every-json-viewer-wanted-a-parsed-value).
 - **Column reordering.**
 - **Workflow-list page size up to 1,000.**

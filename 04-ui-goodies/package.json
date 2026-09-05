@@ -1,0 +1,31 @@
+{
+    "name": "temporal-ui-starter-04-ui-goodies",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Everything 03 does, plus the conveniences that make the list livable: a real JSON viewer, a NOT filter, family-aware bulk actions, and column reordering. No new permission, no new request, no new destination.",
+    "license": "MIT",
+    "engines": {
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+    },
+    "scripts": {
+        "build": "node esbuild.mjs",
+        "watch": "node esbuild.mjs --watch",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "package": "node ../scripts/package.mjs ."
+    },
+    "devDependencies": {
+        "@types/chrome": "^0.2.7",
+        "esbuild": "^0.28.2",
+        "jsdom": "^30.0.1",
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.11"
+    },
+    "dependencies": {
+        "jsonc-parser": "^3.3.1",
+        "p-limit": "^7.3.2",
+        "valibot": "^1.4.2"
+    }
+}

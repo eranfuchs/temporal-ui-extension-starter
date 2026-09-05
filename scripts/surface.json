@@ -127,6 +127,17 @@
             "content_security_policy": false,
             "chrome_api": true,
             "why": "THE SAME MANIFEST BUDGET AS 02, AND THAT IS THE WARNING THIS ENTRY EXISTS TO CARRY. One permission, `storage`, no host_permissions, no service worker, the same three content-script matches — every capability-bearing key is identical, and a manifest diff against 02 shows the name, the description, the version and the button's tooltip. It bundles the same two packages as 02, too: this stage adds none of its own, having tried three ways to format JSON and kept none of them. What changed is the capability: 02 can put identifiers into a link you click, whereas this project POSTs payload bytes to a host you named, on hover, with no navigation and nothing to look at first — it is also the first that decodes payloads at all, and therefore the first whose panel can hold personal or financial data. No manifest key says any of that, and no permission budget can, which is why this entry is the floor and not the audit. The audit is the security card in 03-payloads/README.md, where the egress is described request-for-request, the two credential options are shown as deliberate deletions, and the residual forged-message risk is stated once at full width along with the argument for accepting it. The egress claims are asserted from outside the extension in 03-payloads/tests/unit/apiInjectCodec.spec.ts, and the endpoint policy they rest on in 03-payloads/tests/unit/codec.spec.ts."
+        },
+        "04-ui-goodies": {
+            "permissions": ["storage"],
+            "optional_permissions": [],
+            "host_permissions": [],
+            "background": false,
+            "web_accessible_resources": false,
+            "externally_connectable": false,
+            "content_security_policy": false,
+            "chrome_api": true,
+            "why": "THE SAME MANIFEST BUDGET AS 03, ONCE AGAIN ON PURPOSE. One permission, `storage`, no host_permissions, no service worker, the same three content-script matches — a manifest diff against 03 shows only the name, the description, the version and the button's tooltip. Every capability this stage adds is presentational, not a new request or a new destination: a lossless JSON viewer over payload text the extension could already read; column reordering, a copy button and a page-size choice that only ever change how already-fetched rows are displayed; a NOT filter and Ctrl/Cmd-click additive filtering that build a query string for Temporal's own list endpoint, the one 02 already calls; and family focus / expand-to-families, which re-run that same query with an added RootWorkflowId or WorkflowId clause rather than opening a second endpoint. Nothing here decodes a payload that was not already decodable, nothing sends a payload anywhere it did not already go, and nothing introduces a second host. The capability worth naming is a new bundled dependency for the JSON viewer's lexer, which does not touch the network at all — rule 9 below covers it being declared in package.json today. The package, its version and the reason it is a lexer rather than a parser, and the full security card comparing this stage's presentational capabilities line by line against 03's, are 04-ui-goodies/README.md content still to be written, deferred to the phase that finishes this stage's docs — see the progress note in that README's Status section in the meantime."
         }
     }
 }

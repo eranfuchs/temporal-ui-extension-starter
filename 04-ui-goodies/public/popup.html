@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <!-- No inline <script> anywhere in this file: MV3's default policy for
+             extension pages is script-src 'self', so an inline handler is not
+             "discouraged", it simply never runs. All behaviour is in popup.js. -->
+        <style>
+            :root {
+                color-scheme: light dark;
+                --line: color-mix(in srgb, currentColor 20%, transparent);
+            }
+
+            body {
+                width: 360px;
+                margin: 0;
+                padding: 14px;
+                font:
+                    13px/1.45 system-ui,
+                    -apple-system,
+                    sans-serif;
+            }
+
+            h1 {
+                margin: 0;
+                font-size: 14px;
+                display: flex;
+                align-items: baseline;
+                gap: 6px;
+            }
+
+            h1 span {
+                font-weight: 400;
+                font-size: 11px;
+                opacity: 0.6;
+            }
+
+            h2 {
+                margin: 16px 0 6px;
+                font-size: 11px;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                opacity: 0.6;
+            }
+
+            #status {
+                margin-top: 10px;
+                padding: 8px 10px;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                font-size: 12px;
+                white-space: pre-line;
+            }
+
+            label.row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 4px 0;
+            }
+
+            label.row input {
+                margin: 0;
+            }
+
+            .hint {
+                font-size: 11px;
+                opacity: 0.65;
+            }
+
+            .link-row {
+                display: grid;
+                grid-template-columns: 88px 1fr auto;
+                gap: 6px;
+                margin-bottom: 6px;
+            }
+
+            /* Spans the whole link row, under the three inputs. */
+            .link-row .warning:not(:empty) {
+                grid-column: 1 / -1;
+                font-size: 11px;
+                padding-top: 2px;
+            }
+
+            input[type='text'].invalid {
+                border-style: dashed;
+                border-width: 2px;
+            }
+
+            input[type='text'] {
+                min-width: 0;
+                padding: 3px 6px;
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                background: transparent;
+                color: inherit;
+                font:
+                    11px/1.4 ui-monospace,
+                    SFMono-Regular,
+                    monospace;
+            }
+
+            button {
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                background: transparent;
+                color: inherit;
+                font-size: 11px;
+                padding: 2px 8px;
+                cursor: pointer;
+            }
+
+            code {
+                font-size: 11px;
+                opacity: 0.85;
+            }
+
+            /* The codec endpoint is a URL with a path — it needs the width. */
+            input[type='text'].wide {
+                width: 100%;
+                box-sizing: border-box;
+            }
+
+            /* Not merely a hint: these say a value will not be used, or that payload
+             * data will leave the browser, so they are allowed to be louder than the
+             * rest. */
+            .warning:not(:empty) {
+                font-size: 11px;
+                padding-top: 4px;
+            }
+
+            footer {
+                margin-top: 16px;
+                padding-top: 10px;
+                border-top: 1px solid var(--line);
+                font-size: 11px;
+                opacity: 0.6;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Temporal UI Extension Starter <span id="version"></span></h1>
+        <div id="status">Checking this tab…</div>
+
+        <h2>Show</h2>
+        <label class="row"><input type="checkbox" id="enabled" /> Enabled</label>
+        <label class="row"><input type="checkbox" id="treeEnabled" /> Family tree (group children under parents)</label>
+        <label class="row"><input type="checkbox" id="linksEnabled" /> Per-row deep links</label>
+
+        <h2>Deep links</h2>
+        <div id="links"></div>
+        <button id="add-link" type="button">Add a link</button>
+        <p class="hint" id="link-scopes"></p>
+        <p class="hint">
+            Tokens: <code id="tokens"></code><br />
+            Add <code>:raw</code> to skip URL-encoding, and an offset to widen the window —
+            <code>{startTimeIso-10m}</code>, <code>{endTimeSec+1h}</code>.
+        </p>
+
+        <h2>Payloads</h2>
+        <label class="row"><input type="checkbox" id="payloadsEnabled" /> Input and result on each row</label>
+        <p class="hint">
+            Adds a <code>{ }</code> button to every row. Hover it — or focus it with the keyboard — to read that
+            workflow's input and result. Nothing is requested until you open the panel: a page of a hundred rows costs no
+            requests at all, and opening one costs one history event per question, so a running row costs one request and
+            a closed row two. Switching this off closes the panel and forgets everything it had decoded.
+        </p>
+
+        <h2>Per-row questions <span class="hint">these make requests</span></h2>
+        <label class="row"><input type="checkbox" id="lastEventEnabled" /> "Last event" column</label>
+        <label class="row"><input type="checkbox" id="retryEnabled" /> Retrying-activity badge</label>
+        <p class="hint">
+            Everything above reads answers the page was already fetching. These two ask Temporal questions of their
+            own — one request per <em>running</em> row each, so a list of closed workflows costs nothing. Answers are
+            cached for 30s, four requests run at a time, and a rate limit backs off instead of retrying. Closed rows
+            are never asked about: their answers cannot change.
+        </p>
+        <p class="hint">
+            The badge shows the attempt count, the activity type and the next retry time. It deliberately does
+            <strong>not</strong> read the failure message — that is a decision about what these two features read, and it
+            still holds: everything in the column and the badge comes from event <em>metadata</em>. Payloads are the
+            section above, on their own button, and the failure message arrives with them.
+        </p>
+
+        <h2>Codec server <span class="hint">optional</span></h2>
+        <input type="text" class="wide" id="codecEndpoint" placeholder="https://codec.example.com" spellcheck="false" />
+        <div class="warning" id="codec-warning"></div>
+        <p class="hint">
+            Only needed for payloads this extension cannot read on its own — <code>binary/encrypted</code> above all.
+            Plain <code>json/plain</code> payloads are decoded in the browser and are never sent anywhere. The request is
+            the one the Temporal UI makes, apart from its two credential options — <code>POST {endpoint}/decode</code>,
+            the namespace in <code>X-Namespace</code> — so a codec server that already works there needs no change
+            unless it authenticates its callers (see below): the same URL you set under <em>Codec Server</em> in the
+            Temporal UI belongs here.
+            <strong>An empty box means no payload byte leaves this machine.</strong> When it is filled, only the payloads
+            that cannot be read in the browser are sent, and the panel names the host it sent them to, every time.
+        </p>
+        <p class="hint">
+            Unlike the Temporal UI, this extension sends <strong>no credentials to a codec server</strong> — not your
+            access token, not cookies — and cannot be made to: there is no setting for either, and the one function that
+            can post to a codec server switches cookies off itself and refuses a credential header rather than
+            forwarding it. The endpoint is chosen through a channel any script on the page can write to,
+            which is not a channel to aim a credential from. So a codec server that authenticates its callers will
+            answer <code>401</code> here and the panel will say so. Point this at one that does not, such as your own on
+            <code>localhost</code>.
+        </p>
+
+        <footer>
+            A community sample. Not affiliated with or endorsed by Temporal Technologies. Requests no host permissions
+            and stores no credentials. Payloads leave this browser only if you name a codec server above.
+        </footer>
+
+        <script src="popup.js"></script>
+    </body>
+</html>

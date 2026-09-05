@@ -132,6 +132,54 @@
         {
             "path": "tests/unit/renderRowInfo.spec.ts",
             "why": "Pins the two columns that cost a request — the “Last event” cell and the retrying-activity badge — including the four different meanings an empty cell can have, the refresh control's cooldown, and the fact that a render pass must never act as though the control were pressed. 02 introduces both features and 03 changes neither, so the spec is byte-identical; its one forward-looking note is worded to be true in both stages."
+        },
+        {
+            "path": "src/page/requestPacing.ts",
+            "why": "The one pacer instance 03 introduced so the row questions and the payload hover share a single four-in-flight cap rather than two independent ones. 04 issues no new request of its own — every stage-04 feature reads data 03 already fetched or asks Temporal's existing list endpoint a differently-shaped query — so there is no third caller and no reason for this file to differ."
+        },
+        {
+            "path": "src/payloads/codec.ts",
+            "why": "Pure: the codec request, and what is deliberately not in it. 04's JSON viewer renders the text this file already produces; it does not change how that text is obtained."
+        },
+        {
+            "path": "src/payloads/payloads.ts",
+            "why": "Pure: what can be read in the browser, and how it is formatted. 04's viewer is a second consumer of decodePayload's output, not a change to it — the losslessness rule this file already states (no JSON.parse, no reformatting) is the same rule 04's JSON lexer exists to extend to the punctuation, not to relax."
+        },
+        {
+            "path": "src/payloads/valueGuards.ts",
+            "why": "The two narrowings the payload path shares. Pure, and untouched by a stage that adds no new payload shape."
+        },
+        {
+            "path": "tests/unit/codec.spec.ts",
+            "why": "Pins the shared src/payloads/codec.ts."
+        },
+        {
+            "path": "tests/unit/payloads.spec.ts",
+            "why": "Pins the shared src/payloads/payloads.ts."
+        },
+        {
+            "path": "src/payloads/payloadClient.ts",
+            "why": "The Input/Output split (04) turned out not to touch this file: `kind` was already one of the four correlation fields this client checks, from 03 — no button ever carries it as data, tooltip.ts's buttonFrom() infers it from which of the two CSS classes a button has, then passes it into the same per-hover request/answer/ledger machinery this file already provided. There are still two independent questions in flight, but they are two calls to the one client, not two clients, and not a new field either."
+        },
+        {
+            "path": "src/payloads/payloadMessages.ts",
+            "why": "Both messages already carry the `kind` field distinguishing 'input' from 'outcome' — added in 03, which serves both from one panel. 04's tooltip.ts reads and writes that same field pair on two independent requests instead of one; no new message shape was needed for a second direction."
+        },
+        {
+            "path": "src/payloads/payloadServe.ts",
+            "why": "Already branches on `request.kind` at every step — which direction's history page to fetch, which extractor to run, which label to use — because 03 already served both Input and outcome from this one file for its single two-section panel. 04 asking for the two kinds as two separate requests, rather than 03's one panel asking for both together, costs this file nothing new: the branching was already there."
+        },
+        {
+            "path": "tests/payloadFixtures.ts",
+            "why": "Fixtures for the three files above, none of which forked."
+        },
+        {
+            "path": "tests/unit/apiInjectCodec.spec.ts",
+            "why": "Pins the egress path, which is one request shape regardless of which button asked for it, and does so unchanged from 03: this file is byte-identical here, and every one of its calls into apiInjectHarness.ts's askPayload() still takes the helper's default `kind: 'input'` rather than overriding it to 'outcome'. That is not a gap 04 needed to close — the egress path does not branch on kind at all, so a second kind of caller would pin the same assertions a second time, not a new one."
+        },
+        {
+            "path": "tests/unit/payloadMessages.spec.ts",
+            "why": "Pins the shared src/payloads/payloadMessages.ts. The 'input'/'outcome' kind was already part of the message shape in 03 — one panel with two sections, one request per section — so nothing about 04's split of those two sections into two independent trigger buttons sharing that one panel changes what a message looks like."
         }
     ],
     "forks": [
@@ -234,6 +282,30 @@
         {
             "path": "tests/apiInjectHarness.ts",
             "why": "The fake network the apiInject spec files share, plus the helper that imports the two MAIN-world scripts in the manifest's order and the install/teardown pair without which listeners accumulate across tests. Forked because 03's is a strict SUPERSET: the forward-history body a payload hover reads, the encrypted fixture that is the only thing a codec server is reached for, a decoding endpoint in the fake network, and the two extra Seen fields — the request BODY and `credentials` — that let a spec assert what left the browser rather than only where it went. Sharing it would mean 02 carrying fixtures for a feature it does not have. 01 has no copy."
+        },
+        {
+            "path": "src/payloads/payloadButton.ts",
+            "why": "03 draws one `{ }` button per row; 04 draws two — In and Out, each a separate button element with its own class, which is the only place its `kind` lives (tooltip.ts's buttonFrom() reads the class back off it; neither button carries kind as data) — because the Input/Output split (root README's stage-04 scope) needs two independent hover targets. The two targets still share one panel; see src/payloads/tooltip.ts's fork entry for that half."
+        },
+        {
+            "path": "src/payloads/tooltip.ts",
+            "why": "03 owns one panel with two sections, filled together on a single hover. 04 forks this into two independent trigger buttons — Input and Output — that ask independent questions, but still share ONE panel: one generation counter, one hover/close timer pair, one `activeKind` field recording which of the two questions the panel is currently answering. Hovering the other kind does not open a second panel; it re-points the same node's `data-tuis-kind` and re-fills it, and a stale answer for the kind the panel used to show is discarded by the same generation check 03 already had. That counter alone only catches a NEWER hover or a close superseding this one; it says nothing when the row itself changes with neither happening — Temporal recycling the same connected `<tr>` to a different workflow while this generation is still current — which is what matchesCurrentRow() re-checks before a late answer is allowed to paint. The running-status gate stays on Output alone, exactly as in 03 — Input still has an answer the moment a row exists."
+        },
+        {
+            "path": "tests/tooltipHarness.ts",
+            "why": "Follows src/payloads/tooltip.ts's fork: `button(kind)` still selects one of the two trigger buttons, but `panel(expectedKind?)`/`section(expectedKind?)` are assertions over the ONE shared panel node rather than selectors into per-kind ones — called with no argument they return the panel however it is currently shown, called with a kind they throw unless the panel is currently showing that kind. There is only ever one panel node to find; the harness's job is checking which question it is currently answering, not locating one of several."
+        },
+        {
+            "path": "tests/unit/renderPayloadButton.spec.ts",
+            "why": "Pins src/payloads/payloadButton.ts's fork: two buttons per row, both classes absent of row identity, both present or both absent under the master switch, and the fixed four-control order (badge, link, Input, Output) now that a second payload control shares the id cell."
+        },
+        {
+            "path": "tests/unit/tooltip.spec.ts",
+            "why": "Pins src/payloads/tooltip.ts's fork. Demonstrates the full rule set once for Input, mirrors only the highest-risk points once for Output (the running-status gate that applies to Output alone), and adds a dedicated section proving the single-panel model: opening one kind does not request the other; hovering Output after Input replaces the one panel's content rather than opening a second; a late answer for the kind the panel used to show cannot paint over the kind it now shows; and Escape closes the one panel regardless of which kind it is showing."
+        },
+        {
+            "path": "tests/unit/payloadClient.spec.ts",
+            "why": "payloadClient.ts itself did not fork (see its shared entry above), and all but one of this file's tests still pass unmodified against 04's harness. The one that does not: 03 builds both the input and outcome sections together inside a single panel the moment either is hovered, so 'reset erases both sections' could assert on section('outcome') without ever hovering it. 04 shares ONE panel between the two kinds rather than building one per kind, so a kind that was never hovered was never the active kind either — the rewritten test instead confirms there is still exactly one panel node on the page after the reset, and that it is the one just erased rather than a second node holding a stale answer of its own. Run npm run lineage for the exact byte-diff."
         }
     ]
 }
