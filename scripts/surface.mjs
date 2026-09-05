@@ -625,7 +625,11 @@ async function main(argv) {
             `surface: clean — ${checked.manifests} manifest(s) within budget, ` +
                 `${checked.sourceFiles} source file(s) free of banned sinks, ` +
                 `${checked.bundles} audited bundle(s) covering every script the extensions load, ` +
-                `${checked.directDeclarations.size} bundled package(s) declared by the project that imports them`,
+                // Same noun as the detailed line above: a project/package pair, not a
+                // package. Three packages produce five declarations across the projects,
+                // and one command printing "3" and "5" for packages invites the reader
+                // to work out which count lied.
+                `${checked.directDeclarations.size} direct runtime package declaration(s) checked`,
         );
     }
     return 0;

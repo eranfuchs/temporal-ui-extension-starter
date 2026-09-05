@@ -114,6 +114,11 @@ stage 04 links here.
 None of it needs a new permission or a new destination: `storage`, and the requests
 03 already makes.
 
+Its README should repeat what is stage-specific — the security card, the capability
+difference from 03, and the "read these files" path — and **link** to the gate and
+dependency explanations in this file rather than restate them. Three stages carrying four
+copies of the same policy prose is what the last readability pass removed.
+
 That ladder is the argument this repository is making: a genuinely useful view costs zero
 permissions, and every permission after that should be traceable to a feature you can
 name. Read `01`, diff it against `02`, then diff `02` against `03` — those diffs *are* the

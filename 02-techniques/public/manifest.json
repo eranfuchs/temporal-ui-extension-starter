@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Temporal starter 02 — techniques",
-    "version": "0.12.5",
+    "version": "0.12.6",
     "description": "Draws parent/child workflow families in the Temporal UI, adds a last-event column and a retrying-activity badge, and links each row to your own log tool. Reads no payload. No backend, no host permissions, and no credential of its own — it uses the session the page already has.",
     "permissions": [
         "storage"
