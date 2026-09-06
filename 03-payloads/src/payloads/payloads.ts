@@ -225,10 +225,21 @@ export function needsCodec(payload: RawPayload): boolean {
     return encoding !== NULL_ENCODING && !READABLE_ENCODINGS.has(encoding);
 }
 
-// Anything longer than this is clipped before it reaches the DOM. A single
-// workflow argument can be megabytes; laying that into a tooltip freezes the
-// tab, and nobody reads past the first screen of it anyway.
-export const MAX_DISPLAY_CHARS = 20_000;
+// Anything longer than this is clipped before it reaches the DOM — the ONE bound
+// this file's every consumer sees, whatever it goes on to do with the text. Cut
+// tighter than a consumer's OWN bound (node count, say, rather than character
+// count) and that consumer's bound never gets the chance to matter: its input
+// arrives pre-broken into an invalid prefix instead. That is what the old value
+// here, 20,000, did to 04-ui-goodies's JSON viewer — see "The clip underneath
+// the cap" in docs/design-notes.md for the incident and how 2,000,000 was
+// measured, both against the viewer's own budget and against a real render of
+// the plain-text fallback this number's OWN worst case still is.
+//
+// Raising this number also raises payloadClient.ts's worst-case cache size —
+// it caches every answer this size, up to MAX_CACHED_PAYLOADS of them. See
+// MAX_CACHED_PAYLOAD_CHARS there: a change to either number now has to be
+// weighed against the other.
+export const MAX_DISPLAY_CHARS = 2_000_000;
 
 export function decodePayload(payload: RawPayload): string {
     const encoding = encodingOf(payload);

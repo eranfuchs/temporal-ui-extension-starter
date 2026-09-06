@@ -38,7 +38,7 @@ import {
     section,
     settled,
 } from '../tooltipHarness';
-import { MAX_CACHED_PAYLOADS, REQUEST_TIMEOUT_MS } from '../../src/payloads/payloadClient';
+import { MAX_CACHED_PAYLOAD_CHARS, MAX_CACHED_PAYLOADS, REQUEST_TIMEOUT_MS } from '../../src/payloads/payloadClient';
 import { PANEL_CLASS } from '../../src/decoration';
 import { resetPayloadState } from '../../src/payloads/tooltip';
 import { MESSAGE_SOURCE } from '../../src/types';
@@ -397,6 +397,61 @@ describe('caching answers', () => {
         // Two requests beyond the loop: the run that tipped the map over, and the
         // re-ask for the run that was evicted with it.
         expect(posted).toHaveLength(MAX_CACHED_PAYLOADS + 2);
+    });
+
+    it('also evicts by total retained size, so a handful of large answers cannot dwarf the count limit', async () => {
+        // MAX_DISPLAY_CHARS (payloads.ts) bounds one answer at up to 2,000,000
+        // characters — a size at which the count-only bound above would let
+        // MAX_CACHED_PAYLOADS of them (200) accumulate before evicting anything.
+        // Two answers each half of MAX_CACHED_PAYLOAD_CHARS is enough to exercise
+        // the size trigger at a small fraction of that count. This client is
+        // shared with 04-ui-goodies (see scripts/lineage.json), which is where the
+        // JSON viewer that motivated raising MAX_DISPLAY_CHARS lives — this stage
+        // has no such viewer, but shares the cache the larger answers now fill.
+        const big = 'x'.repeat(Math.floor(MAX_CACHED_PAYLOAD_CHARS / 2));
+
+        page.row = { ...RUNNING_ROW, runId: fakeRunId(3_000) };
+        await hoverAndAnswer({ text: big });
+        expect(posted).toHaveLength(1);
+
+        // Still cached: one more of these exactly fills the budget, not exceeds it.
+        page.row = { ...RUNNING_ROW, runId: fakeRunId(3_001) };
+        await hoverAndAnswer({ text: big });
+        expect(posted).toHaveLength(2);
+
+        // Both still cached at the size limit.
+        page.row = { ...RUNNING_ROW, runId: fakeRunId(3_000) };
+        await hoverAndAnswer({ text: big });
+        expect(posted).toHaveLength(2);
+
+        // A THIRD one this size tips the total over the budget at only 3 entries —
+        // nowhere near MAX_CACHED_PAYLOADS — so the whole map is cleared and the
+        // first run has to be asked about again.
+        page.row = { ...RUNNING_ROW, runId: fakeRunId(3_002) };
+        await hoverAndAnswer({ text: big });
+        expect(posted).toHaveLength(3);
+        page.row = { ...RUNNING_ROW, runId: fakeRunId(3_000) };
+        await hoverAndAnswer({ text: big });
+        expect(posted).toHaveLength(4);
+    });
+
+    it('does not cache a single result already bigger than the whole size budget', async () => {
+        // The formatter (payloads.ts) normally clips well under this, but
+        // `text` is only validated as a string, so a page-world response that
+        // does not go through that formatter — malformed or forged — is not
+        // guaranteed to. Caching it anyway would put the cache over its own
+        // declared bound on the very first insert.
+        const huge = 'x'.repeat(MAX_CACHED_PAYLOAD_CHARS + 1);
+        page.row = { ...RUNNING_ROW, runId: fakeRunId(3_100) };
+
+        await hoverAndAnswer({ text: huge });
+        expect(posted).toHaveLength(1);
+        expect(section('input').body.textContent).toBe(huge);
+
+        // Not cached: the same run is asked about again rather than served
+        // from a cache entry that should not exist.
+        await hoverAndAnswer({ text: huge });
+        expect(posted).toHaveLength(2);
     });
 });
 

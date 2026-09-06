@@ -598,6 +598,28 @@ describe('hovering the other kind replaces the panel, it does not add a second o
         expect(body.style.width).toBe('');
         expect(body.style.height).toBe('');
     });
+
+    // The title/heading-row half of the same carryover, one level up: ensurePanel()'s
+    // width observer (untestable here — see tooltipResizeObserver.spec.ts) sets an
+    // inline max-width to match the body's width as of whenever it last fired, which
+    // is stale until that observer reacts to the reset above. openNow() clears it
+    // directly for exactly the reason it clears body's width/height: without it, the
+    // FIRST placement of a new hover would measure the title against a width left
+    // over from a reader who had the previous hover's body dragged wide. jsdom's
+    // layout is always zero, so a real drag cannot be reproduced here — set directly,
+    // the same way the two specs above set body's width/height directly.
+    it('clears a stale title/heading-row max-width from a previous hover before the next placement', () => {
+        openPanel('input');
+        const titleLine = panel('input').querySelector<HTMLElement>(`.${PANEL_CLASS}-title`)!;
+        const headingRow = panel('input').querySelector<HTMLElement>(`.${PANEL_CLASS}-heading-row`)!;
+        titleLine.style.maxWidth = '900px';
+        headingRow.style.maxWidth = '900px';
+
+        openPanel('outcome');
+
+        expect(titleLine.style.maxWidth).toBe('');
+        expect(headingRow.style.maxWidth).toBe('');
+    });
 });
 
 // ── The Copy button ─────────────────────────────────────────────────────────
@@ -731,6 +753,31 @@ describe('the JSON viewer is wired into the panel', () => {
         expect(body.querySelector(`.${JSON_VIEW_CLASS}`)).toBeNull();
         expect(body.querySelector(`.${JSON_FALLBACK_CLASS}`)).not.toBeNull();
         expect(body.textContent).toBe('not json at all');
+    });
+
+    it('renders a result past the historical 20,000-character clip as the highlighted view in the real panel', async () => {
+        // apiInjectPayloadDisplay.spec.ts proves a payload this size reaches the
+        // panel unclipped through the message-passing path; this proves the other
+        // half — that once it arrives, THIS panel's own replaceChildren() draws it
+        // as a tree, not the plain-text fallback a smaller, un-coordinated clip
+        // used to force it into. See "The clip underneath the cap" in
+        // docs/design-notes.md.
+        const items: unknown[] = [];
+        let text = '[]';
+        let i = 0;
+        while (text.length < 30_000) {
+            items.push({ proposalId: `PROP-${i}`, amount: { value: 1000 + i, currency: 'USD' } });
+            text = JSON.stringify(items);
+            i++;
+        }
+
+        await hoverAndAnswer({ text });
+
+        const body = section().body;
+        const jsonView = body.querySelector(`.${JSON_VIEW_CLASS}`);
+        expect(jsonView).not.toBeNull();
+        expect(body.querySelector(`.${JSON_FALLBACK_CLASS}`)).toBeNull();
+        expect(jsonView!.textContent).toContain('PROP-0');
     });
 });
 

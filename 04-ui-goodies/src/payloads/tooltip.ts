@@ -131,9 +131,22 @@ interface PanelState {
     panel: HTMLDivElement | null;
     titleLine: HTMLDivElement | null;
     heading: HTMLElement | null;
+    // The flex row heading + copyButton sit in. Only openNow() needs it (to
+    // clear a stale inline max-width — see there); ensurePanel()'s own
+    // ResizeObserver callback closes over its own local copy and does not
+    // read this field.
+    headingRow: HTMLElement | null;
     body: HTMLElement | null;
     copyButton: HTMLButtonElement | null;
     copyFeedbackTimer: number | null;
+    // Ties the title/heading-row width, and the panel's position, to the
+    // body's actual rendered size — see the comment in ensurePanel(). Stored
+    // here, not left as a local const there, so removePayloadTooltip() can
+    // disconnect() it; a local const in a function that runs once per panel
+    // build is unreachable from anywhere else, which is exactly how a prior
+    // version of this file leaked one observer per off/on cycle of the
+    // master switch.
+    widthObserver: ResizeObserver | null;
     // Which kind the panel is currently showing, or null before anything has
     // ever been hovered. Read by tests through data-tuis-kind on the element
     // itself, and by matchesCurrentRow() as the cheap first check before the
@@ -161,9 +174,11 @@ function freshPanelState(): PanelState {
         panel: null,
         titleLine: null,
         heading: null,
+        headingRow: null,
         body: null,
         copyButton: null,
         copyFeedbackTimer: null,
+        widthObserver: null,
         activeKind: null,
         generation: 0,
         hoverTimer: null,
@@ -225,10 +240,22 @@ function erasePanelText(): void {
 // the next question; it is not a revocation, and the popup does not claim
 // otherwise.
 //
-// Detach first, then reset: resetPayloadState() does the close() and the
-// erasure. The node is gone by then, which is strictly more than erasing its
-// text — ensurePanel() rebuilds on the next hover because it checks
-// `isConnected`, not just for null.
+// ERASE, THEN DETACH — not the order this function shipped with. A detached
+// node is not an erased one: anything on the page that already holds a
+// reference to .tuis-panel-body — a MutationObserver, a stray querySelector
+// run before the switch was flipped — keeps that reference after .remove()
+// takes the node out of the document, and the decoded text is still sitting
+// in it unless something clears it FIRST. resetPayloadState()'s
+// erasePanelText() is null-guarded and reads state.body/titleLine/heading, so
+// it has to run while those references are still live: an earlier version of
+// this function nulled them before calling it, which made the erasure a
+// silent no-op for a whole release — the node still came out of the document
+// on schedule, so nothing about that looked wrong.
+//
+// The width observer is the same shape of leak, one step earlier: disconnect()
+// has to be called before the node it watches is discarded, or the callback —
+// and its closure over the pre-removal title/heading-row elements — lives on
+// indefinitely, watching a body nobody can see.
 export function removePayloadTooltip(): void {
     // Two more references this has always had to clear, on top of the panel
     // itself: a pending copy-feedback timeout closes over the (about-to-be-
@@ -239,13 +266,16 @@ export function removePayloadTooltip(): void {
     cancel(state.copyFeedbackTimer);
     state.copyFeedbackTimer = null;
     state.pointerHeldInPanel = false;
+    resetPayloadState();
+    state.widthObserver?.disconnect();
+    state.widthObserver = null;
     state.panel?.remove();
     state.panel = null;
     state.titleLine = null;
     state.heading = null;
+    state.headingRow = null;
     state.body = null;
     state.copyButton = null;
-    resetPayloadState();
 }
 
 export function installPayloadTooltip(dependencies: TooltipDeps): void {
@@ -451,6 +481,17 @@ function openNow(kind: PayloadKind, button: HTMLElement): void {
     // in — the next one starts from the CSS shrink-to-fit default again.
     ui.body.style.removeProperty('width');
     ui.body.style.removeProperty('height');
+    // Same reason, for the other thing a drag (or a wide previous payload)
+    // leaves behind: ensurePanel()'s ResizeObserver sets an inline max-width
+    // on the title and heading row to match the body's width as of whenever
+    // it last fired — which, until that observer reacts to the reset above,
+    // is still the PREVIOUS hover's width. The very first place() call below
+    // runs synchronously, before the observer gets a chance to react, so
+    // without this a hover that opens right after a wide one briefly
+    // measures itself against a stale pixel value instead of content.css's
+    // static 32.5vw first-paint default.
+    state.headingRow?.style.removeProperty('max-width');
+    ui.titleLine.style.removeProperty('max-width');
     // Whatever the Copy button most recently showed — "Copied" or "Failed" —
     // described the payload the panel used to hold, not this one. The
     // button is the same DOM element across every kind and every row (see
@@ -650,6 +691,14 @@ function ensurePanel(): {
         return { panel: state.panel, titleLine: state.titleLine, heading: state.heading, body: state.body };
     }
 
+    // A stale panel (isConnected false above) still has a widthObserver watching
+    // the body about to be discarded with it. removePayloadTooltip() disconnects
+    // before this point ever runs, but a stale panel means something ELSE took
+    // the node off the page — a host DOM replacement, not our own master switch —
+    // and that path never went through removePayloadTooltip() at all.
+    state.widthObserver?.disconnect();
+    state.widthObserver = null;
+
     const panelElement = document.createElement('div');
     panelElement.className = PANEL_CLASS;
     panelElement.hidden = true;
@@ -709,37 +758,28 @@ function ensurePanel(): {
         state.pointerHeldInPanel = true;
     });
 
-    // Keeps .tuis-panel-title and .tuis-panel-heading-row from independently
-    // deciding the panel's width — see the ceiling story in design-notes.md.
-    // `.tuis-panel` has no width of its own; it shrink-to-fits its widest
-    // child. content.css's static `max-width: 32.5vw` on the title stops an
-    // unwrapped workflow id from driving that on an ordinary screen, but the
-    // title's own NATURAL width does not shrink just because a reader drags
-    // the body narrower, or because clampBodyToDefaultSize() pins it smaller
-    // — so on a wide enough monitor, 32.5vw is still hundreds of pixels,
-    // comfortably wider than a body a reader deliberately shrank below it,
-    // and the same blank gutter this whole rule exists to prevent reappears
-    // beside a narrower body. Rather than pick a different static number —
-    // no single one is right for every screen and every drag, in either
-    // direction — this ties the title's ceiling to whatever the body's OWN
-    // rendered width actually is, right now, so a widened or narrowed body
-    // always carries the title along with it. ResizeObserver, not a
-    // resize/input event, because a native resize:both drag fires neither —
-    // reporting "this element's box changed size, however that happened" is
-    // exactly what it is for.
+    // Ties the title/heading-row width, and the panel's own position, to
+    // .tuis-panel-body's ACTUAL rendered size, not a static number: a fresh
+    // hover uses content.css's `32.5vw` as a first-paint default (see the
+    // ceiling story in design-notes.md for why that alone is not enough on a
+    // wide monitor), but only this keeps the title from outgrowing a body a
+    // reader has dragged narrower, and keeps the whole panel — including its
+    // own resize handle — inside the viewport as a reader drags the body
+    // past that default toward content.css's much larger drag ceiling.
+    // ResizeObserver, not a resize/input event, because a native resize:both
+    // drag fires neither.
     //
-    // Guarded, not polyfilled: jsdom (the unit-test environment) has neither
-    // ResizeObserver nor a layout engine for it to usefully drive even if it
-    // did — getBoundingClientRect() is all zeros there regardless. Every
-    // geometry bug in this file's history (see design-notes.md) was verified
-    // against a real browser for that same reason, never against jsdom.
+    // Guarded, not polyfilled: jsdom has no ResizeObserver and no layout
+    // engine to usefully drive it with, so this whole block is verified
+    // against a real browser, never the unit suite — see design-notes.md.
     if (typeof ResizeObserver !== 'undefined') {
-        const widthFollowsBody = new ResizeObserver(() => {
+        state.widthObserver = new ResizeObserver(() => {
             const width = `${body.getBoundingClientRect().width}px`;
             titleLine.style.maxWidth = width;
             headingRow.style.maxWidth = width;
+            if (state.triggerButton?.isConnected && !panelElement.hidden) place(panelElement, state.triggerButton);
         });
-        widthFollowsBody.observe(body);
+        state.widthObserver.observe(body);
     }
 
     document.body.appendChild(panelElement);
@@ -747,6 +787,7 @@ function ensurePanel(): {
     state.panel = panelElement;
     state.titleLine = titleLine;
     state.heading = heading;
+    state.headingRow = headingRow;
     state.body = body;
     state.copyButton = copyButton;
     return { panel: panelElement, titleLine, heading, body };

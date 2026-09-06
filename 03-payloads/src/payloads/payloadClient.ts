@@ -77,12 +77,25 @@ export const REQUEST_TIMEOUT_MS = 15_000;
 // keep passing after it changes.
 export const MAX_CACHED_PAYLOADS = 200;
 
+// The other half of the budget: bounds TOTAL text across every cached answer, not
+// just entry count — a COUNT limit alone stopped being enough once MAX_DISPLAY_CHARS
+// (payloads.ts) grew to 2,000,000, since a few large answers can now cost as much
+// as 200 small ones used to. Set to this cache's own old worst case
+// (MAX_CACHED_PAYLOADS x the previous 20,000-char MAX_DISPLAY_CHARS), not a new
+// guess. See docs/design-notes.md.
+export const MAX_CACHED_PAYLOAD_CHARS = 4_000_000;
+
 let deps: PayloadClientDeps | null = null;
 let nextRequestId = 1;
 
 // Answers already received. A pointer moving back and forth between two rows is
 // very common and each round trip is a real request.
 const cache = new Map<string, PayloadResult>();
+
+// Total `text` length across every cached answer — the running total
+// MAX_CACHED_PAYLOAD_CHARS bounds. Kept alongside the map rather than summed on
+// demand, since it has to be checked on every insert.
+let cachedChars = 0;
 
 // Questions asked and not yet answered, keyed the same way the cache is.
 // Invariant 2: this is the cache for the interval the cache cannot cover. Entries
@@ -140,6 +153,7 @@ export function installPayloadClient(dependencies: PayloadClientDeps): void {
 // in docs/design-notes.md.
 export function resetPayloadClient(): void {
     cache.clear();
+    cachedChars = 0;
     inFlight.clear();
     cacheEpoch++;
 }
@@ -261,6 +275,19 @@ function remember(key: string, result: PayloadResult): void {
     // gives: what is on screen is one hover away from being re-fetched, so being
     // crude here costs one round trip and nothing else. Cleared BEFORE the insert,
     // so the entry the user is looking at survives its own eviction pass.
-    if (cache.size >= MAX_CACHED_PAYLOADS) cache.clear();
+    //
+    // A single result already bigger than the whole budget cannot be cached at
+    // all — clearing everything else first would not help. Shown, not
+    // remembered: the panel already has it from this call, and a later hover
+    // just asks again.
+    if (result.text.length > MAX_CACHED_PAYLOAD_CHARS) return;
+
+    // Two independent triggers: MAX_CACHED_PAYLOADS for many small answers,
+    // MAX_CACHED_PAYLOAD_CHARS for a few large ones.
+    if (cache.size >= MAX_CACHED_PAYLOADS || cachedChars + result.text.length > MAX_CACHED_PAYLOAD_CHARS) {
+        cache.clear();
+        cachedChars = 0;
+    }
     cache.set(key, result);
+    cachedChars += result.text.length;
 }

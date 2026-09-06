@@ -56,11 +56,16 @@
                 white-space: pre-line;
             }
 
+            /* 24px is the smallest target the WCAG 2.2 "Target Size (Minimum)"
+             * criterion accepts — the same floor public/content.css already holds
+             * .tuis-col-refresh to. The row's padding alone left these a few px
+             * under it once the popup was made denser. */
             label.row {
                 display: flex;
                 align-items: center;
                 gap: 8px;
                 padding: 2px 0;
+                min-height: 24px;
             }
 
             label.row input {
@@ -111,6 +116,7 @@
                 color: inherit;
                 font-size: 11px;
                 padding: 2px 8px;
+                min-height: 24px;
                 cursor: pointer;
             }
 
@@ -164,20 +170,21 @@
         <h2>Payloads</h2>
         <label class="row"><input type="checkbox" id="payloadsEnabled" /> Input and result on each row</label>
         <p class="hint">
-            Adds a <code>{ }</code> button to every row. Hover it — or focus it with the keyboard — to read that
-            workflow's input and result. Nothing is requested until you open the panel: a page of a hundred rows costs no
-            requests at all, and opening one costs one history event per question, so a running row costs one request and
-            a closed row two. Switching this off closes the panel and forgets everything it had decoded.
+            Adds an <code>In</code> and an <code>Out</code> button to every row — two independent questions, not one
+            combined panel. Hover either — or focus it with the keyboard — to read that workflow's input or its result.
+            Nothing is requested until you open one: a page of a hundred rows costs no requests at all, and opening one
+            costs at most one history event, so hovering only <code>In</code> never touches the result and vice versa.
+            Switching this off closes the panel and forgets everything it had decoded.
         </p>
 
         <h2>Per-row questions <span class="hint">these make requests</span></h2>
         <label class="row"><input type="checkbox" id="lastEventEnabled" /> "Last event" column</label>
         <label class="row"><input type="checkbox" id="retryEnabled" /> Retrying-activity badge</label>
         <p class="hint">
-            Everything above reads answers the page was already fetching. These two ask Temporal questions of their
-            own — one request per <em>running</em> row each, so a list of closed workflows costs nothing. Answers are
-            cached for 30s, four requests run at a time, and a rate limit backs off instead of retrying. Closed rows
-            are never asked about: their answers cannot change.
+            These two ask Temporal questions of their own, the same way the payload buttons above do — one request per
+            <em>running</em> row each, so a list of closed workflows costs nothing. Answers are cached for 30s, four
+            requests run at a time, and a rate limit backs off instead of retrying. Closed rows are never asked about:
+            their answers cannot change.
         </p>
         <p class="hint">
             The badge shows the attempt count, the activity type and the next retry time. It deliberately does

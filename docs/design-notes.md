@@ -63,6 +63,8 @@ link names a heading that exists.
   - [Two algorithms the gates had no business owning](#two-algorithms-the-gates-had-no-business-owning)
   - [A card nobody was checking](#a-card-nobody-was-checking)
   - [A hostname with no letters in it](#a-hostname-with-no-letters-in-it)
+- [The clip underneath the cap](#the-clip-underneath-the-cap)
+- [The observer that outlived its panel](#the-observer-that-outlived-its-panel)
 
 ## The payload panel
 
@@ -1134,6 +1136,82 @@ have re-created the original mistake of picking a number with nothing real to we
 No test pinned the old default — every existing case in `tests/unit/jsonViewer.spec.ts` passes
 its own small explicit override (`{ maxNodes: 2 }`, `{ maxNodes: 5_000, maxDepth: 1 }`) rather
 than relying on `DEFAULT_JSON_VIEWER_LIMITS` — so raising it changed no test's meaning, only
-what a real hover renders. Verified end to end with a synthetic 50-proposal, ~165KB fixture of
-the reported shape: previously past any cap this file had, now rendered fully formatted, colour
-and indentation intact, through the real message-passing path a hover actually uses.
+what a real hover renders. Checked against a synthetic 50-proposal, ~165KB fixture of the
+reported shape by calling `renderJsonPayload()` on it directly: previously past any cap this
+file had, now rendered fully formatted, colour and indentation intact.
+
+That last sentence used to end differently — it claimed this had been "verified end to end...
+through the real message-passing path a hover actually uses." It hadn't been. Calling
+`renderJsonPayload()` directly on a hand-built string never touches `payloads.ts`, and
+`payloads.ts` had a cap of its own that this section didn't know about. See "The clip
+underneath the cap" below for what that gap actually was, and for the test that closes it for
+real.
+
+## The clip underneath the cap
+
+`payloads.ts` clips every answer to `MAX_DISPLAY_CHARS` characters before
+`renderJsonPayload()` ever sees it. That cap — 20,000 at the time — was never coordinated
+with `maxNodes` above: a catalog sized for the 100,000-node budget cleared 20,000
+characters at under a tenth of that node count, so `clip()` cut it first, mid-token, and
+handed the JSON viewer a string that was no longer valid JSON. Fixed by raising
+`MAX_DISPLAY_CHARS` to 2,000,000 the same evidence-based way `maxNodes` was raised —
+measured against the same fixture stringified, not guessed.
+
+`payloads.ts` is registered `shared` in `scripts/lineage.json`, byte-identical between
+`03-payloads` and `04-ui-goodies`, and 03 has no JSON viewer at all — the lineage gate
+rejected an early version of the comment for justifying the number by naming 04-only
+`jsonViewer.ts`. Rewritten to be consumer-agnostic, then propagated to 03 byte-for-byte.
+
+Verified through the real message path, not around it: `tests/unit/apiInjectPayloadDisplay.spec.ts`
+sends a payload past the old clip through `askPayload()` — the actual `apiInject.ts`
+listener a hover uses — and asserts it comes back unclipped and renders as the real
+coloured tree, not the plain-text fallback; `tests/unit/tooltip.spec.ts` confirms the same
+fixture reaches the real panel body, one hop further than the message layer alone proves.
+
+A third cap depended on the first: `payloadClient.ts`'s answer cache (also shared) bounded
+entry COUNT (`MAX_CACHED_PAYLOADS`, 200) but not total text, so raising the per-answer clip
+100x raised the cache's worst-case memory by the same factor. Fixed with a second,
+independent budget, `MAX_CACHED_PAYLOAD_CHARS` — set to the cache's own historical worst
+case (200 × the old 20,000-character clip = 4,000,000), not a new guess — that clears the
+whole cache when EITHER bound would be exceeded. A later review found that this still let
+one result bigger than the whole budget through: clearing everything else and inserting it
+anyway leaves the cache over its own bound on the very first insert, and `text` is validated
+only as a string (not a length), so a malformed or forged answer isn't guaranteed to have
+gone through the clip above. Fixed with an explicit skip — an oversized result is shown to
+the caller but never written to the cache, the same "shown but not remembered" treatment the
+cache already gives errors. Both budgets and the oversized-entry skip are covered in
+`tests/unit/payloadClient.spec.ts` and its 03-payloads fork.
+
+## The observer that outlived its panel
+
+The payload panel's drag-to-resize handle added a `ResizeObserver` on the panel body, to keep
+the title/heading row's `max-width` in sync with a dragged body width. jsdom has neither
+`ResizeObserver` nor a layout engine to drive one, so no existing test could see any of the
+five bugs a later review found in this one piece of machinery:
+
+1. **Leak.** The observer was a local `const` inside `ensurePanel()`, never stored anywhere
+   `removePayloadTooltip()` could reach — switching the feature off left it running. Fixed by
+   moving it onto `state.widthObserver` and disconnecting it on removal.
+2. **Wrong erase order.** The removal function nulled the panel's element references *before*
+   erasing their text, on the theory that a detached node makes erasure moot. It doesn't — a
+   live reference held from before the detach can still read the stale text. Fixed by erasing
+   text first, then disconnecting, then nulling references.
+3. **No reposition.** The callback resized the title/heading but never called `place()`, so
+   dragging toward `content.css`'s own ceiling (`max-width: 90vw` / `max-height: 85vh`) near a
+   screen edge could push the panel past the viewport. Fixed by having the callback also call
+   `place()`. Needed a real headless Chromium to verify (jsdom has no layout engine); a negative
+   control with `place()` removed from the callback reproduced the overflow at all four screen
+   corners.
+4. **Stale `max-width`.** `openNow()` cleared the body's own inline size on a fresh hover but
+   not the title/heading `max-width` a *previous* hover's drag had left set. Fixed by clearing
+   those too.
+5. **Second leak path.** `ensurePanel()` also rebuilds from scratch when
+   `state.panel.isConnected` is false (an external DOM replacement) — a path that never goes
+   through `removePayloadTooltip()`, so it built a new observer without disconnecting the old
+   one. Fixed by disconnecting first.
+
+None of these five touch stored data or the version format — they're internal to on-screen
+panel behaviour. Two unrelated fixes landed alongside: popup copy that still described stage
+03's single combined button instead of stage 04's `In`/`Out` pair, and `popup.html` controls
+below the 24px WCAG 2.2 target-size minimum this repo already holds itself to elsewhere
+(`label.row` and `button` picked up `min-height: 24px`).

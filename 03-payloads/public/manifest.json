@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Temporal starter 03 — payloads",
-    "version": "0.7.7",
+    "version": "0.7.10",
     "description": "Draws parent/child workflow families in the Temporal UI, and shows each workflow's input and result on hover — decoding them, when they are encrypted, through the codec server you name in the popup. No backend of ours, no host permissions, and no credential of its own.",
     "permissions": [
         "storage"
