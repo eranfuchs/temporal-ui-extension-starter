@@ -290,9 +290,29 @@ td:has(a[href*="/workflows/"]) {
      * around the panel even then; .tuis-panel-body scrolls internally past
      * it, and its own resize handle can still grow the box further, up to
      * this same ceiling — an ancestor with an auto width grows to follow a
-     * resized child. */
-    max-width: 65vw;
-    max-height: 58vh;
+     * resized child.
+     *
+     * The height headroom over .tuis-panel-body's own max-height is a FIXED
+     * pixel amount, not another vh percentage: the title (up to a few wrapped
+     * lines for a long workflow id) and the heading row cost roughly the same
+     * number of PIXELS regardless of viewport height, so a vh-only headroom
+     * shrinks, in real pixels, on a shorter screen — measured to run out
+     * first on exactly the case that needs it least. 110px comfortably
+     * covers a 3-line-wrapped title plus the heading row plus this element's
+     * own padding, on any screen. Getting this wrong means the whole panel —
+     * not just .tuis-panel-body — needs its OWN scrollbar, which pushes the
+     * body's resize handle below the panel's visible edge and makes it
+     * unreachable; that is a regression to catch, not a cosmetic gap.
+     *
+     * This is the DRAG ceiling, not the size a fresh hover opens at — that
+     * smaller default (see src/payloads/tooltip.ts, clampBodyToDefaultSize())
+     * is now enforced in JS on .tuis-panel-body specifically, once real
+     * content is in it, so it can pin the box smaller than this CSS max
+     * without lowering how far a manual resize is allowed to go. This value
+     * only has to stay a little ahead of .tuis-panel-body's own max-width/
+     * max-height below, for the same padding/border reason as always. */
+    max-width: 93vw;
+    max-height: calc(85vh + 110px);
     overflow: auto;
     /* Reaching the bottom of the panel must not hand the rest of the wheel gesture to
      * the page behind it: a page scroll closes the panel (see src/payloads/tooltip.ts), so
@@ -311,22 +331,42 @@ td:has(a[href*="/workflows/"]) {
         sans-serif;
 }
 
+/* max-width here (and on .tuis-panel-heading-row below) is load-bearing, not
+ * cosmetic: `.tuis-panel` has no width of its own, it shrink-to-fits its
+ * widest child, and a composite workflow id (business key + sub-status +
+ * timestamp) routinely has no whitespace for overflow-wrap to break on until
+ * it is already hundreds of pixels wide. Before this rule existed, that
+ * width — not .tuis-panel-body's own, deliberately smaller, default (see
+ * clampBodyToDefaultSize() in tooltip.ts) — decided how wide the WHOLE panel
+ * opened, leaving the actual payload sitting in a fraction of that box with
+ * empty space beside it. Capped at the same 32.5vw .tuis-panel itself used to
+ * be hard-limited to before that ceiling was raised to serve as the drag
+ * ceiling (see the comment on .tuis-panel below): past this width the title
+ * wraps onto another line instead of stretching the panel, exactly as it did
+ * when 32.5vw was still the panel's own ceiling. Does not fight a manual
+ * drag: dragging .tuis-panel-body wider still grows .tuis-panel to follow it,
+ * because that growth comes from the body, the one child here with no
+ * max-width ceiling of its own below the panel's real ceiling. */
 .tuis-panel-title {
     font-weight: 600;
     /* A workflow id has no spaces to break at and can be very long. */
     overflow-wrap: anywhere;
     padding-bottom: 4px;
+    max-width: 32.5vw;
 }
 
 /* Heading + Copy button, side by side. The row is the flex container so the
  * button can sit flush right regardless of how long "Input"/the codec's
- * `result.label` turns out to be. */
+ * `result.label` turns out to be. max-width for the same reason as
+ * .tuis-panel-title above — a long codec hostname is the equivalent risk
+ * here. */
 .tuis-panel-heading-row {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 8px;
     padding-top: 6px;
+    max-width: 32.5vw;
 }
 
 /* Bold and coloured, not the quiet uppercase label this used to be: this line
@@ -385,11 +425,20 @@ td:has(a[href*="/workflows/"]) {
  * viewport-relative, not the panel's fixed 560px/60vh from before this box
  * had its own scroller — a reader on a small laptop screen and a reader on an
  * external monitor should both be able to drag this most of the way across
- * their own viewport, not the same number of pixels regardless of either. */
+ * their own viewport, not the same number of pixels regardless of either.
+ *
+ * This max-width/max-height is the DRAG ceiling, deliberately much larger than
+ * the size a fresh hover actually opens at — see clampBodyToDefaultSize() in
+ * tooltip.ts, which pins a big payload to the smaller default with an inline
+ * width/height instead. Folding the small default into THIS property, the way
+ * it worked before, made it the ceiling for a manual drag too: there is no
+ * separate "how far can a human resize this" property in CSS, so the only way
+ * to let a drag go further than the default is to raise this and enforce the
+ * default somewhere else. */
 .tuis-panel-body {
     margin: 4px 0 0;
-    max-width: 62vw;
-    max-height: 52vh;
+    max-width: 90vw;
+    max-height: 85vh;
     min-height: 2.6em;
     overflow: auto;
     resize: both;

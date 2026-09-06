@@ -42,8 +42,21 @@ export interface JsonViewerLimits {
 // Precedent: REQUEST_TIMEOUT_MS / MAX_CACHED_PAYLOADS in payloadClient.ts — a
 // named, exported constant rather than a literal buried in the code, so a test
 // can push a fixture past the bound without guessing the number.
+//
+// maxNodes was 5,000 until a real payload — an array of a few dozen pricing
+// proposals, each a few hundred bytes of nested amount/period/interest
+// objects — measured at roughly 10,000 of this file's value-nodes, well past
+// that cap, and rendered as one unformatted line instead. Measured in a real
+// headless Chromium against this file, unmodified, with synthetic fixtures of
+// the same shape: render time scales linearly at roughly 2.5ms per 1,000
+// nodes, so 100,000 (≈500 proposals of that shape) costs on the order of
+// 250ms — a one-time cost on hover-open, not a freeze — while the abort
+// itself is cheap however much bigger a payload is past the cap, because
+// countNode() throws the moment it is exceeded rather than finishing the
+// walk. 100,000 was picked to leave a real catalog this size an order of
+// magnitude of headroom, not to be the largest defensible number.
 export const DEFAULT_JSON_VIEWER_LIMITS: JsonViewerLimits = {
-    maxNodes: 5_000,
+    maxNodes: 100_000,
     maxDepth: 40,
 };
 

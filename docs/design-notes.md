@@ -965,3 +965,175 @@ the bug needed. The tradeoff this accepts openly: a payload that used to fit on 
 without scrolling at 80vh now scrolls sooner, at 52vh. A tiny payload — the case the old
 comment actually described correctly — still opens compact; that much of the original claim
 was true, just not the part that mattered.
+
+That lower ceiling created a second bug within the same day: a reader on a real workflow, with
+a long id that wrapped `.tuis-panel-title` onto multiple lines, reported the resize handle
+itself as unreachable. The outer `.tuis-panel`'s headroom over `.tuis-panel-body`'s own cap had
+been left at `58vh - 52vh`, a viewport-relative 6vh — but what fills that headroom, the title
+and the heading row above the body, costs a roughly fixed number of *pixels*, set by font size
+and how many lines the title wraps to, not by the viewport's height. A vh-relative headroom
+shrinks in real pixels on a shorter screen and shrinks fastest under a wrapped title on any
+screen, so on some combination of the two it runs out — the outer panel then needs its own
+scrollbar to show everything, which clips `.tuis-panel-body` at the panel's visible edge and
+carries the body's own native resize handle below it, out of reach. Reproduced the same way as
+the first bug: a synthetic payload, but this time also a synthetic workflow id long enough to
+wrap the title onto three lines, measured against `panel.scrollHeight` vs `panel.clientHeight`.
+
+The fix keeps the viewport-relative part — so the two ceilings still shrink together on a small
+screen — but adds a fixed buffer on top: `.tuis-panel`'s `max-height` is `calc(52vh + 110px)`,
+not `58vh`. 110px comfortably covers a heading row plus a title wrapped onto several lines,
+on any screen size, because that cost does not scale with the screen. Verified against both a
+realistic id length and an artificially long one forced to wrap three lines; both now report
+the body's bottom edge inside the panel's own visible bounds.
+
+A third pass, on request rather than a report: the width ceiling — untouched by either bug
+above — was still `.tuis-panel` 65vw / `.tuis-panel-body` 62vw, and that read as too wide on
+its own, independent of height. Halved to 32.5vw / 31vw. Nothing here interacts with the
+height fix: the two axes are independent ceilings on the same box, and the panel still grows to
+whichever of width or height its content needs, up to its own axis's ceiling.
+
+A fourth pass, also on request: let a reader drag the panel bigger than that 32.5vw/31vw
+ceiling, without changing what a fresh hover opens at. That is two different numbers pretending
+to be the same CSS property — `max-width`/`max-height` on `.tuis-panel-body` had been serving
+both as "how big does this open by default" and "how far can a human resize it", and there is no
+second CSS property for the other one. Raising the number moves both at once; there is nothing
+in CSS to raise only the drag ceiling.
+
+So the CSS max-width/max-height on `.tuis-panel`/`.tuis-panel-body` stopped meaning "the default
+size" and started meaning only the drag ceiling — raised to 93vw/`calc(85vh + 110px)` and
+90vw/85vh, comfortably past anything a real screen needs, for the same reason `content.css`'s
+own comment gives elsewhere: a ceiling a reader can still bump into is a regression to catch,
+not a cosmetic gap. The old default — 31vw/52vh, the exact numbers the second pass above landed
+on — moved into `tooltip.ts` as `DEFAULT_BODY_MAX_WIDTH_VW`/`DEFAULT_BODY_MAX_HEIGHT_VH`, enforced
+by a new `clampBodyToDefaultSize()` called from `fill()` right after real content replaces the
+body's children. It measures the body's own natural, unclamped `getBoundingClientRect()` and,
+only if that exceeds the old default on an axis, pins that axis down with an inline
+`style.width`/`style.height` — the same mechanism `resize: both` itself uses for a manual drag,
+just applied once in script instead of by a reader's pointer. A payload under the default is
+left alone, with no inline size at all, so it keeps shrinking to fit small content exactly as it
+always has. Placeholders (`Loading…`, `Still running.`) never reach this call — both are always
+far under either default, and the point is to size to what the reader is actually about to read,
+not to a state nobody drags from.
+
+Verified together, not separately, because the risk was one fix quietly undoing the other: a
+synthetic 50-item payload big enough to need clamping opened with its body pinned to exactly
+446×468px — 31vw/52vh at the test's 1440×900 viewport — and a simulated drag past that, to
+1200×700px, was honored rather than snapped back, with the outer panel still reporting the
+resize handle inside its own visible bounds at that larger size. The third pass's fix and this
+one are independent in the same way width and height were: this changes how big the box can get,
+not whether it still fits inside `.tuis-panel` once it does.
+
+The fourth pass immediately produced a fifth bug, and a real screenshot this time, not just a
+report: a real workflow with a long, unbroken composite id — business key, sub-status, and a
+timestamp joined with no whitespace — opened with the payload crammed into a narrow column on
+the left and several hundred pixels of blank white space beside it. `.tuis-panel` has no width of
+its own; it shrink-to-fits whichever child asks for the most. Before the fourth pass, that never
+mattered, because `.tuis-panel`'s own max-width (32.5vw) capped the shrink-to-fit result directly,
+title included. The fourth pass repurposed that same property into the drag ceiling — 93vw — which
+uncapped it for every child, not just `.tuis-panel-body`. A title with no whitespace to wrap on
+does not care that a *sibling* is clamped to a sane default; asked for up to 93vw of room, it took
+it, and the panel's shrink-to-fit width followed the title, not the body sitting right below it.
+
+Reproduced with a synthetic composite id of the same shape (a placeholder key, a fake
+sub-status, an all-zero timestamp — the real report's id was never reused anywhere in the repro
+or this fix): `.tuis-panel` measured 795.9px wide against `.tuis-panel-body`'s 464px, a blank
+gutter of the same few-hundred-pixel size the screenshot showed. The fix gives `.tuis-panel-title`
+and `.tuis-panel-heading-row` — the two children with no width ceiling of their own below the
+panel's new, deliberately loose one — a `max-width: 32.5vw`, the exact number `.tuis-panel` itself
+used to be hard-limited to. Past that width the title wraps onto another line instead of
+stretching the panel, exactly as it did when 32.5vw was still the panel's own ceiling; a long codec
+hostname in the heading row is the same risk and gets the same cap. `.tuis-panel-body` is
+deliberately left out of this — it is the one child a manual drag is supposed to grow past 32.5vw,
+and it already has its own clamp (`clampBodyToDefaultSize()`) doing the "small by default, large on
+request" job for that axis. Reproduced fixed at 490px against the body's 464px — a padding-width
+gap, not a few hundred pixels — and reproduced again with the body dragged to 900px afterward, to
+confirm the panel still grows to 940px to follow it: the title's cap stops it from independently
+driving the panel wide, not from the panel *becoming* wide when the one child meant to do that
+asks for more room.
+
+The very next report, with a real screenshot again, was the same gutter, from the opposite
+direction: a reader shrank the body — dragged it narrower, on purpose — and the panel stayed at
+its old wide size, leaving the payload cramped in a narrow column with the same blank space
+beside it the fourth pass was supposed to have eliminated. `32.5vw` was never a promise that the
+title could not out-width a body a reader chooses to shrink; it only promised the title would not
+out-width the body's *default*. A body dragged down to, say, 300px on an ordinary laptop screen is
+well below 32.5vw, and on a wide external monitor 32.5vw is easily 800px or more regardless of
+screen size — comfortably wider than almost anything a reader would deliberately shrink the body
+to. Reproduced on a synthetic 2560px-wide viewport with the same fake long id as the fourth-pass
+repro: default open put title and body at the same 773.875px (the title's own natural width,
+comfortably under 32.5vw of a screen that size, so it never even needed to wrap) — then
+`.tuis-panel-body` shrunk to 318px left `.tuis-panel-title` and the panel itself sitting at their
+old 773.875px, the gutter back in a form no static number could have ruled out in advance, because
+the report before it was about a title too WIDE for the default and this one is about a body too
+NARROW for whatever the title happens to be.
+
+No single static max-width is right for every screen and every drag in both directions — the
+actual invariant is narrower and simpler than "pick a better number": the title (and the heading
+row) must never be wider than the body sitting right below them, whatever the body's width
+happens to be at that instant. `content.css`'s `32.5vw` stays as a first-paint ceiling — before a
+just-built panel's very first layout, nothing has measured the body yet — but the number doing the
+real work now lives in `tooltip.ts`: a `ResizeObserver` on `.tuis-panel-body`, set up once when
+`ensurePanel()` first builds the panel, that copies the body's current rendered width onto both
+`.tuis-panel-title` and `.tuis-panel-heading-row` as an inline `max-width` every time the body's
+box changes — on the first layout, after `clampBodyToDefaultSize()` pins it, and after every
+native drag in either direction, because `ResizeObserver` is the one API that reports a size
+change regardless of what caused it, and a `resize: both` drag fires no DOM event of its own for
+anything else to listen for. Re-verified all three shapes together: the original long-title
+default-open case (still fixed, 464px on both), the new shrink-then-gutter case (318px on both,
+where it had been 773.875/318 mismatched before this pass), and a grow past the observer's own
+default (2560px viewport, body dragged to 1400px, title un-wrapping back onto one line at
+1418px to follow it) — confirming the live match tracks a body getting smaller exactly as
+readily as it tracks one getting bigger.
+
+`ResizeObserver` does not exist in jsdom, and jsdom has no layout engine for it to usefully drive
+even if it did — every one of this section's bugs was verified against a real headless Chromium,
+never against the unit suite, for exactly that reason (`getBoundingClientRect()` returns all
+zeros under jsdom regardless). The call is guarded behind `typeof ResizeObserver !== 'undefined'`
+rather than polyfilled, so the browser's own real implementation is what an actual hover uses, and
+the unit suite — which never asserts anything this API would report anyway — no longer needs one
+constructed at all. Guarding it silently was intentional: the 68 tests that started throwing
+`ResizeObserver is not defined` before this guard was added went through `openNow()`, three or
+four calls deep from whatever they were actually testing, on paths with no interest in this
+feature at all.
+
+## A cap tuned for a payload nobody had seen yet
+
+`jsonViewer.ts`'s bound against adversarial input — described above under "Every JSON viewer
+wanted a parsed value" — was `maxNodes: 5,000`, chosen with no real payload to measure against.
+A reader reported the opposite failure mode from the one that bound exists to prevent: a real
+payload, an array of a few dozen pricing proposals each carrying nested amount/period/interest
+objects, rendered as one unformatted line instead of the coloured, indented view every smaller
+payload gets. Bounded-and-falls-back is the intended behaviour for something adversarial; a
+catalog of a few dozen ordinary records is not that.
+
+The count that matters is not a DOM count. A first look measured `querySelectorAll('*').length`
+against the rendered output and got a number that didn't line up with `nodeCount` inside the
+parser — because a leaf becomes one `<span>`, but a container becomes a `DocumentFragment` with
+no wrapping element of its own, and an object key gets its own `<span>` without `countNode()`
+ever counting it (`countNode()` runs once per `parseValue()` call — every object, array, and
+leaf, but keys are consumed inside `parseContainer()` and never call `parseValue()` for
+themselves). Getting the real number meant writing a small function that walks a JSON value the
+same way the parser does — one increment per object/array/leaf, none for a key — rather than
+trusting anything measured from the DOM after the fact.
+
+By that measure the reported payload was in the low tens of thousands of nodes, several times
+past the 5,000 cap. The question was not "raise it" but "raise it to what" — the failure mode on
+the other side of a too-generous cap is a real freeze on a genuinely adversarial payload, and
+that number needed evidence, not a guess in the other direction. Measured in a real headless
+Chromium against this file, unmodified, with synthetic fixtures built to the same shape (nested
+amount/period/interest objects, never the reporter's real data — see the fixture-generator
+pattern used throughout this file's other repros): render time scales linearly at roughly 2.5ms
+per 1,000 nodes, and the abort itself is cheap regardless of how far past the cap a payload is,
+because `countNode()` throws the instant it's exceeded rather than finishing the walk.
+
+`maxNodes` moved from 5,000 to 100,000 — about ten times the reported payload's size, costing on
+the order of 250ms on a fresh hover-open, a one-time render cost rather than a freeze. That
+factor of ten was picked deliberately: enough headroom that a somewhat bigger real catalog does
+not repeat this same report, without being "as large as the render budget allows," which would
+have re-created the original mistake of picking a number with nothing real to weigh it against.
+No test pinned the old default — every existing case in `tests/unit/jsonViewer.spec.ts` passes
+its own small explicit override (`{ maxNodes: 2 }`, `{ maxNodes: 5_000, maxDepth: 1 }`) rather
+than relying on `DEFAULT_JSON_VIEWER_LIMITS` — so raising it changed no test's meaning, only
+what a real hover renders. Verified end to end with a synthetic 50-proposal, ~165KB fixture of
+the reported shape: previously past any cap this file had, now rendered fully formatted, colour
+and indentation intact, through the real message-passing path a hover actually uses.

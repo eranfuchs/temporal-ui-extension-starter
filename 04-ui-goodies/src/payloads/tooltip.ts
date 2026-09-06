@@ -101,6 +101,15 @@ const HOVER_DELAY_MS = 160;
 const CLOSE_DELAY_MS = 220;
 const COPY_FEEDBACK_MS = 1500;
 
+// The size a fresh hover opens at, independent of content.css's max-width/
+// max-height on .tuis-panel-body — those are the DRAG ceiling now, deliberately
+// bigger, so a reader can pull the native resize handle past this default.
+// Kept here rather than folded into that CSS max the way it used to be,
+// because a single CSS property cannot both cap what a hover opens at AND
+// allow a human to drag past that same cap — see clampBodyToDefaultSize().
+const DEFAULT_BODY_MAX_WIDTH_VW = 31;
+const DEFAULT_BODY_MAX_HEIGHT_VH = 52;
+
 // A workflow that has not closed has no result event to fetch, and asking for
 // one is a request that can only answer "nothing yet". Only the Output button
 // checks this — the Input button has no equivalent gap, an input event exists
@@ -523,10 +532,33 @@ async function fill(question: Question, mine: number, anchor: HTMLElement): Prom
     // at all (or too large/deep to safely draw) falls back to the same plain
     // text this used to always show, never to a partially-drawn view.
     ui.body.replaceChildren(renderJsonPayload(document, result.text));
+    clampBodyToDefaultSize(ui.body);
     // The second placement: the panel's real size, now that its real content
-    // is in it. No `anchor.isConnected` guard needed here — matchesCurrentRow()
-    // above already confirmed it.
+    // is in it (and, for a big payload, now that the line above has pinned it
+    // to the default rather than content.css's much larger drag ceiling). No
+    // `anchor.isConnected` guard needed here — matchesCurrentRow() above
+    // already confirmed it.
     place(ui.panel, anchor);
+}
+
+// Pins .tuis-panel-body to the SAME default size the old, smaller content.css
+// max-width/max-height used to enforce on every hover — but only when this
+// hover's content would actually exceed it. A payload under the default is
+// left with no inline width/height at all, so it keeps shrinking to fit small
+// content exactly as it always has; only a payload that would exceed the
+// default gets pinned there. Measured against the real rendered box rather
+// than computed from the text some other way, because a wide/short payload
+// and a narrow/tall one can both need clamping on only one axis.
+//
+// Never called for the "Loading…"/"Still running." placeholders in openNow() —
+// both are always far under either default, so there is nothing to clamp, and
+// the point is to size to what the reader is actually about to read.
+function clampBodyToDefaultSize(body: HTMLElement): void {
+    const rect = body.getBoundingClientRect();
+    const maxWidthPx = (window.innerWidth * DEFAULT_BODY_MAX_WIDTH_VW) / 100;
+    const maxHeightPx = (window.innerHeight * DEFAULT_BODY_MAX_HEIGHT_VH) / 100;
+    if (rect.width > maxWidthPx) body.style.width = `${Math.round(maxWidthPx)}px`;
+    if (rect.height > maxHeightPx) body.style.height = `${Math.round(maxHeightPx)}px`;
 }
 
 // Copies whatever the panel is showing right now — "Loading…", "Still
@@ -676,6 +708,39 @@ function ensurePanel(): {
     panelElement.addEventListener('pointerdown', () => {
         state.pointerHeldInPanel = true;
     });
+
+    // Keeps .tuis-panel-title and .tuis-panel-heading-row from independently
+    // deciding the panel's width — see the ceiling story in design-notes.md.
+    // `.tuis-panel` has no width of its own; it shrink-to-fits its widest
+    // child. content.css's static `max-width: 32.5vw` on the title stops an
+    // unwrapped workflow id from driving that on an ordinary screen, but the
+    // title's own NATURAL width does not shrink just because a reader drags
+    // the body narrower, or because clampBodyToDefaultSize() pins it smaller
+    // — so on a wide enough monitor, 32.5vw is still hundreds of pixels,
+    // comfortably wider than a body a reader deliberately shrank below it,
+    // and the same blank gutter this whole rule exists to prevent reappears
+    // beside a narrower body. Rather than pick a different static number —
+    // no single one is right for every screen and every drag, in either
+    // direction — this ties the title's ceiling to whatever the body's OWN
+    // rendered width actually is, right now, so a widened or narrowed body
+    // always carries the title along with it. ResizeObserver, not a
+    // resize/input event, because a native resize:both drag fires neither —
+    // reporting "this element's box changed size, however that happened" is
+    // exactly what it is for.
+    //
+    // Guarded, not polyfilled: jsdom (the unit-test environment) has neither
+    // ResizeObserver nor a layout engine for it to usefully drive even if it
+    // did — getBoundingClientRect() is all zeros there regardless. Every
+    // geometry bug in this file's history (see design-notes.md) was verified
+    // against a real browser for that same reason, never against jsdom.
+    if (typeof ResizeObserver !== 'undefined') {
+        const widthFollowsBody = new ResizeObserver(() => {
+            const width = `${body.getBoundingClientRect().width}px`;
+            titleLine.style.maxWidth = width;
+            headingRow.style.maxWidth = width;
+        });
+        widthFollowsBody.observe(body);
+    }
 
     document.body.appendChild(panelElement);
 
