@@ -433,6 +433,15 @@ function openNow(kind: PayloadKind, button: HTMLElement): void {
     state.activeKind = kind;
     state.triggerButton = button;
     const ui = ensurePanel();
+    // The body is the SAME node across every hover (ensurePanel() reuses it),
+    // and its `resize: both` is native: a manual drag sets `width`/`height`
+    // directly on the element, and nothing else ever clears them. Left alone,
+    // one drag on either button, on any row, makes every later hover of
+    // either kind open at that dragged size for the rest of the page's life.
+    // Clearing it here means a drag only ever affects the hover it happened
+    // in — the next one starts from the CSS shrink-to-fit default again.
+    ui.body.style.removeProperty('width');
+    ui.body.style.removeProperty('height');
     // Whatever the Copy button most recently showed — "Copied" or "Failed" —
     // described the payload the panel used to hold, not this one. The
     // button is the same DOM element across every kind and every row (see

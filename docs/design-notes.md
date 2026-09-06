@@ -929,3 +929,39 @@ Where this was found matters. `npm run leak:history` had been red since that com
 written, and it only runs deliberately; the tree scan every preflight runs was green
 throughout, because the sentence lives in a commit message and not in a file. A gate only
 correct over the inputs somebody looks at every day has a blind spot on a schedule.
+
+## The ceiling nobody had to drag to reach
+
+Stage 04's payload panel (`src/payloads/tooltip.ts`, forked from 03's — see the lineage
+registry) shipped `public/content.css` with a comment claiming `.tuis-panel` and
+`.tuis-panel-body` "size to their content" by default, and that their viewport-relative
+`max-width`/`max-height` only became relevant once a reader dragged the body's native
+resize handle wide. Nothing tested that claim against real content — the unit tests run
+under jsdom, which does no layout at all, so an assertion on `style.width`/`style.height`
+proves an inline size got set or cleared and says nothing about how big the box actually
+rendered.
+
+A reader reported the panel as too big on a real page. The first fix was real and stayed:
+the body is one DOM node reused across every hover, `resize: both` sets `width`/`height`
+directly on it, and nothing had ever cleared that after a drag — so one drag anywhere, on
+either button, on any row, sized every later hover for the rest of the page's life.
+`openNow()` now clears both properties before every hover. The report did not go away,
+because it was never the whole story.
+
+Measured for real this time — a headless Chromium, the actual `tooltip.ts` bundled with
+esbuild, and a synthetic ~20-field payload shaped like a financial one but with none of a
+real reporter's data in it — no drag was involved at all. `jsonViewer.ts` is deliberately
+flat, with no collapsing (see "Every JSON viewer wanted a parsed value" above): every leaf
+gets its own line, so twenty short fields came out as 47 lines, and 47 lines at the panel's
+own 11px/1.5 is taller than 80% of an ordinary laptop screen. The ceiling was not an edge
+case reached by dragging — it was the panel's *usual* size, on the very first hover, for
+any payload past a couple of fields.
+
+The fix was to lower the ceiling itself rather than change what fills it: `.tuis-panel` from
+90vw/85vh to 65vw/58vh, `.tuis-panel-body` from 88vw/80vh to 62vw/52vh. Teaching the JSON
+viewer to collapse, or tracking drag state in script to give the panel a smaller default
+than its drag ceiling, would both have worked and both were rejected as more machinery than
+the bug needed. The tradeoff this accepts openly: a payload that used to fit on screen
+without scrolling at 80vh now scrolls sooner, at 52vh. A tiny payload — the case the old
+comment actually described correctly — still opens compact; that much of the original claim
+was true, just not the part that mattered.

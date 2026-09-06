@@ -284,11 +284,15 @@ td:has(a[href*="/workflows/"]) {
     z-index: 2147483000;
     /* Shrink-to-fit by default (a fixed-position box with no explicit width
      * sizes to its content), so a short workflow id keeps the panel compact.
-     * The ceiling only matters once .tuis-panel-body below is dragged wide via
-     * its own resize handle — an ancestor with an auto width grows to follow a
-     * resized child, and this is the limit on how far. */
-    max-width: 90vw;
-    max-height: 85vh;
+     * The ceiling below is NOT a drag-only edge case: an ordinary decoded
+     * payload is commonly 40+ lines on its own, no drag involved, so this is
+     * what most real hovers actually render at. Sized to leave visible page
+     * around the panel even then; .tuis-panel-body scrolls internally past
+     * it, and its own resize handle can still grow the box further, up to
+     * this same ceiling — an ancestor with an auto width grows to follow a
+     * resized child. */
+    max-width: 65vw;
+    max-height: 58vh;
     overflow: auto;
     /* Reaching the bottom of the panel must not hand the rest of the wheel gesture to
      * the page behind it: a page scroll closes the panel (see src/payloads/tooltip.ts), so
@@ -384,8 +388,8 @@ td:has(a[href*="/workflows/"]) {
  * their own viewport, not the same number of pixels regardless of either. */
 .tuis-panel-body {
     margin: 4px 0 0;
-    max-width: 88vw;
-    max-height: 80vh;
+    max-width: 62vw;
+    max-height: 52vh;
     min-height: 2.6em;
     overflow: auto;
     resize: both;

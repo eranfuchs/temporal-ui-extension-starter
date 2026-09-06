@@ -566,6 +566,38 @@ describe('hovering the other kind replaces the panel, it does not add a second o
 
         expect(panel().hidden).toBe(true);
     });
+
+    // The body's `resize: both` (content.css) is native: a manual drag sets
+    // `width`/`height` directly on the element, and the same element is reused
+    // by every hover (ensurePanel()). Without a reset, one drag on either
+    // button, on any row, would make every later hover open at that dragged
+    // size for the rest of the page's life.
+    it('a manual resize on one hover does not carry over to the next hover', async () => {
+        openPanel('input');
+        const draggedBody = panel('input').querySelector<HTMLElement>(`.${PANEL_CLASS}-body`)!;
+        draggedBody.style.width = '900px';
+        draggedBody.style.height = '700px';
+
+        openPanel('outcome');
+
+        const body = panel('outcome').querySelector<HTMLElement>(`.${PANEL_CLASS}-body`)!;
+        expect(body.style.width).toBe('');
+        expect(body.style.height).toBe('');
+    });
+
+    it('a manual resize does not carry over even when the next hover is the same kind again', async () => {
+        openPanel('input');
+        const draggedBody = panel('input').querySelector<HTMLElement>(`.${PANEL_CLASS}-body`)!;
+        draggedBody.style.width = '900px';
+        draggedBody.style.height = '700px';
+
+        openPanel('outcome');
+        openPanel('input');
+
+        const body = panel('input').querySelector<HTMLElement>(`.${PANEL_CLASS}-body`)!;
+        expect(body.style.width).toBe('');
+        expect(body.style.height).toBe('');
+    });
 });
 
 // ── The Copy button ─────────────────────────────────────────────────────────
