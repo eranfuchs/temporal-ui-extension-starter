@@ -18,7 +18,7 @@ import {
     normalizeExecutions,
     type PlacementIndex,
 } from './family/rows';
-import { loadSettings, onSettingsChanged, type Settings } from './settings';
+import { loadSettings, onSettingsChanged, saveSettings, type Settings } from './settings';
 import { OFF_CLASS, type Placement, type RenderStats } from './decoration';
 import {
     applyToTable,
@@ -26,12 +26,20 @@ import {
     idsFromRow,
     namespaceFromLocation,
     removeAllDecoration,
+    selectedRows,
     visibleRows,
 } from './render';
 import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo/rowInfo';
 import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfo/rowInfoClient';
 import { installPayloadTooltip, removePayloadTooltip, resetPayloadState } from './payloads/tooltip';
 import { syncHeaderCopyButtons } from './list/columnCopy';
+import {
+    installColumnDrag,
+    installHoverResync,
+    syncColumnDragHandles,
+    syncColumnOrder,
+    type ColumnReorderDeps,
+} from './list/columnReorder';
 import { installFilterAugment, installNotFilter, syncNotFilterHosts } from './list/filters';
 import { findPageSizeSelect, syncPageSizeOption } from './list/pageSize';
 import { buildComparisonClause } from './list/query';
@@ -58,6 +66,8 @@ let settings: Settings = {
     retryEnabled: true,
     notFilterEnabled: true,
     familyEnabled: true,
+    columnOrder: [],
+    columnReorderEnabled: true,
     // Empty, and that is the whole egress story until the user fills it in.
     codecEndpoint: '',
     // No links yet, so nothing to backfill a scope into; loadSettings() replaces this
@@ -200,6 +210,18 @@ function apply(): void {
         onRefresh: refreshRowInfoNow,
     });
 
+    // Column order: the layout owner for column position (list/columnReorder.ts),
+    // and the handle a drag or the keyboard actually moves. Its own toggle too —
+    // off restores Temporal's own column order, the same contract treeEnabled
+    // has for row order (see removeAllDecoration in render.ts).
+    //
+    // INVARIANT: this runs AFTER applyToTable, not before.
+    // Breaking it: applyToTable's syncLastEventColumn re-places "Last event" beside
+    // the id column on every pass, silently undoing a drag or arrow-key move a
+    // moment earlier. See docs/design-notes.md#two-owners-for-one-columns-position.
+    syncColumnOrder(tbody, settings.columnOrder, settings.columnReorderEnabled);
+    syncColumnDragHandles(tbody, columnReorderDeps);
+
     // AFTER rendering, never before: what is on the table decides what to ask
     // about, and asking is the only thing this extension does that costs the
     // Temporal API anything. requestRowInfo() re-asks nothing it asked recently, so
@@ -224,6 +246,18 @@ function knownRows(): WorkflowRow[] {
     return Array.from(placements.byRun.values()).map((placement) => placement.row);
 }
 
+// The subset of knownRows() actually checked via Temporal's own native
+// per-row checkbox right now — see render.ts's selectedRows() and
+// family/expandButton.ts's ExpandDeps for why a click prefers this outright
+// over knownRows() whenever it is non-empty. No table on screen (a
+// navigation mid-click, a page that never had one) means nothing is
+// checked, not a crash — same "decline rather than guess" shape as
+// findWorkflowTbody()'s other callers.
+function checkedRows(): WorkflowRow[] {
+    const tbody = findWorkflowTbody();
+    return tbody ? selectedRows(tbody, lookup) : [];
+}
+
 // One clause, not the OR-combination expand.ts builds — a single row's Family
 // anchor replaces the query outright, the same as clicking a plain (non-Ctrl)
 // native filter button. `null` when the id cannot be safely quoted; syncFamilyLink
@@ -236,10 +270,23 @@ function buildFamilyHref(rootWorkflowId: string): string | null {
     return url.toString();
 }
 
+// The drag handle and the keyboard reorder it carries — installed ONCE, like
+// installNotFilter, with every dependency read live so a toggle flip or a
+// storage write from another tab takes effect on the very next drag or
+// keypress.
+const columnReorderDeps: ColumnReorderDeps = {
+    enabled: () => settings.enabled && settings.columnReorderEnabled,
+    currentOrder: () => settings.columnOrder,
+    saveOrder: (order) => {
+        void saveSettings({ columnOrder: [...order] });
+    },
+};
+
 const expandDeps = {
     enabled: () => settings.enabled && settings.familyEnabled,
     currentQuery: () => new URL(location.href).searchParams.get('query') ?? '',
     rows: knownRows,
+    selectedRows: checkedRows,
     navigate: (url: string) => {
         location.href = url;
     },
@@ -386,6 +433,14 @@ async function start(): Promise<void> {
     };
     installNotFilter(notFilterDeps);
     installFilterAugment(notFilterDeps);
+
+    // The column drag handle's drop targeting. Installed ONCE, document-level,
+    // for the same reason installNotFilter's relocate listener is: header cells
+    // are Temporal's own, so there is nowhere on them to mark "already wired".
+    installColumnDrag(columnReorderDeps);
+    // See list/columnReorder.ts's "Hover resync after a reorder" — tracks the
+    // real cursor position so a reorder can replay a synthetic move there.
+    installHoverResync();
 
     // The hover panel. Installed ONCE, with no reference to any row: it resolves a
     // row's identity from that row's own href at hover time, never from an attribute

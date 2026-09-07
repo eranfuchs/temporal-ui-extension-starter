@@ -1,6 +1,6 @@
 {
     "name": "temporal-ui-starter-04-ui-goodies",
-    "version": "0.1.10",
+    "version": "0.2.0",
     "private": true,
     "type": "module",
     "description": "Everything 03 does, plus the conveniences that make the list livable: a real JSON viewer, a NOT filter, family-aware bulk actions, and column reordering. No new permission, no new request, no new destination.",

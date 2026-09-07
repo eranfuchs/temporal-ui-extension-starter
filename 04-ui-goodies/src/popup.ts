@@ -47,11 +47,13 @@ async function main(): Promise<void> {
     settings = await loadSettings();
     bindToggle('enabled');
     bindToggle('treeEnabled');
+    bindToggle('familyEnabled');
     bindToggle('linksEnabled');
     bindToggle('payloadsEnabled');
     bindToggle('lastEventEnabled');
     bindToggle('retryEnabled');
     bindToggle('notFilterEnabled');
+    bindToggle('columnReorderEnabled');
     bindCodecEndpoint();
     renderLinks();
     renderLinkScopeNote();

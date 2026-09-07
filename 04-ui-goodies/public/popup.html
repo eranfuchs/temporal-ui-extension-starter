@@ -155,7 +155,22 @@
         <h2>Show</h2>
         <label class="row"><input type="checkbox" id="enabled" /> Enabled</label>
         <label class="row"><input type="checkbox" id="treeEnabled" /> Family tree (group children under parents)</label>
+        <label class="row"><input type="checkbox" id="familyEnabled" /> Family link, and "Expand to families"</label>
+        <p class="hint">
+            A "Family" link on every matched row, to every workflow sharing its root — including ones this page has
+            not loaded, which the family tree above cannot reach either. Also the filter-bar button that adds every
+            visible root's family to the current filter. Both only ever build a query string from root ids already
+            on the page; neither makes a request of its own.
+        </p>
         <label class="row"><input type="checkbox" id="linksEnabled" /> Per-row deep links</label>
+        <label class="row"
+            ><input type="checkbox" id="columnReorderEnabled" /> Column reordering (drag or arrow keys)</label
+        >
+        <p class="hint">
+            A grab handle beside every column's label — drag it onto another column to move it there, or focus it
+            with the keyboard and press the Left or Right arrow key. Reorders the real table; nothing is sent
+            anywhere and no column can be hidden, only moved. Off puts every column back where Temporal drew it.
+        </p>
 
         <h2>Deep links</h2>
         <div id="links"></div>

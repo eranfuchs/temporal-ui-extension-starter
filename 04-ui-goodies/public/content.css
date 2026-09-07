@@ -454,6 +454,63 @@ th:hover .tuis-col-copy,
     background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
+/* The column drag handle (list/columnReorder.ts). Same spot, size and
+ * invisible-until-hovered treatment as .tuis-col-copy right above it — the
+ * label row now holds Copy then this, in that order, purely because that is
+ * the order syncColumnDragHandles() and syncHeaderCopyButtons() happen to run
+ * in; neither reads the other's position. `cursor: grab` is the one thing
+ * that has to say "draggable" before the pointer is even down — a hand icon a
+ * reader has seen on every other drag handle on the web. */
+.tuis-col-drag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    margin-left: 4px;
+    padding: 0 4px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    cursor: grab;
+    opacity: 0;
+    transition: opacity 0.08s ease;
+    vertical-align: middle;
+}
+
+.tuis-col-drag:active {
+    cursor: grabbing;
+}
+
+th:hover .tuis-col-drag,
+.tuis-col-drag:focus-visible {
+    opacity: 0.7;
+}
+
+.tuis-col-drag:hover,
+.tuis-col-drag:focus-visible {
+    opacity: 1;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* Which side of a header a column being dragged would land on — set by
+ * list/columnReorder.ts's dragover handler on Temporal's own <th>, not on
+ * anything this extension drew. An inset box-shadow rather than a border: a
+ * border changes the cell's box and therefore the header row's height for as
+ * long as a drag is in progress, which is the same layout-shift mistake
+ * .tuis-col-refresh's own comment warns against. */
+.tuis-col-drop-before {
+    box-shadow: inset 3px 0 0 0 currentColor;
+}
+
+.tuis-col-drop-after {
+    box-shadow: inset -3px 0 0 0 currentColor;
+}
+
 /* The payload panel.
  *
  * z-index is deliberately the opposite decision from .tuis-prefix above, and for the

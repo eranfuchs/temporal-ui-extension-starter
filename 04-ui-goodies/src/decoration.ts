@@ -79,6 +79,19 @@ export const OFF_CLASS = 'tuis-off';
 // behaves the same everywhere it appears — src/list/columns.ts is what tells two
 // of them apart, not this file.
 export const HEADER_COPY_CLASS = 'tuis-col-copy';
+// The drag handle src/list/columnReorder.ts adds to every native or extension
+// header, beside the Copy button above. One class, like HEADER_COPY_CLASS, for
+// the same reason: the control looks and behaves the same everywhere it appears.
+export const COLUMN_DRAG_CLASS = 'tuis-col-drag';
+// Written onto whichever native header <th> a drag is currently hovering, so
+// content.css can show which side of it the column would land on. Cleared by
+// the same gesture that set it — dragleave, drop and dragend in
+// list/columnReorder.ts all clear it synchronously — but listed in
+// HOST_MARK_CLASSES below anyway: "off" sweeps every trace this extension can
+// leave on the page's own nodes, not only the ones it happens to remember to
+// clean up itself.
+export const COLUMN_DROP_BEFORE_CLASS = 'tuis-col-drop-before';
+export const COLUMN_DROP_AFTER_CLASS = 'tuis-col-drop-after';
 // The one <option> src/list/pageSize.ts adds to Temporal's own page-size <select>.
 // Not inside the table, which is why it needs a root of its own here rather than
 // riding along with an existing one.
@@ -147,6 +160,8 @@ export const REMOVABLE_ROOT_CLASSES: readonly string[] = [
     // its own, but "off" sweeps every root regardless — see the sweep's own doc
     // comment in render.ts.
     HEADER_COPY_CLASS,
+    // The column drag handle. See its own comment above.
+    COLUMN_DRAG_CLASS,
     PAGE_SIZE_OPTION_CLASS,
     // The NOT-filter's own button. See its own comment above for why a single
     // relocated node still needs to be swept like any other root.
@@ -164,7 +179,12 @@ export const REMOVABLE_ROOT_CLASSES: readonly string[] = [
 // The other half of the master switch's contract: classes this extension writes onto
 // elements it did NOT create. removeAllDecoration() strips these from wherever they
 // are, rather than removing the element — the element is the page's own.
-export const HOST_MARK_CLASSES: readonly string[] = [NOT_FILTER_HOST_CLASS, NOT_FILTER_HOST_NATIVE_CLASS];
+export const HOST_MARK_CLASSES: readonly string[] = [
+    NOT_FILTER_HOST_CLASS,
+    NOT_FILTER_HOST_NATIVE_CLASS,
+    COLUMN_DROP_BEFORE_CLASS,
+    COLUMN_DROP_AFTER_CLASS,
+];
 
 export const SEGMENT_WIDTH_PX = 18;
 

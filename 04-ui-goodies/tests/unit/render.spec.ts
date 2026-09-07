@@ -36,6 +36,7 @@ import {
     idsFromRow,
     namespaceFromLocation,
     removeAllDecoration,
+    selectedRows,
     visibleRows,
 } from '../../src/render';
 import { buildWorkflowTable, fakeRunId, rowOrder, workflowLink } from '../helpers';
@@ -310,6 +311,34 @@ describe('visibleRows', () => {
         // …and in the order the tree put them, once the rows have been reordered.
         applyToTable(tbody, lookup, OPTIONS);
         expect(visibleRows(tbody, lookup).map((row) => row.workflowId)).toEqual(['live', 'done']);
+    });
+});
+
+describe('selectedRows', () => {
+    it('reports only the rows whose native checkbox is checked, in table order, never a wider set than visibleRows', () => {
+        const tbody = buildWorkflowTable(document, [
+            { workflowId: 'done', runId: DONE_RUN },
+            { workflowId: 'live', runId: LIVE_RUN },
+        ]);
+        const lookup = lookupFor(MIXED);
+
+        // No checkbox column at all on the page — same as no selection UI present.
+        expect(selectedRows(tbody, lookup)).toEqual([]);
+
+        // Temporal's real checkbox lives in a leading structural cell, ahead of the
+        // workflow-id cell — mirror that shape rather than relying on the id cell.
+        for (const tr of Array.from(tbody.children) as HTMLTableRowElement[]) {
+            const checkboxCell = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkboxCell.appendChild(checkbox);
+            tr.insertBefore(checkboxCell, tr.firstElementChild);
+        }
+        expect(selectedRows(tbody, lookup)).toEqual([]);
+
+        const doneCheckbox = tbody.children[0]!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+        doneCheckbox.checked = true;
+        expect(selectedRows(tbody, lookup).map((row) => row.workflowId)).toEqual(['done']);
     });
 });
 

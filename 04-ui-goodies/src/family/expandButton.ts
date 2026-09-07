@@ -21,8 +21,10 @@
 // which can differ from self-hosted.
 //
 // RE-COLLECTED AT CLICK TIME, NEVER FROM WHEN THE BUTTON WAS DRAWN — same rule
-// list/filters.ts states for its own button: `deps.rows()` and `deps.currentQuery()`
-// are read the moment the button is pressed, not memoized across render passes.
+// list/filters.ts states for its own button: `deps.rows()`, `deps.selectedRows()`
+// and `deps.currentQuery()` are read the moment the button is pressed, not
+// memoized across render passes — a checkbox ticked after the last render still
+// counts.
 //
 // NAVIGATION IS A REAL PAGE LOAD, same reasoning and the same injected `navigate`
 // as list/filters.ts — this extension has no reach into the SPA's own router state,
@@ -39,6 +41,12 @@ export interface ExpandDeps {
     enabled: () => boolean;
     currentQuery: () => string;
     rows: () => readonly WorkflowRow[];
+    // The rows checked via Temporal's own native per-row checkbox, right now — a
+    // click prefers this set outright over `rows` (never a union of the two): a
+    // person who checked specific workflows asked for THEIR families, not every
+    // family this tab happens to know about. Empty when nothing is checked, which
+    // is what falls back to `rows`.
+    selectedRows: () => readonly WorkflowRow[];
     navigate: (url: string) => void;
 }
 
@@ -66,7 +74,8 @@ function ensureNodes(doc: Document, deps: ExpandDeps): { button: HTMLButtonEleme
         button.addEventListener('click', (event) => {
             event.preventDefault();
             if (!deps.enabled()) return;
-            const roots = collectFamilyRoots(deps.rows());
+            const selected = deps.selectedRows();
+            const roots = collectFamilyRoots(selected.length > 0 ? selected : deps.rows());
             applyVerdict(buildExpandVerdict(deps.currentQuery(), roots), deps);
         });
         sharedButton = button;

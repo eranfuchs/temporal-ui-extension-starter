@@ -48,6 +48,7 @@ import {
     type RenderStats,
 } from './decoration';
 import { syncFamilyLink } from './family/familyRender';
+import { restoreColumnOrder } from './list/columnReorder';
 import { syncDeepLinks } from './links/linkRender';
 import { syncPayloadButtons } from './payloads/payloadButton';
 import { syncLastEventColumn, syncRetryBadge } from './rowInfo/rowInfoRender';
@@ -171,6 +172,24 @@ function rowsOf(tbody: HTMLTableSectionElement): HTMLTableRowElement[] {
 export function visibleRows(tbody: HTMLTableSectionElement, lookup: PlacementLookup): WorkflowRow[] {
     const rows: WorkflowRow[] = [];
     for (const tr of rowsOf(tbody)) {
+        const ids = idsFromRow(tr);
+        const placement = ids ? lookup(ids.workflowId, ids.runId) : undefined;
+        if (placement) rows.push(placement.row);
+    }
+    return rows;
+}
+
+// The rows the user has explicitly checked via Temporal's own native per-row
+// checkbox — always a subset of visibleRows(), never a broader one: a row can
+// only be checked while it is on screen. LIVE-VERIFIED against the shipped
+// Temporal UI: checking a row changes nothing on its own <tr> — no class, no
+// attribute — so the checkbox's own `.checked` DOM property, scoped to the
+// leading structural cell, is the only place the selection actually lives.
+export function selectedRows(tbody: HTMLTableSectionElement, lookup: PlacementLookup): WorkflowRow[] {
+    const rows: WorkflowRow[] = [];
+    for (const tr of rowsOf(tbody)) {
+        const checkbox = tr.firstElementChild?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+        if (!checkbox?.checked) continue;
         const ids = idsFromRow(tr);
         const placement = ids ? lookup(ids.workflowId, ids.runId) : undefined;
         if (placement) rows.push(placement.row);
@@ -362,5 +381,12 @@ export function removeAllDecoration(root: ParentNode = document): void {
     // table already in its original order is not touched, so the observer this runs
     // under sees nothing. See docs/design-notes.md#off-left-the-table-sorted.
     const tbody = findWorkflowTbody(root);
-    if (tbody) restoreOriginalOrder(tbody, rowsOf(tbody));
+    if (tbody) {
+        restoreOriginalOrder(tbody, rowsOf(tbody));
+        // And the COLUMN order, for the identical reason one paragraph up: a
+        // table still holding a dragged column order after the master switch
+        // goes off does not look disabled, it looks broken. See
+        // list/columnReorder.ts's own file header.
+        restoreColumnOrder(tbody);
+    }
 }

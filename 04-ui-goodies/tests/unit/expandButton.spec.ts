@@ -27,12 +27,14 @@ import type { WorkflowRow } from '../../src/types';
 let enabled = true;
 let currentQuery = '';
 let rows: WorkflowRow[] = [];
+let selectedRows: WorkflowRow[] = [];
 const navigate = vi.fn();
 
 const deps = {
     enabled: () => enabled,
     currentQuery: () => currentQuery,
     rows: () => rows,
+    selectedRows: () => selectedRows,
     navigate,
 };
 
@@ -42,6 +44,7 @@ beforeEach(() => {
     enabled = true;
     currentQuery = '';
     rows = [];
+    selectedRows = [];
     navigate.mockClear();
 });
 
@@ -234,5 +237,35 @@ describe('syncExpandButton — clicking', () => {
         enabled = false;
         button.click();
         expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('scopes to only the checked rows’ families when anything is checked, not a union with the full page', () => {
+        buildAnchor('toggle-manual-query');
+        currentQuery = 'ExecutionStatus = "Failed"';
+        rows = rootsOf(['root-1', 'root-2', 'root-3']);
+        selectedRows = rootsOf(['root-2']);
+        syncExpandButton(document, deps);
+        ourButton()!.click();
+
+        expect(navigate).toHaveBeenCalledTimes(1);
+        const url = new URL(navigate.mock.calls[0]![0] as string);
+        expect(url.searchParams.get('query')).toBe(
+            '(ExecutionStatus = "Failed") OR (RootWorkflowId IN ("root-2"))',
+        );
+    });
+
+    it('falls back to every known row when nothing is checked', () => {
+        buildAnchor('toggle-manual-query');
+        currentQuery = 'ExecutionStatus = "Failed"';
+        rows = rootsOf(['root-1', 'root-2']);
+        selectedRows = [];
+        syncExpandButton(document, deps);
+        ourButton()!.click();
+
+        expect(navigate).toHaveBeenCalledTimes(1);
+        const url = new URL(navigate.mock.calls[0]![0] as string);
+        expect(url.searchParams.get('query')).toBe(
+            '(ExecutionStatus = "Failed") OR (RootWorkflowId IN ("root-1", "root-2"))',
+        );
     });
 });

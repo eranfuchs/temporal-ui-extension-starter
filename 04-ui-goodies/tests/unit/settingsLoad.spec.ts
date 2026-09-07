@@ -52,6 +52,7 @@ const TOGGLES = [
     'retryEnabled',
     'notFilterEnabled',
     'familyEnabled',
+    'columnReorderEnabled',
 ] as const;
 
 describe('loadSettings', () => {
@@ -182,6 +183,8 @@ describe('loadSettings', () => {
         const settings = await load({ codecIncludeCredentials: true, codecPassToken: 'Bearer nope' });
         expect(Object.keys(settings).sort()).toEqual([
             'codecEndpoint',
+            'columnOrder',
+            'columnReorderEnabled',
             'enabled',
             'familyEnabled',
             'lastEventEnabled',
@@ -193,6 +196,17 @@ describe('loadSettings', () => {
             'retryEnabled',
             'treeEnabled',
         ]);
+    });
+
+    it('salvages the stored column order entry by entry, and falls back to empty', async () => {
+        // Same "collection of separately trustworthy things" rule as the links list
+        // above — one non-string entry costs that entry, not the rest.
+        const withJunk = await load({ columnOrder: ['Status', 42, null, 'Workflow ID'] });
+        expect(withJunk.columnOrder).toEqual(['Status', 'Workflow ID']);
+
+        for (const junk of [undefined, 'nope', 42, {}, null]) {
+            expect((await load({ columnOrder: junk })).columnOrder, String(junk)).toEqual([]);
+        }
     });
 
     it('recovers from a stored object that is not an object', async () => {

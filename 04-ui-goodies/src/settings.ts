@@ -135,6 +135,26 @@ const settingsSchema = v.object({
     // filter above: both only ever build a query string from rootWorkflowId values
     // this tab already has, no request of their own, so on by default.
     familyEnabled: v.fallback(v.boolean(), true),
+    // A human's own column order (native and extension keys only — see
+    // src/list/columnOrder.ts), one key per entry, most-significant first. Never
+    // trusted as complete: a column added since, or one never dragged, is
+    // simply absent, and columnOrder.ts's effectiveKeyOrder() is what fills
+    // that in. Salvaged entry-by-entry like `links` above — one non-string
+    // entry among several good ones costs that entry, not the rest.
+    columnOrder: v.fallback(
+        v.pipe(
+            v.array(v.unknown()),
+            v.transform((entries) => entries.filter((entry): entry is string => typeof entry === 'string')),
+        ),
+        // A FUNCTION, for the same mutation-safety reason as the `links`
+        // fallback below — see its comment.
+        () => [],
+    ),
+    // Drag or keyboard reordering of the table's own columns — its own toggle,
+    // matching every other headline feature's pattern (treeEnabled,
+    // familyEnabled, notFilterEnabled): it reads and writes no data of its
+    // own, it only rearranges cells already on screen, so on by default.
+    columnReorderEnabled: v.fallback(v.boolean(), true),
     // A Temporal codec server, for the payloads this extension cannot read on its
     // own — `binary/encrypted` above all.
     //

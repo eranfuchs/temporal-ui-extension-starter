@@ -46,6 +46,11 @@ link names a heading that exists.
 - [The master switch](#the-master-switch)
   - [Off left the table sorted](#off-left-the-table-sorted)
   - [A restored order that outlived its welcome](#a-restored-order-that-outlived-its-welcome)
+- [Column reorder](#column-reorder)
+  - [Two owners for one column's position](#two-owners-for-one-columns-position)
+  - [A resync scoped to every reorder resynced page load too](#a-resync-scoped-to-every-reorder-resynced-page-load-too)
+- [Expand to families](#expand-to-families)
+  - [A button that could not see the checkboxes](#a-button-that-could-not-see-the-checkboxes)
 - [Splitting render.ts](#splitting-renderts)
   - [Why each of the four files exists](#why-each-of-the-four-files-exists)
   - [The age that climbed while the fact stood still](#the-age-that-climbed-while-the-fact-stood-still)
@@ -426,6 +431,149 @@ decoration — written the obvious way, comparing the helper's own return value 
 it just reordered, it compares a value to itself and passes even when the helper does
 nothing. The assertion has to name the order the bug would produce.
 
+## Column reorder
+
+`04-ui-goodies/src/list/columnReorder.ts`. One production caller: `content.ts`'s `apply()`.
+
+### Two owners for one column's position
+
+`columnReorder.ts` calls itself, in its own header comment, "the single layout owner for
+column order" — the same role `render.ts`'s `reorderIntoFamilies()` plays for row order.
+That claim was false for one column for as long as this feature shipped without a real
+browser open: `04-ui-goodies/src/rowInfo/rowInfoRender.ts`'s `syncLastEventColumn`, built
+well before column reorder existed, places the "Last event" header and every "Last event" cell immediately
+after whichever column currently holds the workflow-id link — recomputed fresh, from the
+live DOM, on every render pass. It is a second layout owner for that one column's
+position, and neither function knew about the other.
+
+`content.ts`'s `apply()` called `syncColumnOrder` and `syncColumnDragHandles` *before*
+`applyToTable` (which calls `syncLastEventColumn`). Each pass, in order:
+
+1. `syncColumnOrder` reads the saved order, decides "Last event" belongs at the end, and
+   moves it there. Correct, and this is what `columnReorder.spec.ts` asserts — that spec
+   builds its fixture with "Last event" already sitting where the drop would leave it, so
+   it never calls `syncLastEventColumn` at all.
+2. `applyToTable` runs, and `syncLastEventColumn` re-reads the id column's current index
+   and moves "Last event" back beside it — the same move it always makes, unaware that a
+   drag or an arrow key had just put it somewhere else on purpose.
+
+So a drag or a keyboard move landed for exactly one render pass and was gone by the next
+mutation, while the value saved to `chrome.storage.sync` stayed correct throughout. That
+split — a correct save fighting a wrong render — is what made this confusing to find:
+reading only the saved order said the feature worked.
+
+It was not caught by the unit suite, because every existing test for either function
+builds its own header fixture in isolation, and an isolated fixture cannot contain a
+second layout owner. It was found by loading the built extension into a real Chromium
+profile and comparing the on-screen header order against `chrome.storage.sync` read back
+through the popup page in the same pass — the two disagreed on exactly the columns this
+bug moves.
+
+The fix is a reordering, not a new coordination mechanism: `apply()` now calls
+`syncColumnOrder` and `syncColumnDragHandles` *after* `applyToTable`, so column reorder
+gets the final word on every pass, the same guarantee `reorderIntoFamilies()` already had
+for rows by virtue of running last in its own pipeline. `syncColumnOrder`'s own computation
+is keyed by column identity, not by position, so it produces the same correct order
+regardless of what `syncLastEventColumn` just did a moment earlier — being last is
+sufficient.
+
+`tests/unit/columnOrderInteraction.spec.ts` pins the call order as a contract: it drives
+`applyToTable` and `syncColumnOrder` against the same table across two render passes, in
+the pipeline's real order, and asserts the saved order survives both. Swapping the two
+calls inside that test reproduces the exact symptom found live — "Last event" lands one
+column earlier than the saved order says — which is what makes it a regression test for
+`content.ts`'s call order rather than for either function alone.
+
+### A resync scoped to every reorder resynced page load too
+
+Dragging the "Last event" column can leave Temporal's own native per-row
+`.copy-or-filter` cluster — the hover-triggered filter/copy icons the shipped UI draws
+inside a data cell — attached to whichever row was hovered *before* the drag, rather
+than the row actually under the cursor once the drop lands. `syncColumnOrder`'s
+`appendChild` calls physically move `<td>`/`<th>` nodes that Temporal's own component
+tree renders and owns; a plain mouse move afterwards recomputes the cluster correctly,
+consistent with an HTML5 drag suspending Temporal's own hover tracking for its duration
+and nothing replaying one once the drop lands. Reproduced live once, not on a fixed
+trigger — rare enough that the fix could not be built against a repro run on demand.
+
+The fix tracks the real cursor position continuously (`installHoverResync`, a
+document-level `mousemove` listener, the same delegation convention as
+`installColumnDrag`) and, right after `syncColumnOrder` performs an actual move,
+dispatches a synthetic `mouseover`/`mousemove` at that last real position — the same
+events a genuine mouse move would have produced.
+
+The first version did this unconditionally, on every actual move `syncColumnOrder`
+performed. That included page load: `syncColumnOrder` also runs the moment a page with
+a previously-saved custom column order is opened, reapplying it with no live cursor
+involved at all — Temporal draws its own default order first, then this feature moves
+it to match `chrome.storage.sync`, which counts as a real move. The unconditional
+resync fired anyway, replaying a synthetic hover at whatever `lastPointer` happened to
+be on record — leftover from wherever the mouse last rested, on an unrelated part of
+the page, possibly minutes earlier in a previous session (this extension has no
+teardown between page loads within one Chrome profile). Measured: a fresh load with a
+saved custom order showed the native cluster on a row nobody had hovered, mouse held
+away from the table entirely. A regression the original bug never had — it takes a real
+drag to reach `syncColumnOrder`'s move branch at all; this fired on every load.
+
+Found before it shipped, by the same kind of check `installColumnDrag`'s own bugs get
+caught by — loading the built extension into a real Chromium profile — specifically a
+zero-interaction baseline: load the page, move the mouse away from the table entirely,
+and check whether any row shows the cluster at all. A no-op extension loaded against
+the same reused profile snapshot ruled out leftover profile state or Temporal Cloud
+itself as the cause before looking at this file's own code.
+
+The fix is a recency gate, not a mechanism change: `lastUserGestureAtMs`, set only at
+the two places a person actually asked for a reorder — the drop handler and the
+arrow-key handler, both already the sole call sites that write to
+`chrome.storage.sync` — checked against a `USER_GESTURE_RESYNC_WINDOW_MS` (2s) window
+before replaying the synthetic hover. A page load's move has no gesture behind it, so
+`Date.now() - lastUserGestureAtMs` is always far outside the window and the resync
+correctly never fires. `tests/unit/columnReorder.spec.ts`'s "hover resync after a
+reorder" block pins both directions: a keyboard reorder followed immediately by
+`syncColumnOrder` resyncs, and the same reorder run against a clock advanced past the
+window (`vi.useFakeTimers()`) does not — the exact page-load shape.
+
+## Expand to families
+
+`04-ui-goodies/src/family/expandButton.ts` + `04-ui-goodies/src/family/expand.ts`. The
+filter-bar button that widens the current query with `OR (RootWorkflowId IN (...))` for
+every family root on the page — deliberately bounded to the loaded page, not the whole
+namespace; see `expand.ts`'s own header.
+
+### A button that could not see the checkboxes
+
+Checking one or more rows via Temporal's own native per-row checkbox and then clicking
+"Expand to families" had no visible effect on which rows the widened query covered: the
+button always expanded every family the tab had ever seen, identically whether nothing
+was checked or three rows were. Reported live, with a screenshot showing the checked
+rows unrepresented in the resulting query.
+
+The click handler called `collectFamilyRoots(deps.rows())`, and `deps.rows` was wired in
+`content.ts` to `knownRows()` — every workflow the tab has placements for, with no
+concept of checkbox selection at all. The checkbox has nothing to do with any of that:
+Temporal's own list component tracks it entirely client-side, and checking a row changes
+nothing observable on the `<tr>` itself — no class, no attribute (confirmed live: `trClass`
+and `trAttrs` identical before and after). The only place the state exists is the
+checkbox `<input>`'s own `.checked` DOM property, one structural cell ahead of the
+workflow-id link, behind a `sr-only` input whose visible `<span>` intercepts a direct
+click — toggling it means clicking the wrapping
+`label[data-testid="batch-checkbox-label"]`, the same as a real user would.
+
+The fix adds a second row source rather than filtering the first: `render.ts`'s
+`selectedRows(tbody, lookup)` walks the same `rowsOf`/`idsFromRow`/`lookup` pipeline
+`visibleRows` already uses, filtered to rows whose checkbox is checked — always a subset
+of `visibleRows()`, since a row can only be checked while it is on screen. `ExpandDeps`
+grew a `selectedRows` field alongside `rows`, and the click handler *prefers it outright*
+over `rows` whenever it is non-empty, rather than unioning the two: a person who checked
+specific workflows asked for their families, not every family the tab happens to know
+about. Nothing checked falls back to the previous page-wide behavior unchanged.
+
+Live-verified against TST Cloud, 82 known rows on the page: with nothing checked, the
+button still declines with "Narrow the filter first — 82 distinct family roots on this
+page" (the pre-existing `MAX_EXPAND_ROOTS` cap, unchanged); with exactly one row checked,
+the button navigates straight to `RootWorkflowId IN ("<that row's own root id>")` — no
+cap hit, no trace of the other 81 rows.
+
 ## Splitting render.ts
 
 `render.ts` grew until it was the file every feature had to be edited in, and the header
@@ -772,10 +920,20 @@ the heuristic too. Displaying JSON *as JSON* belongs to the rung that has time t
 properly, not to the one whose subject is getting a payload in front of you with nothing in
 between.
 
-Stage 04 is where the payload **viewer** belongs — collapsible values, copy-per-value,
-colour per value, lossless formatting for the ids — built on `lossless-json` or
-jsonc-parser's own `parseTree`. Every choice above has to be made again there, which is why
-the survey is here rather than only in the commit that deleted the code.
+**This paragraph is history too, now: stage 04 built the viewer**, and two guesses above
+did not survive contact with the code. It is flat, not collapsible — every value is drawn
+the moment the panel opens, the same "no expand/collapse" choice 03's plain-text panel
+already made, just coloured. And it has no copy-per-value — there is no button on a
+single leaf — but the panel did gain a Copy button of its own alongside the viewer: one
+click copies the whole body exactly as rendered, decoded payload included, which is a
+second clipboard path this stage adds next to the column-header one — see stage 04's
+[Security card](../04-ui-goodies/README.md#security-card) for both.
+What did carry over is colour per value and lossless formatting for the ids, and the
+choice between the two candidate libraries went to neither: `jsonc-parser`'s own
+`createScanner()`, not `parseTree()` — a tree still materialises every value, which is the
+one thing a payload that might be half a megabyte cannot afford to do twice. Every value
+on screen is a raw substring of the original text, offset and length from the scanner,
+never a value the scanner or a parser decoded for it.
 
 ## The gates
 
