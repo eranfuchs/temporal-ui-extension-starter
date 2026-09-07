@@ -125,6 +125,16 @@ const settingsSchema = v.object({
     // feature nobody turns on teaches nobody anything.
     lastEventEnabled: v.fallback(v.boolean(), true),
     retryEnabled: v.fallback(v.boolean(), true),
+    // The "≠" button, and Ctrl/Cmd-additive combination for it and for Temporal's
+    // own native filter button. Reads no data this extension does not already
+    // show on screen and makes no request of its own — it only builds a URL — so
+    // there is no cost case for shipping it off.
+    notFilterEnabled: v.fallback(v.boolean(), true),
+    // The per-row "Family" anchor and the "Expand to families" filter-bar button —
+    // family/familyRender.ts and family/expandButton.ts. Same cost case as the NOT
+    // filter above: both only ever build a query string from rootWorkflowId values
+    // this tab already has, no request of their own, so on by default.
+    familyEnabled: v.fallback(v.boolean(), true),
     // A Temporal codec server, for the payloads this extension cannot read on its
     // own — `binary/encrypted` above all.
     //

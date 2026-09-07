@@ -42,12 +42,80 @@ export function normalizeExecutions(executions: unknown[]): WorkflowRow[] {
             endTimeMs: Number.isFinite(endMs) ? endMs : null,
             parentWorkflowId: w.parentExecution?.workflowId ?? null,
             parentRunId: w.parentExecution?.runId ?? null,
+            // '' is an internal marker only, never returned: resolveLocalRoots()
+            // below fills every row that did not get one straight from the server.
+            rootWorkflowId: w.rootExecution?.workflowId ?? '',
             taskQueue: w.taskQueue ?? null,
             depth: 0,
             segments: [],
         });
     }
+    resolveLocalRoots(rows);
     return rows;
+}
+
+// Fills in `rootWorkflowId` for every row the server did not name one for —
+// either an older server that never sends rootExecution at all, or (in
+// principle) a root workflow the server chose not to self-reference.
+//
+// THE WALK IS PAGE-LOCAL, LIKE THE TREE. It climbs parentWorkflowId/parentRunId
+// exactly as buildTree() does (same ambiguity rule: an unresolvable parent run
+// stops the walk rather than guessing one), and stops the moment it runs off the
+// edge of what THIS response contains. The row it stops on — a true root, or
+// just the highest ancestor this page happens to know about — becomes the
+// answer. That degrades gracefully rather than silently: two rows whose real
+// root is one page over will still resolve to the SAME local stand-in as long as
+// they share it, which is exactly the grouping "Expand to families" needs.
+//
+// CYCLE-CAPPED, not because real Temporal data cycles, but because this walks a
+// server response no line here has verified — the same caution as every other
+// pure function in this file. `seen` catches a cycle after at most one full trip
+// through the rows this page has; MAX_ROOT_CHAIN is a second, generous backstop.
+const MAX_ROOT_CHAIN = 1000;
+
+function resolveLocalRoots(rows: WorkflowRow[]): void {
+    const byRun = new Map<string, WorkflowRow>();
+    for (const r of rows) byRun.set(runKey(r.workflowId, r.runId), r);
+    const byWorkflowId = new Map<string, WorkflowRow[]>();
+    for (const r of rows) {
+        const list = byWorkflowId.get(r.workflowId) ?? [];
+        list.push(r);
+        byWorkflowId.set(r.workflowId, list);
+    }
+
+    const parentOf = (r: WorkflowRow): WorkflowRow | null => {
+        if (!r.parentWorkflowId) return null;
+        if (r.parentRunId) return byRun.get(runKey(r.parentWorkflowId, r.parentRunId)) ?? null;
+        const candidates = byWorkflowId.get(r.parentWorkflowId);
+        return candidates && candidates.length === 1 ? candidates[0]! : null;
+    };
+
+    for (const row of rows) {
+        if (row.rootWorkflowId !== '') continue;
+        const seen = new Set<string>();
+        let node = row;
+        let resolved = false;
+        for (let i = 0; i < MAX_ROOT_CHAIN; i++) {
+            const key = runKey(node.workflowId, node.runId);
+            if (seen.has(key)) break; // a cycle in the data: settle on this node
+            seen.add(key);
+            if (node.rootWorkflowId !== '') {
+                row.rootWorkflowId = node.rootWorkflowId;
+                resolved = true;
+                break;
+            }
+            const parent = parentOf(node);
+            if (!parent) {
+                // True root, or the true root is off this page — either way, this
+                // node is the best-known root, so it names itself.
+                row.rootWorkflowId = node.workflowId;
+                resolved = true;
+                break;
+            }
+            node = parent;
+        }
+        if (!resolved) row.rootWorkflowId = row.workflowId;
+    }
 }
 
 // ── From "what the page fetched" to "what this table row is" ─────────────────

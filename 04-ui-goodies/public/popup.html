@@ -177,6 +177,16 @@
             Switching this off closes the panel and forgets everything it had decoded.
         </p>
 
+        <h2>Filtering</h2>
+        <label class="row"><input type="checkbox" id="notFilterEnabled" /> NOT filter, and additive Ctrl/Cmd-click</label>
+        <p class="hint">
+            Hover a Workflow ID, Run ID, Type, Status or Task Queue cell for a <code>≠</code> button that filters the
+            list to everything <strong>except</strong> that value — Temporal's own per-cell button only offers equals.
+            Ctrl/Cmd-click either button — ours or Temporal's own — to <strong>add</strong> the clause to the current
+            filter instead of replacing it. Reads only what is already on screen and makes no request of its own; a
+            click just changes the page's own URL.
+        </p>
+
         <h2>Per-row questions <span class="hint">these make requests</span></h2>
         <label class="row"><input type="checkbox" id="lastEventEnabled" /> "Last event" column</label>
         <label class="row"><input type="checkbox" id="retryEnabled" /> Retrying-activity badge</label>

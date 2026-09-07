@@ -31,7 +31,12 @@ import {
 import { FRESH_FLOOR_MS, type RowInfoField } from './rowInfo/rowInfo';
 import { clearRowInfo, installRowInfo, requestRowInfo, rowInfoFor } from './rowInfo/rowInfoClient';
 import { installPayloadTooltip, removePayloadTooltip, resetPayloadState } from './payloads/tooltip';
-import { workflowsMessageSchema } from './types';
+import { syncHeaderCopyButtons } from './list/columnCopy';
+import { installFilterAugment, installNotFilter, syncNotFilterHosts } from './list/filters';
+import { findPageSizeSelect, syncPageSizeOption } from './list/pageSize';
+import { buildComparisonClause } from './list/query';
+import { syncExpandButton } from './family/expandButton';
+import { workflowsMessageSchema, type WorkflowRow } from './types';
 
 const TAG = '[temporal-ui-starter]';
 
@@ -51,6 +56,8 @@ let settings: Settings = {
     payloadsEnabled: true,
     lastEventEnabled: true,
     retryEnabled: true,
+    notFilterEnabled: true,
+    familyEnabled: true,
     // Empty, and that is the whole egress story until the user fills it in.
     codecEndpoint: '',
     // No links yet, so nothing to backfill a scope into; loadSettings() replaces this
@@ -160,11 +167,25 @@ function apply(): void {
     const tbody = findWorkflowTbody();
     if (!tbody) return; // every page that is not the workflow list
 
+    // Two small conveniences with no settings toggle of their own — see
+    // src/list/columnCopy.ts and src/list/pageSize.ts for why: neither changes
+    // what data this extension asks Temporal for, so the master switch above is
+    // the only gate either one needs.
+    syncHeaderCopyButtons(tbody);
+    // The room the "≠" button takes at a cell's edge, reserved on every eligible
+    // cell now rather than on hover — see syncNotFilterHosts(). Its own toggle, not
+    // just the master switch: off means no reserved room either.
+    syncNotFilterHosts(tbody, settings.notFilterEnabled);
+    const pageSizeSelect = findPageSizeSelect(document);
+    if (pageSizeSelect) syncPageSizeOption(pageSizeSelect);
+
     const namespace = namespaceFromLocation(location.pathname) ?? '';
     const nowMs = Date.now();
     lastStats = applyToTable(tbody, lookup, {
         treeEnabled: settings.treeEnabled,
         linksEnabled: settings.linksEnabled,
+        familyEnabled: settings.familyEnabled,
+        buildFamilyHref,
         payloadsEnabled: settings.payloadsEnabled,
         lastEventEnabled: settings.lastEventEnabled,
         retryEnabled: settings.retryEnabled,
@@ -187,7 +208,42 @@ function apply(): void {
     if (settings.lastEventEnabled) want.push('lastEvent');
     if (settings.retryEnabled) want.push('retry');
     if (want.length > 0) runsAsked += requestRowInfo(namespace, want, visibleRows(tbody, lookup), nowMs);
+
+    // The filter-bar button beside the table, not a cell inside it — see
+    // family/expandButton.ts. Every dependency is read live for the same reason
+    // installNotFilter's are: a toggle flip or a filter edit must take effect on
+    // the very next click, not the next page load.
+    syncExpandButton(document, expandDeps);
 }
+
+// Every workflow this tab currently knows about, family root included — the full
+// last-list-response set, not visibleRows()'s on-screen subset. Collecting a root
+// id costs nothing extra (family/rows.ts computes it once, when the list response
+// arrives), so "Expand to families" gets the broader, more useful set for free.
+function knownRows(): WorkflowRow[] {
+    return Array.from(placements.byRun.values()).map((placement) => placement.row);
+}
+
+// One clause, not the OR-combination expand.ts builds — a single row's Family
+// anchor replaces the query outright, the same as clicking a plain (non-Ctrl)
+// native filter button. `null` when the id cannot be safely quoted; syncFamilyLink
+// (family/familyRender.ts) is what turns that into "no href at all" on the anchor.
+function buildFamilyHref(rootWorkflowId: string): string | null {
+    const clause = buildComparisonClause('RootWorkflowId', '=', rootWorkflowId);
+    if (clause === null) return null;
+    const url = new URL(location.href);
+    url.searchParams.set('query', clause);
+    return url.toString();
+}
+
+const expandDeps = {
+    enabled: () => settings.enabled && settings.familyEnabled,
+    currentQuery: () => new URL(location.href).searchParams.get('query') ?? '',
+    rows: knownRows,
+    navigate: (url: string) => {
+        location.href = url;
+    },
+};
 
 // The refresh control in the column header. It has to re-read the table rather than
 // use anything the render pass captured: what is on screen when the button is pressed
@@ -316,6 +372,20 @@ async function start(): Promise<void> {
     // The same arrangement for a workflow page's own links, and the same coalescing:
     // a history page can be observed while the UI is still rendering the last one.
     installDetailLinks(scheduleApply);
+
+    // The NOT filter, and Ctrl/Cmd-additive combination for it and for Temporal's
+    // own native filter button. Installed ONCE, like the hover panel below: both
+    // are document-level delegates, and `enabled` reads the master switch AND the
+    // feature's own toggle live, so a popup change takes effect on the very next
+    // hover or click rather than the next page load.
+    const notFilterDeps = {
+        enabled: () => settings.enabled && settings.notFilterEnabled,
+        navigate: (url: string) => {
+            location.href = url;
+        },
+    };
+    installNotFilter(notFilterDeps);
+    installFilterAugment(notFilterDeps);
 
     // The hover panel. Installed ONCE, with no reference to any row: it resolves a
     // row's identity from that row's own href at hover time, never from an attribute

@@ -49,6 +49,12 @@ export function refreshPresses(): number {
 export const OPTIONS: RenderOptions = {
     treeEnabled: true,
     linksEnabled: false,
+    // Off by default like every other feature switch here, and a no-op function
+    // rather than a real URL builder: the specs that care about the Family anchor
+    // supply their own (see familyRender.spec.ts), and every other spec in this
+    // file's fixtures must never see a href appear on its own.
+    familyEnabled: false,
+    buildFamilyHref: () => null,
     payloadsEnabled: false,
     lastEventEnabled: false,
     retryEnabled: false,

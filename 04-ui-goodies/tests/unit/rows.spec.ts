@@ -67,6 +67,100 @@ describe('normalizeExecutions', () => {
         expect(root!.parentWorkflowId).toBeNull();
         expect(root!.parentRunId).toBeNull();
     });
+
+    describe('rootWorkflowId', () => {
+        it('takes the server-provided root verbatim, even for a row with no parent on this page', () => {
+            const [row] = normalizeExecutions([
+                apiWorkflow({ workflowId: 'orphan-child', root: { workflowId: 'far-away-root' } }),
+            ]);
+            expect(row!.rootWorkflowId).toBe('far-away-root');
+        });
+
+        it('walks the page-local parent chain when the server sent nothing', () => {
+            const grandparentRun = fakeRunId(20);
+            const parentRun = fakeRunId(21);
+            const rows = normalizeExecutions([
+                apiWorkflow({ workflowId: 'grandparent', runId: grandparentRun }),
+                apiWorkflow({
+                    workflowId: 'parent',
+                    runId: parentRun,
+                    parent: { workflowId: 'grandparent', runId: grandparentRun },
+                }),
+                apiWorkflow({
+                    workflowId: 'child',
+                    parent: { workflowId: 'parent', runId: parentRun },
+                }),
+            ]);
+            for (const row of rows) expect(row.rootWorkflowId).toBe('grandparent');
+        });
+
+        it('names itself when it is a true root: no server value and no parent', () => {
+            const [row] = normalizeExecutions([apiWorkflow({ workflowId: 'lonely-root' })]);
+            expect(row!.rootWorkflowId).toBe('lonely-root');
+        });
+
+        it('names itself when the parent it names is not on this page', () => {
+            // The true root is off-page. Climbing further is not possible without a
+            // network request this function does not make, so the row settles on
+            // itself — the same degradation buildTree() makes it a root for.
+            const [row] = normalizeExecutions([
+                apiWorkflow({ workflowId: 'stray', parent: { workflowId: 'not-on-this-page', runId: fakeRunId(30) } }),
+            ]);
+            expect(row!.rootWorkflowId).toBe('stray');
+        });
+
+        it('declines to guess a parent run when the workflow id has two runs on this page', () => {
+            // Same ambiguity rule as buildTree()'s parentKeyOf(): a run-less parent
+            // reference that could mean either of two rows resolves to neither.
+            const first = fakeRunId(31);
+            const second = fakeRunId(32);
+            const rows = normalizeExecutions([
+                apiWorkflow({ workflowId: 'ambiguous-parent', runId: first }),
+                apiWorkflow({ workflowId: 'ambiguous-parent', runId: second }),
+                apiWorkflow({ workflowId: 'child-of-ambiguous', parent: { workflowId: 'ambiguous-parent' } }),
+            ]);
+            const child = rows.find((r) => r.workflowId === 'child-of-ambiguous')!;
+            expect(child.rootWorkflowId).toBe('child-of-ambiguous');
+        });
+
+        it('stops at a cycle instead of looping forever', () => {
+            // Not a shape real Temporal data can have — a workflow cannot be its
+            // own ancestor — but this function walks an untrusted network
+            // response, and the same caution every other pure function here takes
+            // with untrusted input applies.
+            const runA = fakeRunId(40);
+            const runB = fakeRunId(41);
+            const rows = normalizeExecutions([
+                apiWorkflow({ workflowId: 'a', runId: runA, parent: { workflowId: 'b', runId: runB } }),
+                apiWorkflow({ workflowId: 'b', runId: runB, parent: { workflowId: 'a', runId: runA } }),
+            ]);
+            // Both settle on SOME value rather than hanging — which one is an
+            // accident of iteration order, so only termination is asserted.
+            for (const row of rows) expect(typeof row.rootWorkflowId).toBe('string');
+        });
+
+        it('shares one root across a multi-generation family without recomputing it per row', () => {
+            // A grandchild resolved before its parent still lands on the same root
+            // as a grandchild resolved after — the walk reads whatever the current
+            // node's rootWorkflowId is at the moment it gets there, not a value
+            // captured earlier in this function's own iteration.
+            const rootRun = fakeRunId(50);
+            const midRun = fakeRunId(51);
+            const rows = normalizeExecutions([
+                apiWorkflow({
+                    workflowId: 'leaf-a',
+                    parent: { workflowId: 'middle', runId: midRun },
+                }),
+                apiWorkflow({ workflowId: 'middle', runId: midRun, parent: { workflowId: 'root', runId: rootRun } }),
+                apiWorkflow({ workflowId: 'root', runId: rootRun }),
+                apiWorkflow({
+                    workflowId: 'leaf-b',
+                    parent: { workflowId: 'middle', runId: midRun },
+                }),
+            ]);
+            expect(rows.map((r) => r.rootWorkflowId)).toEqual(['root', 'root', 'root', 'root']);
+        });
+    });
 });
 
 describe('indexPlacements + findPlacement', () => {

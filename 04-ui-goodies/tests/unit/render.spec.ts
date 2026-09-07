@@ -29,6 +29,7 @@ import {
     RETRY_CLASS,
     SEGMENT_WIDTH_PX,
 } from '../../src/decoration';
+import { NOT_FILTER_HOST_CLASS, NOT_FILTER_HOST_NATIVE_CLASS } from '../../src/decoration';
 import {
     applyToTable,
     findWorkflowTbody,
@@ -366,6 +367,10 @@ describe('removeAllDecoration', () => {
         ];
         const onThePage = (): string[] => roots.filter((className) => document.querySelector(`.${className}`) !== null);
         expect(onThePage()).toEqual(roots);
+        // Not a root either: the classes list/filters.ts writes onto the page's OWN
+        // cells to reserve the "≠" button's room. Stripped, never removed with the cell.
+        const markedCell = tbody.querySelector('td')!;
+        markedCell.classList.add(NOT_FILTER_HOST_CLASS, NOT_FILTER_HOST_NATIVE_CLASS);
         // The tree really did move the rows, so the assertion after cleanup is about
         // undoing something rather than about nothing having happened.
         expect(rowOrder(tbody)).toEqual(['parent', 'child-a']);
@@ -379,6 +384,9 @@ describe('removeAllDecoration', () => {
         // table still in family order after the master switch is off looks like the
         // switch half-worked, which is worse than it not existing.
         expect(tbody.querySelectorAll('[data-tuis-workflow-id]')).toHaveLength(0);
+        expect(markedCell.isConnected).toBe(true);
+        expect(markedCell.classList.contains(NOT_FILTER_HOST_CLASS)).toBe(false);
+        expect(markedCell.classList.contains(NOT_FILTER_HOST_NATIVE_CLASS)).toBe(false);
         expect(rowOrder(tbody)).toEqual(['child-a', 'parent']);
     });
 });

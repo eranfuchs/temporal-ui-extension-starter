@@ -24,6 +24,10 @@ export interface WorkflowSpec {
     startTime?: string;
     closeTime?: string | null;
     parent?: { workflowId: string; runId?: string };
+    // Absent by default, matching an older server that never sends this field —
+    // family/rows.ts's own fallback is what most tests of root identity want to
+    // exercise. Pass it to simulate a newer server naming its root explicitly.
+    root?: { workflowId: string; runId?: string };
     taskQueue?: string;
 }
 
@@ -37,6 +41,7 @@ export function apiWorkflow(spec: WorkflowSpec): TemporalApiWorkflow {
         parentExecution: spec.parent
             ? { workflowId: spec.parent.workflowId, runId: spec.parent.runId }
             : null,
+        rootExecution: spec.root ? { workflowId: spec.root.workflowId, runId: spec.root.runId } : null,
         taskQueue: spec.taskQueue ?? 'sample-task-queue',
     };
 }

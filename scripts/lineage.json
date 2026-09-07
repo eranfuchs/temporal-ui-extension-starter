@@ -14,28 +14,12 @@
             "why": "The piggyback itself. Every project wraps window.fetch the same way; if this file ever differs between them, the thing the repository is teaching has forked."
         },
         {
-            "path": "src/types.ts",
-            "why": "The shapes crossing the postMessage boundary, mirroring the API response — schemas parsed at the boundary, with the TypeScript types inferred from them rather than written twice. A project that needed fewer fields would still receive them, so trimming buys nothing and costs the identity."
-        },
-        {
-            "path": "src/family/rows.ts",
-            "why": "API response to a flat row shape. Pure, and identical in every project."
-        },
-        {
             "path": "src/family/tree.ts",
             "why": "The feature as a pure function. This is the file a reader is most likely to copy out; it must be the same file in every project that has it."
         },
         {
-            "path": "tests/helpers.ts",
-            "why": "Fixtures. Divergence here would make two projects' specs incomparable."
-        },
-        {
             "path": "tests/unit/tree.spec.ts",
             "why": "Pins the ordering and connector rules for the shared src/family/tree.ts."
-        },
-        {
-            "path": "tests/unit/rows.spec.ts",
-            "why": "Pins the shared src/family/rows.ts."
         },
         {
             "path": "tests/unit/inject.spec.ts",
@@ -60,14 +44,6 @@
         {
             "path": "src/links/linkRender.ts",
             "why": "The only place in either project that writes an <a> the user can click, and the one render module called from TWO pages — the workflow list through syncDeepLinks(), a single workflow's own page through syncLinkAnchors(). Every anchor in the repository therefore carries the same three hardening attributes (target, rel=noopener noreferrer, referrerPolicy=no-referrer) and reports an unopenable URL the same way. A stage-local copy would let one page's links lose one of those attributes while the other kept it, which is the kind of difference nobody sees by eye."
-        },
-        {
-            "path": "src/rowInfo/rowInfoRender.ts",
-            "why": "The 'Last event' column and the retry badge. Byte-identical on purpose even though 03 draws a third control in the same cell: this file reads answers out of RenderOptions.info and never learns where they came from, so nothing about a later stage gives it a reason to differ. Two properties in it fail silently and must be proved once rather than twice — the column stays RECTANGULAR (every row gets exactly one cell, or the headers sit one column out from their data), and it is idempotent about POSITION as well as text, because moving a node that is already in place wakes the MutationObserver that called it."
-        },
-        {
-            "path": "src/detail/detail.ts",
-            "why": "The pure folds behind the links on a single workflow's page, including which activity an id found on the page resolves to. It reads responses the page fetched for itself and touches neither credentials nor the ledger, so nothing about a later stage gives it a reason to differ."
         },
         {
             "path": "src/detail/detailLinks.ts",
@@ -183,6 +159,10 @@
         }
     ],
     "forks": [
+        {
+            "path": "src/rowInfo/rowInfoRender.ts",
+            "why": "The 'Last event' column and the retry badge — byte-identical between 02 and 04 until 04's column-identity model (src/list/columns.ts) needed a way to name this column without reading its label, which also contains the refresh button. 04's buildColumnHead() now stamps a data-tuis-column marker; 02 has no column model to feed and gets nothing to read it. Both properties the earlier shared entry called out (RECTANGULAR, idempotent about position) are unchanged and still true in both copies — the fork is one attribute on one element, not a behaviour change."
+        },
         {
             "path": "README.md",
             "why": "Each project's README opens with its own security card, in a fixed shape so the projects can be compared line by line. A shared README could not say '01 asks for no permissions and originates no request' and '02 asks for storage and DOES originate requests' at the same time, and that contrast is the repository's argument."
@@ -306,6 +286,26 @@
         {
             "path": "tests/unit/payloadClient.spec.ts",
             "why": "payloadClient.ts itself did not fork (see its shared entry above), and all but one of this file's tests still pass unmodified against 04's harness. The one that does not: 03 builds both the input and outcome sections together inside a single panel the moment either is hovered, so 'reset erases both sections' could assert on section('outcome') without ever hovering it. 04 shares ONE panel between the two kinds rather than building one per kind, so a kind that was never hovered was never the active kind either — the rewritten test instead confirms there is still exactly one panel node on the page after the reset, and that it is the one just erased rather than a second node holding a stale answer of its own. Run npm run lineage for the exact byte-diff."
+        },
+        {
+            "path": "src/types.ts",
+            "why": "01's schema has no notion of a family root — walking the page's own parent chain is the whole feature. 04 adds two fields src/family/rows.ts needs for \"Expand to families\" (src/family/expandButton.ts): `rootExecution`, mirroring the field a newer server may send on every execution (`root_execution`, proto field 18 — confirmed against temporalio/api's own definition, not assumed alongside the `parentExecution` field beside it); and `rootWorkflowId`, the resolved, always-populated field rows.ts's resolveLocalRoots() guarantees before a row is returned — server-sent when present, otherwise the best page-local guess, or the row's own id when neither reaches a parent still on this page. 01 has no reader for either."
+        },
+        {
+            "path": "src/family/rows.ts",
+            "why": "01's normalizeExecutions()/buildTree() are the entire feature: a page-local parent walk that stops at whatever the response contains. 04 needs a stable grouping key over the same rows for \"Expand to families\", so it adds resolveLocalRoots(): it trusts a newer server's own rootExecution verbatim, and otherwise makes the SAME page-local, cycle-capped, run-ambiguity-respecting walk buildTree() already does, so two rows whose true root sits one page over still land on the same local stand-in. 01 has no grouping feature to feed."
+        },
+        {
+            "path": "tests/helpers.ts",
+            "why": "Follows src/types.ts's fork: 04's fixture builder needs a way to simulate a newer server naming its own root, so it adds an optional `root` parameter wired into `rootExecution`. Absent by default — an absent root exercises rows.ts's own page-local fallback, which is what most of 04's root-identity tests want to exercise. 01's fixtures have no field to set."
+        },
+        {
+            "path": "tests/unit/rows.spec.ts",
+            "why": "Follows src/family/rows.ts's fork: pins resolveLocalRoots() with the server-provided-root case, the page-local-walk case, the true-root-names-itself case, the parent-off-page case, the same run-ambiguity rule buildTree() already enforces, a cycle that must terminate rather than hang, and a multi-generation family that lands every row on one shared root. 01 has none of that function to pin."
+        },
+        {
+            "path": "src/detail/detail.ts",
+            "why": "02's copy has no root concept at all. 04 adds a one-line self-fallback: a single workflow's own page has no list response to read a root from and no page-local siblings to walk, so `rootWorkflowId` is the workflow's own id — the same honest-fallback rule family/rows.ts's resolveLocalRoots() applies for the same reason, just with nothing left to walk."
         }
     ]
 }

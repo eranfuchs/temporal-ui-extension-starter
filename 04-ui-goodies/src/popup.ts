@@ -51,6 +51,7 @@ async function main(): Promise<void> {
     bindToggle('payloadsEnabled');
     bindToggle('lastEventEnabled');
     bindToggle('retryEnabled');
+    bindToggle('notFilterEnabled');
     bindCodecEndpoint();
     renderLinks();
     renderLinkScopeNote();

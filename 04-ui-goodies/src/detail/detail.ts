@@ -543,6 +543,11 @@ export function rowFromFacts(ref: DetailRef, facts: DetailFacts): WorkflowRow | 
         endTimeMs: facts.endTimeMs,
         parentWorkflowId: null,
         parentRunId: null,
+        // No list response here to name one, and no page-local siblings to walk
+        // to either — a single workflow's own page knows only its own id. Same
+        // self-fallback family/rows.ts's resolveLocalRoots() reaches for a true
+        // root, for the same reason: it is the honest answer, not a guess.
+        rootWorkflowId: ref.workflowId,
         taskQueue: facts.taskQueue,
         depth: 0,
         segments: [],

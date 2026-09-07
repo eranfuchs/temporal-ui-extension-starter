@@ -74,6 +74,41 @@ export const PANEL_CLASS = 'tuis-panel';
 export const LINK_BAR_CLASS = 'tuis-linkbar';
 export const ACTIVITY_LINKS_CLASS = 'tuis-act-links';
 export const OFF_CLASS = 'tuis-off';
+// The Copy button src/list/columnCopy.ts adds to every native or extension header
+// cell. One class rather than a marker per column, because the button looks and
+// behaves the same everywhere it appears — src/list/columns.ts is what tells two
+// of them apart, not this file.
+export const HEADER_COPY_CLASS = 'tuis-col-copy';
+// The one <option> src/list/pageSize.ts adds to Temporal's own page-size <select>.
+// Not inside the table, which is why it needs a root of its own here rather than
+// riding along with an existing one.
+export const PAGE_SIZE_OPTION_CLASS = 'tuis-pagesize-1000';
+// src/list/filters.ts's "≠" button. Exactly one of these exists at a time — it is
+// relocated between cells, not built per row — but it still needs a root here: if
+// the master switch (or the feature's own toggle) turns off while it happens to be
+// attached mid-hover, this is what lets removeAllDecoration() take it off the page
+// on the very next pass instead of leaving a stale, non-functional control behind.
+export const NOT_FILTER_BUTTON_CLASS = 'tuis-not-filter';
+// Written ONTO the UI's own body cells by src/list/filters.ts, every render pass:
+// an eligible cell reserves room at its right edge for that button — and, when the
+// UI's own filter/copy cluster already sits there, room past that too. Not nodes of
+// ours, so the master switch's sweep strips the CLASS and must never remove the cell
+// (see HOST_MARK_CLASSES below).
+export const NOT_FILTER_HOST_CLASS = 'tuis-not-host';
+export const NOT_FILTER_HOST_NATIVE_CLASS = 'tuis-not-host-native';
+// The per-row "Family" anchor, one per matched row — family/familyRender.ts.
+// Unlike LINK_CLASS this is a real navigation within Temporal itself, not a
+// third-party template, so it carries none of that class's external-link
+// hardening (no target, no rel, no referrerPolicy — see the comment on
+// syncFamilyLink() for why those would be wrong here).
+export const FAMILY_LINK_CLASS = 'tuis-family-link';
+// The single "Expand to families" button beside Temporal's own filter bar, and
+// the message span beside IT that reports why a click did nothing — both from
+// family/expandButton.ts. Same "one relocatable node, still needs a root" reasoning
+// as NOT_FILTER_BUTTON_CLASS above: this button is not per-row, but it is drawn
+// outside the table, so nothing else would sweep it on a master-switch-off pass.
+export const EXPAND_BUTTON_CLASS = 'tuis-expand-families';
+export const EXPAND_MESSAGE_CLASS = 'tuis-expand-message';
 
 // THE MASTER SWITCH'S CONTRACT, as a value rather than a paragraph.
 //
@@ -108,11 +143,29 @@ export const REMOVABLE_ROOT_CLASSES: readonly string[] = [
     // header label one cell to the left of its data.
     LAST_EVENT_CLASS,
     COLUMN_HEAD_CLASS,
+    // The header Copy button and the page-size option. Neither carries any data of
+    // its own, but "off" sweeps every root regardless — see the sweep's own doc
+    // comment in render.ts.
+    HEADER_COPY_CLASS,
+    PAGE_SIZE_OPTION_CLASS,
+    // The NOT-filter's own button. See its own comment above for why a single
+    // relocated node still needs to be swept like any other root.
+    NOT_FILTER_BUTTON_CLASS,
+    // The per-row Family anchor, and the Expand-to-families button and message.
+    // See their own comments above.
+    FAMILY_LINK_CLASS,
+    EXPAND_BUTTON_CLASS,
+    EXPAND_MESSAGE_CLASS,
 ];
 
 // Must match `.tuis-seg { width }` in public/content.css. The link's indent is
 // derived from it, so the two drifting apart lays the workflow id on top of the
 // connector strokes.
+// The other half of the master switch's contract: classes this extension writes onto
+// elements it did NOT create. removeAllDecoration() strips these from wherever they
+// are, rather than removing the element — the element is the page's own.
+export const HOST_MARK_CLASSES: readonly string[] = [NOT_FILTER_HOST_CLASS, NOT_FILTER_HOST_NATIVE_CLASS];
+
 export const SEGMENT_WIDTH_PX = 18;
 
 // ── What a render pass is given ──────────────────────────────────────────────
@@ -127,6 +180,17 @@ export interface Placement {
 export interface RenderOptions {
     treeEnabled: boolean;
     linksEnabled: boolean;
+    // The per-row Family anchor — see family/familyRender.ts. Its own switch,
+    // because it is one of the three headline features this stage's manifest
+    // names, same policy as the NOT filter's notFilterEnabled.
+    familyEnabled: boolean;
+    // Builds the href for one row's Family anchor from its rootWorkflowId, or null
+    // when that id cannot be safely written into a filter query — see
+    // quoteStringLiteral() in list/query.ts. A function and not a value for the
+    // same reason onRefresh is: it needs location.href, which this file does not
+    // read directly (render.ts stays testable without mocking a global), and
+    // content.ts is where the real one lives.
+    buildFamilyHref: (rootWorkflowId: string) => string | null;
     // The `{ }` button. Costs nothing to draw and nothing to leave alone — the
     // requests happen on hover, in payloads/tooltip.ts, and not in a render pass.
     payloadsEnabled: boolean;

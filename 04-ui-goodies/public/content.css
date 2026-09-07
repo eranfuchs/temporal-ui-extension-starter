@@ -127,6 +127,146 @@ td:has(a[href*="/workflows/"]) {
     cursor: not-allowed;
 }
 
+/* The per-row "Family" anchor — same quiet pill as .tuis-link, on purpose: it sits
+ * in the exact same spot beside a workflow id and should not read as a different
+ * kind of control. It also takes .tuis-link-blocked's own look when the id cannot
+ * be safely quoted, for the same reason. */
+.tuis-family-link {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 16px;
+    text-decoration: none;
+    white-space: nowrap;
+    opacity: 0.6;
+}
+
+.tuis-family-link:hover,
+.tuis-family-link:focus-visible {
+    opacity: 1;
+}
+
+.tuis-family-link.tuis-link-blocked {
+    border-style: dashed;
+    text-decoration: line-through;
+    cursor: not-allowed;
+}
+
+/* The NOT filter's "≠" button (list/filters.ts): one shared node, relocated into
+ * whichever eligible cell has the pointer or focus, and anchored to that cell's
+ * RIGHT EDGE beside the UI's own filter/copy cluster — "filter to this value" and
+ * "filter this value out" are one family of control and belong together, which is
+ * where the private extension this stage is modelled on draws its own. Out of the
+ * cell's flow, so what the cell holds (a badge in a flex wrapper, a link, plain
+ * text) never decides where it lands, and the row never grows.
+ *
+ * RED, not the pills' currentColor — the second of only two colours this file
+ * owns (the retry badge is the other). It is the one control here that takes rows
+ * AWAY, sitting beside a native funnel that adds a filter; the same colour as the
+ * pills would read as one more link. Mixed with CanvasText so the red darkens on a
+ * light page and lightens on a dark one, at the same hue as the private
+ * extension's own "≠" button.
+ *
+ * The room it takes is reserved on the cell PERMANENTLY, by the host classes
+ * list/filters.ts writes every render pass, not on hover — the UI's own pattern
+ * for its cluster: the value stops short of the button on every row, so it is
+ * never covered, and the cell box never changes on hover, so the column never
+ * reflows. The class is repeated to outrank the UI's own padding rule for a
+ * `filterable` cell (three classes, no element: 0,3,0) without an id or
+ * !important — a plain `td.tuis-not-host` (0,1,1) would lose, and the value would
+ * run under the button. */
+td.tuis-not-host.tuis-not-host.tuis-not-host {
+    position: relative;
+    /* 6px edge + 24px button + 6px gap. */
+    padding-right: 36px;
+}
+
+/* The UI's own cluster owns the right ~60px of such a cell: past it. */
+td.tuis-not-host-native.tuis-not-host-native.tuis-not-host-native {
+    padding-right: 92px;
+}
+
+.tuis-not-filter {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* 24px: the floor .tuis-col-refresh cites, and the size of the two native
+     * discs beside it. */
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, #dc2626 45%, transparent);
+    border-radius: 50%;
+    background: transparent;
+    color: color-mix(in srgb, #dc2626 85%, CanvasText);
+    font: inherit;
+    /* A symbol, not text: at 11px the glyph was a hairline that lost to its own ring. */
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+td.tuis-not-host-native > .tuis-not-filter {
+    right: 64px;
+}
+
+.tuis-not-filter:hover,
+.tuis-not-filter:focus-visible {
+    border-color: color-mix(in srgb, #dc2626 75%, transparent);
+    /* Mixed with transparent, not Canvas: Canvas is the BROWSER's page colour, which
+     * in a dark theme is near-black behind the UI's own navy — the tint has to take
+     * whatever the cell behind it actually is. */
+    background: color-mix(in srgb, #dc2626 12%, transparent);
+}
+
+/* The "Expand to families" filter-bar button and the message beside it. The
+ * button sits in Temporal's own control group next to "+ Add Filter" and the
+ * "</>" toggle, so it takes their size — 32px tall, 12px text, a 1px border,
+ * square corners — and reads as one more control in that row rather than a stray
+ * line of text, which is exactly what an unstyled <button> became once the page's
+ * own reset stripped it (no border, no padding, no background). The border and
+ * hover tint are mixed from currentColor so it follows the bar's own colours in
+ * either theme; no accent colour of its own, since it is not the loudest thing
+ * in that row. */
+.tuis-expand-families {
+    display: inline-flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    /* Square, like the bar's own buttons in the shipped UI — a rounded one reads
+     * as a different kind of control from the one beside it. */
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.tuis-expand-families:hover,
+.tuis-expand-families:focus-visible {
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    border-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+/* The message is text, and would otherwise run flush against the button. */
+.tuis-expand-message {
+    margin-left: 4px;
+    font-size: 12px;
+    opacity: 0.7;
+    white-space: nowrap;
+}
+
 /* The Input and Output buttons that each open a payload panel. Same quiet
  * treatment as a deep link, plus a <button> reset: the UI's own button styling
  * would otherwise give these a background, a border radius and a padding meant
@@ -158,8 +298,9 @@ td:has(a[href*="/workflows/"]) {
 
 /* The retrying-activity badge.
  *
- * Deliberately the loudest thing this extension draws, and the only place it uses
- * a colour of its own: every other decoration is information the reader asked for,
+ * Deliberately the loudest thing this extension draws, and one of only two places
+ * it uses a colour of its own (the "≠" filter button is the other, for its own
+ * reason there): every other decoration is information the reader asked for,
  * while this one is information they did not know to look for. A workflow whose
  * activity has failed 900 times is still "Running" in the status column.
  *
@@ -264,6 +405,53 @@ td:has(a[href*="/workflows/"]) {
 .tuis-col-refresh:disabled {
     cursor: default;
     opacity: 0.25;
+}
+
+/* The header Copy button (list/columnCopy.ts). It sits INSIDE Temporal's own
+ * header label row, right after the label — the same spot, size and quiet
+ * treatment as .tuis-col-refresh above, the other control this extension puts in
+ * a header — and is invisible until that header is hovered or focused, the way
+ * the private extension's own copy-column control behaves: a table with every
+ * column decorated should look no different from a vanilla one at rest.
+ *
+ * Beside the label rather than pinned to the cell's right edge: in a wide column
+ * a right-edge button lands closer to the NEXT column's label than to its own and
+ * reads as belonging to it. Unstyled, this was a permanently visible native
+ * <button> on a second line under every label. */
+.tuis-col-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    margin-left: 4px;
+    padding: 0 4px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    /* The glyph is not in the UI's own font and falls back to a symbol font, where
+     * the header's bold weight becomes synthetic bold on 1px strokes — so weight and
+     * size are set here, not inherited from the label beside it. */
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.08s ease;
+    vertical-align: middle;
+}
+
+th:hover .tuis-col-copy,
+.tuis-col-copy:focus-visible {
+    opacity: 0.7;
+}
+
+.tuis-col-copy:hover,
+.tuis-col-copy:focus-visible {
+    opacity: 1;
+    background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 /* The payload panel.
@@ -565,12 +753,17 @@ td:has(a[href*="/workflows/"]) {
  * by class takes effect in the same frame as the toggle. */
 html.tuis-off .tuis-prefix,
 html.tuis-off .tuis-link,
+html.tuis-off .tuis-family-link,
 html.tuis-off .tuis-payload-input,
 html.tuis-off .tuis-payload-output,
 html.tuis-off .tuis-retry,
 html.tuis-off .tuis-panel,
 html.tuis-off .tuis-linkbar,
-html.tuis-off .tuis-act-links {
+html.tuis-off .tuis-act-links,
+html.tuis-off .tuis-expand-families,
+html.tuis-off .tuis-expand-message,
+html.tuis-off .tuis-not-filter,
+html.tuis-off .tuis-col-copy {
     display: none !important;
 }
 

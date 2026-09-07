@@ -33,11 +33,12 @@
 //     do not try to prevent that. We re-apply, cheaply, after it settles.
 
 import {
+    FAMILY_LINK_CLASS,
     LINK_CLASS,
     PAYLOAD_INPUT_CLASS,
     PAYLOAD_OUTPUT_CLASS,
     PREFIX_CLASS,
-    REMOVABLE_ROOT_CLASSES,
+    HOST_MARK_CLASSES, REMOVABLE_ROOT_CLASSES,
     RETRY_CLASS,
     SEGMENT_CLASS,
     SEGMENT_WIDTH_PX,
@@ -46,6 +47,7 @@ import {
     type RenderOptions,
     type RenderStats,
 } from './decoration';
+import { syncFamilyLink } from './family/familyRender';
 import { syncDeepLinks } from './links/linkRender';
 import { syncPayloadButtons } from './payloads/payloadButton';
 import { syncLastEventColumn, syncRetryBadge } from './rowInfo/rowInfoRender';
@@ -226,6 +228,7 @@ function decorateRow(
 
     const segments = options.treeEnabled ? (placement?.segments ?? []) : [];
     syncTreePrefix(cell, link, segments);
+    syncFamilyLink(cell, placement, options);
     syncDeepLinks(cell, placement, options);
     syncPayloadButtons(cell, placement, options);
     const retrying = syncRetryBadge(cell, placement, options);
@@ -248,11 +251,12 @@ function decorateRow(
 //
 // Why this order and not another: the badge is the loudest thing drawn here and
 // the one worth finding at a glance, so it keeps the position closest to the id.
-// The links come next because they are the reason most people install this, and
-// the two payload buttons go last — each opens a panel that covers part of the
-// row, so they are the controls that read better away from the id they belong to.
-// Input before Output between the two of them: it is the order the workflow's own
-// events happen in.
+// Family comes next: it is built in rather than configured, the same reasoning
+// that puts it ahead of the user's own links. The links come after because they
+// are the reason most people install this, and the two payload buttons go last —
+// each opens a panel that covers part of the row, so they are the controls that
+// read better away from the id they belong to. Input before Output between the
+// two of them: it is the order the workflow's own events happen in.
 //
 // The cost, stated because it is real and it is the argument for the other order:
 // the number of deep links is whatever the settings list holds, so the buttons sit
@@ -261,7 +265,7 @@ function decorateRow(
 // projects differ by an append rather than by a rearrangement.
 //
 // This is the row drawn in both READMEs.
-const CELL_CONTROL_ORDER = [RETRY_CLASS, LINK_CLASS, PAYLOAD_INPUT_CLASS, PAYLOAD_OUTPUT_CLASS];
+const CELL_CONTROL_ORDER = [RETRY_CLASS, FAMILY_LINK_CLASS, LINK_CLASS, PAYLOAD_INPUT_CLASS, PAYLOAD_OUTPUT_CLASS];
 
 // Returns whether anything moved, which is also what makes it testable.
 export function syncControlOrder(cell: HTMLTableCellElement): boolean {
@@ -337,10 +341,18 @@ export function removeAllDecoration(root: ParentNode = document): void {
     // Not a node, and still a trace: the row marker stamped onto the page's own <tr>.
     // Nothing reads it back — identity comes from the href, deliberately (rule 1) — so
     // leaving it would change no behaviour. It comes off anyway, because "off" is a
-    // claim about the DOM that a reader can check, and this plus the indent above are
-    // the only two things written onto nodes this extension did not create.
+    // claim about the DOM that a reader can check, and this, the indent above and the
+    // cell marks below are the only three things written onto nodes this extension
+    // did not create.
     for (const row of Array.from(root.querySelectorAll(`[${WORKFLOW_ID_ATTR}]`))) {
         row.removeAttribute(WORKFLOW_ID_ATTR);
+    }
+    // The room a cell reserves for the "≠" button (list/filters.ts) — stripped, not
+    // removed: the cell is the page's own.
+    for (const className of HOST_MARK_CLASSES) {
+        for (const cell of Array.from(root.querySelectorAll(`.${className}`))) {
+            cell.classList.remove(className);
+        }
     }
 
     // And the row order, which is the whole point of this extension and the one edit

@@ -23,6 +23,7 @@ import {
     type PlacementLookup,
     type RenderOptions,
 } from '../decoration';
+import { EXTENSION_COLUMN_ATTR, LAST_EVENT_COLUMN_KEY } from '../list/columns';
 import { formatAgePrecise, FRESH_FLOOR_MS, lastEventTitle, retryBadgeLabel, retryBadgeTitle } from './rowInfo';
 
 // The retrying-activity badge. Returns whether one is now on this row.
@@ -154,6 +155,10 @@ function buildColumnHead(headRow: HTMLTableRowElement): HTMLTableCellElement {
     const doc = headRow.ownerDocument;
     const th = doc.createElement('th');
     th.className = COLUMN_HEAD_CLASS;
+    // The column model's marker (src/list/columns.ts), so Copy/NOT-filter/reorder
+    // can identify this column without reading its label — which also contains the
+    // refresh button below.
+    th.setAttribute(EXTENSION_COLUMN_ATTR, LAST_EVENT_COLUMN_KEY);
     th.title = 'Added by this extension. One history request per running row — see src/rowInfo/rowInfoServe.ts.';
 
     const label = doc.createElement('span');

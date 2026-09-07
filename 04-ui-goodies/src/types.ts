@@ -54,6 +54,14 @@ export const temporalApiWorkflowSchema = v.object({
     parentExecution: v.nullish(
         v.object({ workflowId: v.optional(v.string()), runId: v.optional(v.string()) }),
     ),
+    // Newer servers send this on EVERY execution, root or not — a root names
+    // itself here. Older servers omit it entirely, root and child alike; see
+    // family/rows.ts's resolveLocalRoots() for what fills the gap. Confirmed as a
+    // real field (`root_execution`, field 18) against temporalio/api's own proto,
+    // not assumed from the parentExecution shape beside it.
+    rootExecution: v.nullish(
+        v.object({ workflowId: v.optional(v.string()), runId: v.optional(v.string()) }),
+    ),
     taskQueue: v.nullish(v.string()),
 });
 
@@ -83,6 +91,11 @@ export interface WorkflowRow {
     endTimeMs: number | null;
     parentWorkflowId: string | null;
     parentRunId: string | null;
+    // Always populated, never empty — family/rows.ts guarantees it before a row
+    // is returned from normalizeExecutions(). Server-sent when present, otherwise
+    // the best page-local guess, and the row's own id when neither reaches a
+    // parent still on this page. See resolveLocalRoots() there for the exact rule.
+    rootWorkflowId: string;
     taskQueue: string | null;
     // Filled in by buildTree(). Depth 0 = a root of a family on this page.
     depth: number;

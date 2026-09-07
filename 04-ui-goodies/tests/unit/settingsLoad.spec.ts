@@ -43,7 +43,16 @@ afterEach(() => {
 
 const WORKFLOW_LINK = { label: 'Logs', urlTemplate: 'https://example.com/?q={workflowId}' };
 
-const TOGGLES = ['enabled', 'treeEnabled', 'linksEnabled', 'payloadsEnabled', 'lastEventEnabled', 'retryEnabled'] as const;
+const TOGGLES = [
+    'enabled',
+    'treeEnabled',
+    'linksEnabled',
+    'payloadsEnabled',
+    'lastEventEnabled',
+    'retryEnabled',
+    'notFilterEnabled',
+    'familyEnabled',
+] as const;
 
 describe('loadSettings', () => {
     it('reads a stored false as off, and anything else as the shipped default', async () => {
@@ -174,10 +183,12 @@ describe('loadSettings', () => {
         expect(Object.keys(settings).sort()).toEqual([
             'codecEndpoint',
             'enabled',
+            'familyEnabled',
             'lastEventEnabled',
             'linkScopesSeeded',
             'links',
             'linksEnabled',
+            'notFilterEnabled',
             'payloadsEnabled',
             'retryEnabled',
             'treeEnabled',
