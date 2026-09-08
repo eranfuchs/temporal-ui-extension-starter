@@ -8,10 +8,10 @@
 // reordered the header or recycled a row underneath it, so the column's live index
 // is recomputed at the moment of the click and nowhere earlier.
 //
-// SECURITY NOTE (see SECURITY_AUDIT.md): this moves text from the page to the
-// system clipboard. It is gated on a user click, reads only what is already
-// rendered on screen — nothing this extension decodes or decrypts — and goes
-// nowhere but the clipboard.
+// SECURITY NOTE (see this project's Security card in README.md): this moves text
+// from the page to the system clipboard. It is gated on a user click, reads only
+// what is already rendered on screen — nothing this extension decodes or
+// decrypts — and goes nowhere but the clipboard.
 
 import { HEADER_COPY_CLASS } from '../decoration';
 import { inlineHostOf, readColumns, visibleText, type ColumnInfo } from './columns';

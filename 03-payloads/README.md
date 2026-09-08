@@ -27,8 +27,9 @@ Bytes that are not valid UTF-8 are labelled and shown as their base64 rather tha
 at, and anything past `MAX_DISPLAY_CHARS` is clipped with a count of what was cut — so
 what is on screen is not always something that pastes back. Displaying JSON *as* JSON has
 its own correctness problem and belongs to
-[stage 04](../README.md#stage-04-planned--the-conveniences) with the viewer it needs. So
-does every other convenience: this rung adds a capability, not features.
+[`../04-ui-goodies/`](../04-ui-goodies/), [stage 04](../README.md#stage-04--the-conveniences),
+which built the viewer it needs. So does every other convenience: this rung adds a
+capability, not features.
 
 **Three things arrive at once here**, which is why it is a stage of its own: the
 extension decodes payloads for the first time, sends a request body to a host of your

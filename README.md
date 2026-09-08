@@ -2,9 +2,8 @@
 
 Small Chrome extensions that add a **parent/child family tree** to the Temporal Web
 UI — and, more to the point, a worked example of how to add your own view to a UI
-you do not own. **Three of them are in this repository**, as the first three rungs
-of a ladder; the table below says what each rung costs, and what stage 04 is planned
-to add.
+you do not own. **Four of them are in this repository**, as four rungs of a
+ladder; the table below says what each rung costs.
 
 No backend of ours. No credentials to configure or store. No changes to Temporal. They
 work on Temporal Cloud and on a local `temporal server start-dev` without a line of
@@ -60,14 +59,14 @@ produce real parent/child families in about a minute.
 
 They are separate extensions, not one extension with feature flags. Each is
 clonable and buildable on its own, and each rung of the ladder costs something
-visible. Three rungs are here; stage 04 is planned:
+visible. Four rungs are here:
 
 | Project | Adds | Permissions | Requests it makes | Worker |
 |---|---|---|---|---|
 | [`01-family-tree/`](01-family-tree/) | the family tree, and nothing else | **none** | **none** | none |
 | [`02-techniques/`](02-techniques/) | deep links to your own log tool (per row, and per activity on a workflow's own page), a settings pane, a "last event" column with a refresh control, a retrying-activity badge | `storage` | up to two per **running** row, to the page's own Temporal API, paced and cached — plus whatever the refresh control is pressed for, floored at one round per run per 5s. Nowhere else | none |
 | [`03-payloads/`](03-payloads/), the **payload stage** | each workflow's input and result on hover, decoded through your own codec server | `storage` — **the same permission surface as 02** | the above, plus one history event per question — one for a running row, two for a closed one — and, only once you have named one, the codec server you typed into the popup | none |
-| stage 04, conveniences — planned, not written | payload viewing and JSON highlighting, column reordering, a larger page size, expand-to-families, family focus, per-column copy, NOT filtering and additive filtering — [the full list](#stage-04-planned--the-conveniences) | `storage` | no new destination | none |
+| [`04-ui-goodies/`](04-ui-goodies/), the **conveniences** | separate input/output payload viewing with a lossless JSON viewer, column reordering, a page size up to 1,000, expand-to-families, one-click family focus, a copy button per column, NOT filtering and additive filtering — [the full list](#stage-04--the-conveniences) | `storage` — **the same permission surface as 03** | the same as 03, nothing new | none |
 
 The "requests" column is there because it is the one cost the manifest does **not**
 show. 02 declares no `host_permissions` and still originates requests, from the page's
@@ -88,36 +87,44 @@ version and the button's tooltip — while the extension gains payload decoding,
 outbound host and a panel that can hold somebody's personal data. If you read one diff in
 this repository, read that one.
 
-**Stage 04 is not written yet**, and there is no empty directory standing in for it.
-
-### Stage 04, planned — the conveniences
+### Stage 04 — the conveniences
 
 The one authoritative copy of the scope; everywhere else in the repository that mentions
 stage 04 links here.
 
 - **Separate input and output payload affordances** — one control per direction,
-  rather than one panel showing both.
-- **JSON highlighting**, and the value viewer it implies: colour per value rather than
-  per panel, flat and always fully drawn (no expand/collapse — every value is on
-  screen the moment the panel opens), and lossless formatting so a 20-digit id
-  survives. 03 briefly had a version of this and it was removed; the library survey
-  that stage 04 should start from is in
+  rather than one panel showing both, and a Copy button on the panel itself that
+  copies whatever it is currently showing, decoded payload included.
+  `src/payloads/payloadButton.ts`, `src/payloads/tooltip.ts`.
+- **A lossless JSON viewer**: colour per value rather than per panel, flat and always
+  fully drawn (no expand/collapse — every value is on screen the moment the panel
+  opens), and every leaf drawn from a raw substring of the original text so a 20-digit
+  id survives. 03 briefly had a version of this and it was removed; the library survey
+  this one started from — why every JSON-viewer package on npm takes a *parsed* value,
+  and why that is the wrong shape for an id that must not round-trip through a
+  double — is in
   [`docs/design-notes.md`](docs/design-notes.md#every-json-viewer-wanted-a-parsed-value).
-- **Column reordering.**
-- **Workflow-list page size up to 1,000.**
-- **Expand to families** — pull in the relatives of the rows a filter matched.
-- **One-click family focus.**
-- **A copy button on each data-column header.**
-- **NOT filtering** — the negation Temporal's own filter bar does not offer.
-- **Ctrl/Cmd-click additive filtering**, for Temporal's own filters and for the NOT
-  filter above.
+  `src/payloads/jsonViewer.ts`.
+- **Column reordering** — a drag handle on every header, keyboard support on the same
+  handle, and a toggle that restores Temporal's own order. `src/list/columnReorder.ts`.
+- **Workflow-list page size up to 1,000** — Temporal's own per-call ceiling.
+  `src/list/pageSize.ts`.
+- **Expand to families** — a filter-bar button that pulls in the relatives of the rows
+  a filter matched. `src/family/expandButton.ts`.
+- **One-click family focus** — a "Family" link on every matched row, to every workflow
+  sharing its root, including ones this page never loaded. `src/family/familyRender.ts`.
+- **A copy button on each data-column header**, reading the column live at click time.
+  `src/list/columnCopy.ts`.
+- **NOT filtering** — the negation Temporal's own filter bar does not offer — plus
+  Ctrl/Cmd-click additive filtering, for Temporal's own filters and for this one.
+  `src/list/filters.ts`.
 
 None of it needs a new permission or a new destination: `storage`, and the requests
 03 already makes.
 
-Its README should repeat what is stage-specific — the security card, the capability
-difference from 03, and the "read these files" path — and **link** to the gate and
-dependency explanations in this file rather than restate them. Three stages carrying four
+Its README repeats what is stage-specific — the security card, the capability
+difference from 03, and the "read these files" path — and **links** to the gate and
+dependency explanations in this file rather than restating them. Three stages carrying four
 copies of the same policy prose is what the last readability pass removed.
 
 That ladder is the argument this repository is making: a genuinely useful view costs zero
@@ -227,6 +234,7 @@ answer here rather than an install log.
 | [01](01-family-tree/README.md#dependencies) | `valibot` | — |
 | [02](02-techniques/README.md#dependencies) | `valibot`, `p-limit` | `yocto-queue` |
 | [03](03-payloads/README.md#dependencies) | `valibot`, `p-limit` — the same set as 02 | `yocto-queue` |
+| [04](04-ui-goodies/README.md#dependencies) | `valibot`, `p-limit`, plus `jsonc-parser` for the JSON viewer | `yocto-queue` |
 
 Each project's README carries a short table naming the version, what the package is
 for, and what stayed application-owned. `npm run measure` prints what each one
@@ -264,6 +272,9 @@ Three limits on that, stated rather than implied:
 02-techniques/      + deep links, settings, two questions  (storage)
 03-payloads/        + input and result on hover, a codec server  (storage — the
                     same permission surface as 02, and the first rung that POSTs)
+04-ui-goodies/      + JSON viewer, column reordering, page size, expand-to-
+                    families, family focus, per-column copy, NOT/additive
+                    filtering  (storage — the same permission surface as 03)
 sample/             Temporal SDK workflows that produce a hierarchy to look at
 scripts/            preflight and the gates, shared by every project
 docs/how-it-works.md   the mechanism, and the traps that cost hours
@@ -304,8 +315,7 @@ results, quote the UNVERIFIED count too.**
 
 ## Status
 
-Three projects are built and used; stage 04 is not written. What is worth knowing
-before you copy any of it:
+Four projects are built and used. What is worth knowing before you copy any of it:
 
 - **The mechanism is proven elsewhere.** The piggyback, the `window.fetch` getter
   lock and the render loop come from an internal extension that has run against

@@ -170,9 +170,9 @@ and the typechecker is where that claim is enforced rather than asserted.
 Deep links to your log tool, a settings pane, a last-event column and a
 retrying-activity badge are [`../02-techniques/`](../02-techniques/). Workflow input
 and result on hover, decoded through your codec server, are the rung above that —
-[`../03-payloads/`](../03-payloads/). The conveniences are the rung above *that*,
-[listed in the root README](../README.md#stage-04-planned--the-conveniences), and not
-in this repository yet.
+[`../03-payloads/`](../03-payloads/). The conveniences are the rung above *that* —
+[`../04-ui-goodies/`](../04-ui-goodies/),
+[listed in the root README](../README.md#stage-04--the-conveniences).
 
 Each step costs something: 02 asks for `storage` and — the part no manifest key shows
 — it **originates requests**, because two of the facts it puts on screen are in no

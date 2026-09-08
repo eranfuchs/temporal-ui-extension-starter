@@ -448,8 +448,8 @@ to the page are `render.ts`, the two `*Render.ts` modules it calls,
 
 **No payload is decoded here** — that is the boundary of this stage, not an omission. Input
 and result on hover, through a codec server, are [`../03-payloads/`](../03-payloads/). The
-conveniences are one rung further up and that stage is not in this repository yet;
-[the root README lists them](../README.md#stage-04-planned--the-conveniences).
+conveniences are one rung further up, [`../04-ui-goodies/`](../04-ui-goodies/);
+[the root README lists them](../README.md#stage-04--the-conveniences).
 
 ## Commands
 
