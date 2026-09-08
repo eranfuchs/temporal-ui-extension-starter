@@ -22,7 +22,7 @@
 // replaces whatever `order` was passed with that capture.
 
 import { COLUMN_DRAG_CLASS, COLUMN_DROP_AFTER_CLASS, COLUMN_DROP_BEFORE_CLASS } from '../decoration';
-import { inlineHostOf, readColumns, type ColumnInfo } from './columns';
+import { EXTENSION_COLUMN_ATTR, inlineHostOf, readColumns, type ColumnInfo } from './columns';
 import { effectiveKeyOrder, moveKey, moveKeyBeside, reorderColumns } from './columnOrder';
 
 export interface ColumnReorderDeps {
@@ -50,11 +50,81 @@ export interface ColumnReorderDeps {
 // exactly what re-triggers the capture.
 let capturedHeadRow: HTMLTableRowElement | null = null;
 let capturedOrder: readonly string[] = [];
+// The NATIVE+structural key sequence only — never an extension key — captured
+// alongside capturedOrder. What reconcileRow() below falls back to for an
+// UNTAGGED row's NATIVE cells: Temporal draws a row's own native cells from its
+// own column model, never from the DOM this file has rewritten, so a native
+// cell this function has never touched is always still in this order,
+// regardless of anything done to the header, to other rows, or to this
+// extension's OWN column since. Extension keys are deliberately excluded: an
+// extension cell carries its identity directly (EXTENSION_COLUMN_ATTR, set by
+// the code that creates it — see reconcileRow()'s own comment), so including
+// one here would only be a second, position-based source of truth for
+// something that already has a first, and the two disagree the moment the
+// column is toggled off and back on — see
+// docs/design-notes.md#a-recreated-cell-is-not-a-fresh-cell.
+let capturedNativeTemplate: readonly string[] = [];
 
 function captureOriginal(headRow: HTMLTableRowElement, columns: readonly ColumnInfo[]): void {
-    if (capturedHeadRow === headRow) return;
+    if (capturedHeadRow === headRow) return; // one-shot per <thead> row instance — see file header
     capturedHeadRow = headRow;
     capturedOrder = columns.filter((c) => c.origin !== 'structural').map((c) => c.key);
+    capturedNativeTemplate = columns.filter((c) => c.origin !== 'extension').map((c) => c.key);
+}
+
+// The marker reconcileRow() writes on every cell it moves, so a LATER pass can
+// tell which NATIVE key a cell represents without content-sniffing it — a
+// native body cell carries no identity of its own (columns.ts's own header
+// comment says so). A native cell with no marker yet has never been touched by
+// this function, so it must still be in the native order captured above.
+const ROW_ORDER_ATTR = 'data-tuis-order-key';
+
+// One row, reconciled to `desiredKeys`. Declines — leaves the row alone, the same
+// "decline, never guess" rule findByKey() states in columns.ts — when the cell
+// count does not match the header, when the number of NATIVE cells (everything
+// without EXTENSION_COLUMN_ATTR) does not match the captured native template,
+// when some but not all of those native cells are already marked (a native
+// cell inserted into a row this function had already reconciled once: there is
+// no live way to tell which key the new one is), when two cells would claim the
+// same key, or when a marked key is not actually one `desiredKeys` names.
+// Returns whether it moved anything.
+function reconcileRow(tr: HTMLTableRowElement, desiredKeys: readonly string[]): boolean {
+    const cells = Array.from(tr.children) as HTMLElement[];
+    if (cells.length !== desiredKeys.length) return false;
+
+    // An extension cell (this file's own "Last event", and any future one)
+    // carries its key directly — the exact marker its <th> is already found by
+    // in columns.ts — so it is exactly as reliable freshly recreated after a
+    // disable/re-enable cycle as it is ten reorders later. Only NATIVE and
+    // structural cells, which Temporal draws and this file never creates or
+    // destroys, need the position-based fallback below.
+    const nativeCells = cells.filter((cell) => !cell.getAttribute(EXTENSION_COLUMN_ATTR));
+    if (nativeCells.length !== capturedNativeTemplate.length) return false;
+
+    const nativeTags = nativeCells.map((cell) => cell.getAttribute(ROW_ORDER_ATTR));
+    const nativeFresh = nativeTags.every((tag) => tag === null);
+    if (!nativeFresh && nativeTags.some((tag) => tag === null)) return false;
+
+    let nextNative = 0;
+    const currentKeys = cells.map((cell) => {
+        const extKey = cell.getAttribute(EXTENSION_COLUMN_ATTR);
+        if (extKey) return extKey;
+        const index = nextNative++;
+        return nativeFresh ? (capturedNativeTemplate[index] ?? '') : (nativeTags[index] ?? '');
+    });
+    if (new Set(currentKeys).size !== currentKeys.length) return false;
+    if (currentKeys.every((key, index) => key === desiredKeys[index])) return false; // Rule 2: already there
+
+    const byKey = new Map(cells.map((cell, index) => [currentKeys[index], cell] as const));
+    const ordered: HTMLElement[] = [];
+    for (const key of desiredKeys) {
+        const cell = byKey.get(key);
+        if (!cell) return false;
+        ordered.push(cell);
+    }
+    for (const cell of ordered) tr.appendChild(cell);
+    ordered.forEach((cell, index) => cell.setAttribute(ROW_ORDER_ATTR, desiredKeys[index]!));
+    return true;
 }
 
 // Moves the header's <th> children and every body row's <td> children into the
@@ -63,6 +133,12 @@ function captureOriginal(headRow: HTMLTableRowElement, columns: readonly ColumnI
 // actually did, for the same reason reorderIntoFamilies() does: Rule 2 — a
 // settled table must cause no write, or the observer that drives every render
 // pass here schedules another one forever.
+//
+// Every row is reconciled, not only when the header itself just moved: a row
+// Temporal drew AFTER the header last settled — a freshly inserted workflow, one
+// whose cells this file has never touched — starts in native order and needs the
+// same reconciliation the header just had, or its cells stay one column out from
+// an ALREADY-correct header forever. See reconcileRow() above.
 export function syncColumnOrder(tbody: HTMLTableSectionElement, order: readonly string[], enabled: boolean): boolean {
     const headRow = headRowFor(tbody);
     if (!headRow) return false;
@@ -70,17 +146,19 @@ export function syncColumnOrder(tbody: HTMLTableSectionElement, order: readonly 
     captureOriginal(headRow, columns);
 
     const desired = reorderColumns(columns, enabled ? order : capturedOrder);
-    if (desired.every((c, index) => c.index === index)) return false;
+    const desiredKeys = desired.map((c) => c.key);
+    let changed = false;
 
-    for (const column of desired) headRow.appendChild(column.th);
-    for (const tr of Array.from(tbody.children)) {
-        const cells = Array.from(tr.children);
-        // A row whose cell count does not match this header's is left alone
-        // rather than guessed at — the same "decline, never guess" rule
-        // findByKey() states in columns.ts.
-        if (cells.length !== desired.length) continue;
-        for (const column of desired) tr.appendChild(cells[column.index]!);
+    if (!desired.every((c, index) => c.index === index)) {
+        for (const column of desired) headRow.appendChild(column.th);
+        changed = true;
     }
+
+    for (const tr of Array.from(tbody.children)) {
+        if (reconcileRow(tr as HTMLTableRowElement, desiredKeys)) changed = true;
+    }
+
+    if (!changed) return false;
     // Scoped to a RECENT drag or keyboard move, not every reorder: syncColumnOrder()
     // also runs on page load and on any other settings sync, reapplying a
     // previously-saved order with no live cursor involved at all. Resyncing then
@@ -160,12 +238,20 @@ function headRowFor(tbody: HTMLTableSectionElement): HTMLTableRowElement | null 
 const HANDLE_GLYPH = '⠿';
 
 // Draws the handle idempotently on every reorderable header — one call per
-// pass, like syncHeaderCopyButtons. Taking it off again is the master switch's
-// job (removeAllDecoration, by class — see COLUMN_DRAG_CLASS in decoration.ts),
-// not this function's.
+// pass, like syncHeaderCopyButtons. Taking it off again on the MASTER switch is
+// removeAllDecoration's job (by class — see COLUMN_DRAG_CLASS in decoration.ts),
+// but this feature's OWN toggle has no other call site that runs every pass, so
+// it has to check itself here: a handle left behind after the feature-level
+// toggle went off would still be focusable and draggable, and dragging it would
+// silently do nothing (installColumnDrag's own dragstart listener already
+// declines on `!deps.enabled()`) — a control that looks live but is not.
 export function syncColumnDragHandles(tbody: HTMLTableSectionElement, deps: ColumnReorderDeps): void {
     const headRow = headRowFor(tbody);
     if (!headRow) return;
+    if (!deps.enabled()) {
+        for (const handle of Array.from(headRow.querySelectorAll(`.${COLUMN_DRAG_CLASS}`))) handle.remove();
+        return;
+    }
     for (const column of readColumns(headRow)) {
         if (column.origin === 'structural') continue;
         if (column.th.querySelector(`.${COLUMN_DRAG_CLASS}`)) continue;

@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Temporal starter 04 — UI goodies",
-    "version": "0.2.0",
+    "version": "0.2.2",
     "description": "Everything stage 03 does, plus a real JSON viewer, a NOT filter, family-aware bulk actions and column reordering for the workflow list. No backend of ours, no host permissions, and no credential of its own.",
     "permissions": [
         "storage"

@@ -70,23 +70,25 @@ export function syncRetryBadge(
 
 // The "Last event" column, applied to the whole table at once.
 //
-// IT SITS IMMEDIATELY AFTER THE WORKFLOW-ID COLUMN, and that placement is the feature
-// working: the question it answers — "is this one actually moving?" — is asked while
-// reading the id, and at the far right of a table the UI already fills to the edge the
-// answer is behind a horizontal scroll where nobody looks. So the position is COMPUTED
-// on every pass rather than being a constant, because the Temporal UI lets the user
-// reorder the columns — from each row's own id cell, and for the <thead>, which has no
-// workflow link of its own to find, from the first body row that had one.
+// IT SITS IMMEDIATELY AFTER THE WORKFLOW-ID COLUMN AT BIRTH, and that placement is the
+// feature working: the question it answers — "is this one actually moving?" — is asked
+// while reading the id, and at the far right of a table the UI already fills to the edge
+// the answer is behind a horizontal scroll where nobody looks. The position is computed
+// from each row's own id cell, and for the <thead>, which has no workflow link of its own
+// to find, from the first body row that had one — but only ONCE, when the cell or <th> is
+// first created. list/columnReorder.ts's syncColumnOrder runs after this on every pass and
+// is the position's owner after that; see the note above the placeAfter() calls below.
 //
 // INVARIANT: RECTANGULAR. Every body row gets exactly one cell and the header exactly
 // one <th>, including a row with no workflow link at all, whose cell is appended.
 // Breaking it: a cell in the wrong column is cosmetic, but a row missing one puts
 // every header a column out from its data.
 //
-// INVARIANT: IDEMPOTENT ABOUT POSITION, not only about text — each half asks where a
-// node already is before moving it.
-// Breaking it: the move wakes the MutationObserver that called us and the next pass
-// moves it again. Rule 2 in render.ts, one level up.
+// INVARIANT: IDEMPOTENT ABOUT POSITION, not only about text — placement is asked for
+// only at creation, never re-imposed on a cell or <th> that already exists.
+// Breaking it: on a pass where a saved custom order disagrees with "right after the id",
+// this function and syncColumnOrder each move it back every single pass, forever. Rule 2
+// in render.ts, one level up.
 //
 // INVARIANT: the ages are FROZEN AT THE READING, never computed from the current
 // clock, which makes this a pure function of the answers it was given — the same
@@ -117,11 +119,23 @@ export function syncLastEventColumn(
         if (idCell && idColumn === null) idColumn = Array.from(tr.children).indexOf(idCell);
 
         let cell = tr.querySelector<HTMLTableCellElement>(`:scope > .${LAST_EVENT_CLASS}`);
+        const isNewCell = !cell;
         if (!cell) {
             cell = tr.ownerDocument.createElement('td');
             cell.className = LAST_EVENT_CLASS;
+            // Same marker buildColumnHead() below puts on the <th> — so this
+            // cell's identity survives a disable/re-enable cycle without
+            // list/columnReorder.ts having to infer it from position. See
+            // docs/design-notes.md#a-recreated-cell-is-not-a-fresh-cell.
+            cell.setAttribute(EXTENSION_COLUMN_ATTR, LAST_EVENT_COLUMN_KEY);
         }
-        placeAfter(cell, idCell, tr);
+        // Placed only ONCE, at creation. list/columnReorder.ts's syncColumnOrder
+        // runs after this on every pass and is the position's owner from then on —
+        // placing it here on every pass too was the bug: whenever a saved custom
+        // order disagreed with "right after the id column", both functions wrote
+        // every single pass, forever. See
+        // docs/design-notes.md#two-owners-for-one-columns-position.
+        if (isNewCell) placeAfter(cell, idCell, tr);
 
         const ids = idsFromRow(tr);
         const placement = ids ? lookup(ids.workflowId, ids.runId) : undefined;
@@ -132,11 +146,15 @@ export function syncLastEventColumn(
 
     if (!headRow) return;
     let th = headRow.querySelector<HTMLTableCellElement>(`:scope > .${COLUMN_HEAD_CLASS}`);
+    const isNewHead = !th;
     if (!th) th = buildColumnHead(headRow);
-    // The UI's own headers with ours excluded, so an index counted here means the
-    // same column it means in a body row.
-    const theirs = Array.from(headRow.children).filter((node) => node !== th);
-    placeAfter(th, idColumn === null ? null : (theirs[idColumn] ?? null), headRow);
+    if (isNewHead) {
+        // The UI's own headers with ours excluded, so an index counted here means
+        // the same column it means in a body row. Only at creation — see the row
+        // loop above for why every later pass leaves position to syncColumnOrder.
+        const theirs = Array.from(headRow.children).filter((node) => node !== th);
+        placeAfter(th, idColumn === null ? null : (theirs[idColumn] ?? null), headRow);
+    }
     syncColumnRefresh(th, options);
 }
 

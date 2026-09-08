@@ -48,6 +48,8 @@ link names a heading that exists.
   - [A restored order that outlived its welcome](#a-restored-order-that-outlived-its-welcome)
 - [Column reorder](#column-reorder)
   - [Two owners for one column's position](#two-owners-for-one-columns-position)
+  - [Being last was not enough](#being-last-was-not-enough)
+  - [A recreated cell is not a fresh cell](#a-recreated-cell-is-not-a-fresh-cell)
   - [A resync scoped to every reorder resynced page load too](#a-resync-scoped-to-every-reorder-resynced-page-load-too)
 - [Expand to families](#expand-to-families)
   - [A button that could not see the checkboxes](#a-button-that-could-not-see-the-checkboxes)
@@ -475,7 +477,7 @@ gets the final word on every pass, the same guarantee `reorderIntoFamilies()` al
 for rows by virtue of running last in its own pipeline. `syncColumnOrder`'s own computation
 is keyed by column identity, not by position, so it produces the same correct order
 regardless of what `syncLastEventColumn` just did a moment earlier — being last is
-sufficient.
+sufficient **for the visible header order**, which is all this first fix checked.
 
 `tests/unit/columnOrderInteraction.spec.ts` pins the call order as a contract: it drives
 `applyToTable` and `syncColumnOrder` against the same table across two render passes, in
@@ -483,6 +485,101 @@ the pipeline's real order, and asserts the saved order survives both. Swapping t
 calls inside that test reproduces the exact symptom found live — "Last event" lands one
 column earlier than the saved order says — which is what makes it a regression test for
 `content.ts`'s call order rather than for either function alone.
+
+### Being last was not enough
+
+"Being last is sufficient" above turned out to be true only for the FINAL order on a given
+pass, not for how many times the two functions write to get there. A code review, later,
+reproduced three more failures the call-order fix never touched, because it never asked
+whether a *settled* table stayed settled:
+
+1. **The pass never stopped writing.** `syncLastEventColumn` moved "Last event" beside the
+   id column UNCONDITIONALLY, on every single pass, whether or not it was already there.
+   With a saved order that puts "Last event" anywhere else, that write happened every pass;
+   `syncColumnOrder` — still correctly last — moved it right back every pass too. The header
+   order was correct after every pass, which is exactly why reading the header never caught
+   it, but the table never stopped mutating. Rule 2 (render.ts) says a settled table causes
+   no write, because a MutationObserver drives every pass here — an observed write is the
+   next pass's trigger, forever.
+2. **A row `syncColumnOrder` had never touched stayed wrong even when the header was
+   already right.** Its early return skipped the ENTIRE body-row reconciliation loop
+   whenever the header already matched the desired order — which is exactly the state a
+   freshly drawn native-order row (a workflow that just started matching the current
+   query, say) arrives into. The header would report the correct order forever while that
+   row's cells sat one column out from it.
+3. **The id-column index computed from a ROW and the id-column index computed from the
+   HEADER stopped meaning the same column** once "Last event" sat BEFORE the id rather than
+   after it — a case the original fix's own fixture (`Last event` always placed after
+   `Workflow ID`) never exercised.
+
+The real fix, in both files: `syncLastEventColumn` now places the "Last event" cell/`<th>`
+only ONCE, at creation — from then on, position is entirely `syncColumnOrder`'s job, the
+same "single layout owner" the file already claimed to be for everything else.
+`syncColumnOrder` no longer returns early when only the header already matches; it always
+walks every body row and reconciles each one against the header's current key order,
+tracking each cell's last-known key with a `data-tuis-order-key` attribute it writes on the
+cell itself (body `<td>`s carry no identity of their own — see `columns.ts`'s own header
+comment — so an untagged cell is assumed to still be in whichever native order Temporal
+drew it in, which is stable for the lifetime of a given `<thead>` row because Temporal
+renders from its own column model, never from the DOM this file rewrites).
+
+`tests/unit/columnOrderInteraction.spec.ts` gained two more contracts: a `mutationsDuring()`
+check that a second full pass, after "Last event" already holds a custom position, writes
+nothing at all — not just that the header still reads correctly — and a check that every
+body cell's *content* still lines up with its header when "Last event" sits before the id.
+`tests/unit/columnReorder.spec.ts` gained the freshly-inserted-row case directly against
+`syncColumnOrder`, with "Last event" out of the picture entirely, so that regression does
+not depend on the other function's behavior to prove itself.
+
+### A recreated cell is not a fresh cell
+
+The fix above assumed an untagged cell was always one Temporal drew — true for every native
+cell, but not for this extension's OWN "Last event" cell, whose entire lifecycle is
+create-on-enable, remove-on-disable (`syncLastEventColumn`'s own early return when
+`!options.lastEventEnabled`). A second review, toggling the column off and back on rather
+than only ever turning it on once, found two more failures the first fix's own fixtures never
+exercised, because none of them ever removed the column after adding it:
+
+1. **The native-position fallback drifted.** `captureOriginal`'s template started as the
+   header's full key sequence at first sight, and on every later pass it appended any key it
+   had not seen before — so a "Last event" enabled AFTER the header was first captured landed
+   at the END of the template, not at the ONE position it actually gets placed (right after
+   the id column). A later untagged row's cells were then read off that template positionally,
+   labelling the physical "Last event" cell as whatever native key the template wrongly put at
+   that slot, and vice versa — silently swapping two cells' identities without moving either
+   one.
+2. **A recreated cell looked "mixed", and the whole row was declined forever.** Disabling
+   removed the extension `<td>` outright; re-enabling created a brand-new one with no
+   `data-tuis-order-key` yet, while its row-mates — reconciled at least once already — still
+   carried theirs. `reconcileRow`'s "some but not all cells are tagged" guard read that
+   as an unresolvable row and declined it permanently, while `syncColumnOrder` kept
+   reordering the header on the same pass regardless — a body row stuck one column out from
+   an already-correct header, with no further pass ever fixing it.
+
+The real fix is to stop inferring the extension cell's identity from position or from
+`data-tuis-order-key` at all, and instead give it the same explicit, content-independent
+marker its `<th>` already had: `rowInfoRender.ts` now stamps the freshly created "Last event"
+`<td>` with `EXTENSION_COLUMN_ATTR` (`data-tuis-column`, the same attribute
+`buildColumnHead()` already set on the header cell) the moment it creates it — not only once
+the column has survived a reorder. `columnReorder.ts`'s `reconcileRow` reads that attribute
+directly for a cell's key when present, with no ambiguity a disable/re-enable cycle could
+ever introduce, and falls back to the captured native template — renamed
+`capturedNativeTemplate`, now holding ONLY native and structural keys, never an extension one
+— for the remaining cells only. Because the extension key never enters that template, there
+is nothing left to append to or forget to remove: the template describes a set of columns
+Temporal draws and this file never creates or destroys, which cannot change shape without a
+real navigation. The "mixed marker" guard now applies to native cells only, since an
+extension cell is never ambiguous in the first place — a freshly recreated "Last event" cell
+reconciles in the very same pass that recreates it, alongside native cells whose tags may be
+arbitrarily old.
+
+`tests/unit/columnOrderInteraction.spec.ts` gained a nested block covering exactly the
+sequence that broke: enabling with no saved order yet, a disable → re-enable cycle with a
+saved custom order (checked for content alignment on both the native and the extension side,
+and that a further pass afterwards writes nothing), and a fresh native row inserted after the
+column was removed. Checking header order alone, or a single column's text as a proxy, would
+have missed the swap in Finding 1 — the header reordered correctly in every one of these
+cases; it was specifically the body cells that landed under the wrong header.
 
 ### A resync scoped to every reorder resynced page load too
 

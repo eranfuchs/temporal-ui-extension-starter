@@ -55,7 +55,8 @@ function buildTable(): { tbody: HTMLTableSectionElement; headRow: HTMLTableRowEl
             const td = tr.appendChild(document.createElement('td'));
             td.textContent = value;
         }
-        tr.appendChild(document.createElement('td')); // last event, blank
+        const lastEventTd = tr.appendChild(document.createElement('td')); // last event, blank
+        lastEventTd.setAttribute(EXTENSION_COLUMN_ATTR, 'last-event');
     }
 
     document.body.appendChild(table);
@@ -123,6 +124,50 @@ describe('syncColumnOrder', () => {
         expect(headerKeys(headRow)).toEqual(['structural', 'Status', 'Workflow ID', 'Type', 'last-event']);
     });
 
+    it('reconciles a row Temporal draws AFTER the header was already reordered, not only rows present at the time', () => {
+        // The bug this pins: the early return above skipped the ENTIRE body-row
+        // loop whenever the header already matched `order` — which is exactly
+        // the state a freshly inserted native-order row arrives into, leaving it
+        // one column out from an already-correct header forever.
+        const { tbody, headRow } = buildTable();
+        const order = ['Status', 'Workflow ID', 'Type'];
+        syncColumnOrder(tbody, order, true);
+        expect(headerKeys(headRow)).toEqual(['structural', 'Status', 'Workflow ID', 'Type', 'last-event']);
+
+        const fresh = tbody.appendChild(document.createElement('tr'));
+        fresh.appendChild(document.createElement('td')).textContent = ''; // checkbox
+        for (const value of ['wf-2', 'Running', 'Sample']) {
+            fresh.appendChild(document.createElement('td')).textContent = value;
+        }
+        const freshLastEvent = fresh.appendChild(document.createElement('td')); // last event, blank
+        freshLastEvent.setAttribute(EXTENSION_COLUMN_ATTR, 'last-event');
+
+        // The header does not need to move again — only the new row does.
+        expect(syncColumnOrder(tbody, order, true)).toBe(true);
+        expect(headerKeys(headRow)).toEqual(['structural', 'Status', 'Workflow ID', 'Type', 'last-event']);
+        expect(rowValues(tbody, 2)).toEqual(['', 'Running', 'wf-2', 'Sample', '']);
+    });
+
+    it('reconciles a mix of already-tracked and freshly inserted rows in the same pass', () => {
+        const { tbody } = buildTable();
+        const order = ['Type', 'Status', 'Workflow ID'];
+        syncColumnOrder(tbody, order, true); // both existing rows get tracked here
+
+        const fresh = tbody.appendChild(document.createElement('tr'));
+        fresh.appendChild(document.createElement('td')).textContent = '';
+        for (const value of ['wf-2', 'Running', 'Sample']) {
+            fresh.appendChild(document.createElement('td')).textContent = value;
+        }
+        const freshLastEvent = fresh.appendChild(document.createElement('td'));
+        freshLastEvent.setAttribute(EXTENSION_COLUMN_ATTR, 'last-event');
+
+        syncColumnOrder(tbody, order, true);
+
+        expect(rowValues(tbody, 0)).toEqual(['', 'Sample', 'Completed', 'wf-0', '']);
+        expect(rowValues(tbody, 1)).toEqual(['', 'Sample', 'Running', 'wf-1', '']);
+        expect(rowValues(tbody, 2)).toEqual(['', 'Sample', 'Running', 'wf-2', '']);
+    });
+
     it('turning the feature off restores the order Temporal drew, not whichever order was last applied', () => {
         const { tbody, headRow } = buildTable();
         syncColumnOrder(tbody, ['Type', 'Status', 'Workflow ID'], true); // scramble it first
@@ -180,6 +225,33 @@ describe('syncColumnDragHandles', () => {
         statusTh.querySelector<HTMLButtonElement>(`.${COLUMN_DRAG_CLASS}`)!.click();
         expect(sortHandler).not.toHaveBeenCalled();
     });
+
+    // A handle left behind after this feature's OWN toggle goes off — as opposed
+    // to the master switch, which removeAllDecoration() already sweeps by class —
+    // would still be focusable and draggable, and dragging it would silently do
+    // nothing: a control that looks live but is not.
+    it('draws no handle at all when the feature starts disabled', () => {
+        const { tbody, headRow } = buildTable();
+        syncColumnDragHandles(tbody, { ...deps, enabled: () => false });
+        expect(headRow.querySelectorAll(`.${COLUMN_DRAG_CLASS}`)).toHaveLength(0);
+    });
+
+    it('removes every handle on the enabled → disabled transition', () => {
+        const { tbody, headRow } = buildTable();
+        syncColumnDragHandles(tbody, deps);
+        expect(headRow.querySelectorAll(`.${COLUMN_DRAG_CLASS}`)).toHaveLength(4);
+
+        syncColumnDragHandles(tbody, { ...deps, enabled: () => false });
+        expect(headRow.querySelectorAll(`.${COLUMN_DRAG_CLASS}`)).toHaveLength(0);
+    });
+
+    it('re-enabling draws exactly one handle per column again, not a duplicate', () => {
+        const { tbody, headRow } = buildTable();
+        syncColumnDragHandles(tbody, deps);
+        syncColumnDragHandles(tbody, { ...deps, enabled: () => false });
+        syncColumnDragHandles(tbody, deps);
+        expect(headRow.querySelectorAll(`.${COLUMN_DRAG_CLASS}`)).toHaveLength(4);
+    });
 });
 
 describe('keyboard reordering on the handle', () => {
@@ -221,19 +293,26 @@ describe('keyboard reordering on the handle', () => {
         expect(saveOrder).not.toHaveBeenCalled();
     });
 
-    it('does nothing while the feature is disabled', () => {
+    // syncColumnDragHandles() itself now removes the handle the moment the
+    // feature goes off — see its own "removes every handle" test — so this is
+    // no longer reachable through the normal per-pass lifecycle. It stays as a
+    // defence-in-depth check on the listener itself: a handle that predates a
+    // disable, because whatever called this went one pass without syncing
+    // handles first, must still decline the keypress rather than trust that it
+    // would not exist if the feature were really off.
+    it('a handle built before the feature was disabled still declines the keypress', () => {
         const { tbody, headRow } = buildTable();
-        const saveOrder = vi.fn();
         const deps: ColumnReorderDeps = {
-            enabled: () => false,
+            enabled: () => true,
             currentOrder: () => ['Workflow ID', 'Status', 'Type'],
-            saveOrder,
+            saveOrder: vi.fn(),
         };
         syncColumnDragHandles(tbody, deps);
         const handle = headRow.children[1]!.querySelector<HTMLButtonElement>(`.${COLUMN_DRAG_CLASS}`)!;
 
+        deps.enabled = () => false; // flips with no further syncColumnDragHandles pass
         handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
-        expect(saveOrder).not.toHaveBeenCalled();
+        expect(deps.saveOrder).not.toHaveBeenCalled();
     });
 });
 
@@ -376,16 +455,23 @@ describe('dragging a handle onto another header', () => {
         expect(saveOrder).not.toHaveBeenCalled();
     });
 
-    it('does nothing while the feature is disabled', () => {
+    // syncColumnDragHandles() removes the handle the moment the feature goes
+    // off (see its own "removes every handle" test), so a disabled pass has
+    // nothing to dragstart from through the normal per-pass lifecycle. This
+    // checks the listener itself, defence in depth: a handle that predates a
+    // disable, with no further syncColumnDragHandles pass in between, must
+    // still decline the drag rather than trust it would not exist.
+    it('a handle built before the feature was disabled still declines the drag', () => {
         const { tbody, headRow } = buildTable();
         const saveOrder = vi.fn();
-        activeDeps = { enabled: () => false, currentOrder: () => ['Workflow ID', 'Status', 'Type'], saveOrder };
+        activeDeps = { enabled: () => true, currentOrder: () => ['Workflow ID', 'Status', 'Type'], saveOrder };
         syncColumnDragHandles(tbody, activeDeps);
 
         const workflowHandle = headRow.children[1]!.querySelector<HTMLButtonElement>(`.${COLUMN_DRAG_CLASS}`)!;
         const typeTh = headRow.children[3]!;
         mockRects(new Map([[typeTh, { left: 100, width: 100 }]]));
 
+        activeDeps = { ...activeDeps, enabled: () => false }; // flips with no further sync pass
         fire(workflowHandle, 'dragstart', 0);
         fire(typeTh, 'dragover', 120);
         fire(typeTh, 'drop', 120);
