@@ -405,7 +405,7 @@ describe('caching answers', () => {
         // MAX_CACHED_PAYLOADS of them (200) accumulate before evicting anything.
         // Two answers each half of MAX_CACHED_PAYLOAD_CHARS is enough to exercise
         // the size trigger at a small fraction of that count. This client is
-        // shared with 04-ui-goodies (see scripts/lineage.json), which is where the
+        // shared with 04-ui-goodies, which is where the
         // JSON viewer that motivated raising MAX_DISPLAY_CHARS lives — this stage
         // has no such viewer, but shares the cache the larger answers now fill.
         const big = 'x'.repeat(Math.floor(MAX_CACHED_PAYLOAD_CHARS / 2));

@@ -1,8 +1,8 @@
 // Build: bundle each entry point to an IIFE in dist/, then copy public/ verbatim.
 //
-// The options live in esbuild.config.mjs so that the surface gate can build with
-// exactly these settings when it asks esbuild which packages end up in each
-// bundle. See that file for why the split exists.
+// The options live in esbuild.config.mjs so that anything else that needs to build
+// this project — a size measurement, an audit — uses exactly these settings. See
+// that file for why the split exists.
 
 import { build, context } from 'esbuild';
 import { cp, mkdir, rm } from 'node:fs/promises';

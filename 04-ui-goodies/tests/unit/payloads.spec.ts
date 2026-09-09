@@ -283,8 +283,7 @@ describe('decoding a payload', () => {
         // Decoding it needs the message descriptor, which we do not have and a
         // codec server usually does. The two bytes are written as escapes rather
         // than typed literally: protobuf wire format is mostly control characters,
-        // and a fixture that is invisible in a diff is a fixture nobody reviews —
-        // the leak gate rejects one, which is how these two were found.
+        // and a fixture that is invisible in a diff is a fixture nobody reviews.
         expect(needsCodec(payload('json/protobuf', '\u0008\u0001'))).toBe(true);
     });
 

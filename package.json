@@ -1,6 +1,6 @@
 {
     "name": "temporal-ui-extension-starter",
-    "version": "0.16.9",
+    "version": "0.17.0",
     "private": true,
     "type": "module",
     "description": "Standalone Chrome extensions, in increasing order of ambition, showing how to add your own view to the Temporal Web UI with no backend of ours, no credentials to configure or store, and no changes to Temporal. Four of them are here, from the zero-permission family tree up to the conveniences stage.",
@@ -11,31 +11,8 @@
     "workspaces": [
         "[0-9][0-9]-*"
     ],
-    "scripts": {
-        "build": "node scripts/run-in-projects.mjs build",
-        "typecheck": "node scripts/run-in-projects.mjs typecheck",
-        "test": "node scripts/run-in-projects.mjs test",
-        "leak:gate": "node scripts/leak-gate.mjs",
-        "leak:history": "node scripts/leak-gate.mjs --history",
-        "leak:selftest": "node scripts/leak-gate.mjs --selftest",
-        "lineage": "node scripts/lineage.mjs",
-        "lineage:selftest": "node scripts/lineage.mjs --selftest",
-        "surface": "node scripts/surface.mjs",
-        "surface:selftest": "node scripts/surface.mjs --selftest",
-        "doc:paths": "node scripts/doc-paths.mjs",
-        "doc:selftest": "node scripts/doc-paths.mjs --selftest",
-        "measure": "node scripts/measure.mjs",
-        "preflight": "node scripts/preflight.mjs",
-        "preflight:selftest": "node scripts/preflight.mjs --selftest",
-        "icons": "node scripts/make-icons.mjs",
-        "package": "node scripts/package.mjs"
-    },
     "devDependencies": {
         "esbuild": "^0.28.2",
-        "github-slugger": "2.0.0",
-        "mdast-util-from-markdown": "2.0.3",
-        "mdast-util-to-string": "4.0.0",
-        "semver": "7.8.5",
         "typescript": "^5.9.3"
     }
 }

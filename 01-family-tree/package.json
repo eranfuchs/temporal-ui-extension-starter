@@ -1,6 +1,6 @@
 {
     "name": "temporal-ui-starter-01-family-tree",
-    "version": "0.3.4",
+    "version": "0.3.5",
     "private": true,
     "type": "module",
     "description": "The smallest useful thing: parent/child workflow families in the Temporal UI, with zero permissions.",
@@ -13,8 +13,7 @@
         "watch": "node esbuild.mjs --watch",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
-        "test:watch": "vitest",
-        "package": "node ../scripts/package.mjs ."
+        "test:watch": "vitest"
     },
     "devDependencies": {
         "esbuild": "^0.28.2",

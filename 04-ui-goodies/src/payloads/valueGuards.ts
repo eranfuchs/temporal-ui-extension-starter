@@ -17,10 +17,9 @@
 // "is this an object I can index?" test.
 //
 // src/rowInfo/rowInfo.ts and src/detail/detail.ts still carry their own copies. That is
-// deliberate and not an oversight: both are registered as lineage-SHARED files, so
-// a helper imported into them would have to be imported into 02's copies too, and
-// 02 does not have this file. The duplication is one three-line function, and the
-// lineage gate is what keeps the copies honest.
+// deliberate and not an oversight: both files exist in 02 as well, so a helper imported
+// into them would have to exist in 02 too, and 02 does not have this file. The
+// duplication is one three-line function.
 
 export function asObject(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' && !Array.isArray(value)

@@ -1,6 +1,6 @@
 // What this project builds, and how. Imported by esbuild.mjs (which runs the
-// build) and by ../scripts/surface.mjs (which builds with `metafile: true` to see
-// which packages actually end up in each bundle).
+// build) and by any audit that builds with `metafile: true` to see which packages
+// actually end up in each bundle).
 //
 // It lives in its own file for one reason: the audit has to ask esbuild the same
 // question the build asks it. A second copy of these options in the audit would

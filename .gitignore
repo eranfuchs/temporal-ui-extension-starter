@@ -9,8 +9,3 @@ dist/
 .idea/
 .vscode/
 *.iml
-
-# Your organisation's private terms for the leak gate. NEVER committed —
-# a public repo listing your internal hostnames defeats the purpose.
-# See leakgate.denylist.example for the format.
-leakgate.local.txt

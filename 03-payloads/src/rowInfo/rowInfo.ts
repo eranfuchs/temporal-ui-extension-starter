@@ -246,8 +246,8 @@ export function eventsOf(body: unknown): unknown[] | null {
 // Both normalise to the second form.
 //
 // (rows.ts::simplifyStatus does the same job for status enums. It is not reused
-// because rows.ts is byte-identical across the projects in this repository —
-// scripts/lineage.json enforces that — so a change there would have to be a
+// because rows.ts is stage 01's file, kept by the stages after it, so a change
+// there would have to be a
 // change in 01 too, for a feature 01 does not have.)
 export function prettyEventType(raw: string): string {
     const bare = raw.replace(/^EVENT_TYPE_/, '');

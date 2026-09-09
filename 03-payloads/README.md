@@ -2,34 +2,22 @@
 
 Everything [`../02-techniques/`](../02-techniques/) does, plus the one thing most teams
 actually came for: **a workflow's input and result on the row it belongs to.** A `{ }`
-button on every row, hovered to read what the workflow was started with and what it
-returned or why it failed — decoded through your own codec server when the payload is
+<img src="../docs/images/icon-payload.png" alt="the payload button on a row" width="29" align="absmiddle"> button on every row, hovered to read what the workflow was started
+with and what it returned or why it failed — decoded through your own codec server when the payload is
 encrypted, with the host that decoded it named on screen every time.
 
-```
-Workflow ID                                  Last event ⟳                   Status
-order-2601011200-01      Logs  { }           3m 00s · ActivityTaskStarted   Running
- ├─ …-01-payment    ↻ 47 Logs  { }           12s · ActivityTaskFailed       Running
- └─ …-01-fulfilment      Logs  { }                                          Completed
-                                └───────────────────────────────────────────┐
-                                │ order-2601011200-01 · OrderWorkflow · Running
-                                │ INPUT · DECODED BY CODEC.EXAMPLE.COM
-                                │ {"orderId":"2601011200-01","amount":{"curr
-                                │ ency":"EUR","minor":4999}}
-                                │ RESULT
-                                │ Still running.
-                                └───────────────────────────────────────────┘
-```
+A closed row asked two questions — its first event and its last — and both answers are
+the payload's own bytes, wrapped by the panel and reformatted by nothing:
 
-The payload really is shown on one line like that: **valid UTF-8 handed through with no
-JSON parsing and no re-indentation**, wrapped by the panel and reformatted by nothing.
-Bytes that are not valid UTF-8 are labelled and shown as their base64 rather than guessed
-at, and anything past `MAX_DISPLAY_CHARS` is clipped with a count of what was cut — so
-what is on screen is not always something that pastes back. Displaying JSON *as* JSON has
-its own correctness problem and belongs to
+<img src="../docs/images/03-hover-completed.png" alt="The payload panel over a completed parcel row: INPUT and COMPLETED, each the payload's own text on one line" width="720">
+
+The payload is shown on one line like that on purpose: **valid UTF-8 handed through with
+no JSON parsing and no re-indentation**. Bytes that are not valid UTF-8 are labelled and
+shown as their base64 rather than guessed at, and anything past `MAX_DISPLAY_CHARS` is
+clipped with a count of what was cut — so what is on screen is not always something that
+pastes back. Displaying JSON *as* JSON has its own correctness problem and belongs to
 [`../04-ui-goodies/`](../04-ui-goodies/), [stage 04](../README.md#stage-04--the-conveniences),
-which built the viewer it needs. So does every other convenience: this rung adds a
-capability, not features.
+which built the viewer it needs.
 
 **Three things arrive at once here**, which is why it is a stage of its own: the
 extension decodes payloads for the first time, sends a request body to a host of your
@@ -39,10 +27,9 @@ somebody's personal or financial data.
 
 **And the manifest asks for exactly what 02's does** — one permission, `storage`, no
 `host_permissions`, no service worker, the same three content-script matches. A `diff` of
-the two files shows the name, the description, the version and a tooltip. That is the
-sentence this project exists to make concrete: **a permission diff is not a capability
-diff**, and the largest capability step in this repository is the one the manifest does
-not record.
+the two files shows the name, the description, the version and a tooltip. **A permission
+diff is not a capability diff**, and the largest capability step in this repository is
+the one the manifest does not record.
 
 ## Run it
 
@@ -52,13 +39,14 @@ npm run build        # from this directory
 ```
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select
-`03-payloads/dist/`. Open a workflow list, reload the tab, hover a `{ }`. The Node range
-`npm install` needs is stated once, in [the root README](../README.md#start-with-01).
+`03-payloads/dist/`. Open a workflow list, reload the tab, hover a `{ }`
+<img src="../docs/images/icon-payload.png" alt="the payload button on a row" width="29" align="absmiddle">. The Node range
+`npm install` needs is in [the root README](../README.md#start-with-01).
 
 With no codec server configured — the default — an encrypted payload says so and **no
 payload byte has left your machine**: with that field empty this build sends nothing 02
-would not, and 02's one route out is a deep link you click. Plain payloads are readable at
-that point already; many self-hosted setups never encrypt them at all.
+would not. Plain payloads are readable without one; many self-hosted setups never encrypt
+them at all.
 
 ## Read these files in order
 
@@ -78,28 +66,28 @@ and two specs: [`tests/unit/codec.spec.ts`](tests/unit/codec.spec.ts) for the en
 policy, and [`tests/unit/apiInjectCodec.spec.ts`](tests/unit/apiInjectCodec.spec.ts) for
 every egress claim, asserted from the attacker's side.
 
-**`src/payloads/` is not the whole diff from 02.** These files 02 already had, changed
-here: `apiInject.ts` accepts a second message — the trust-boundary diff;
-`src/page/pageApi.ts` gains the credential-free fetch, and keeping it from converging
-with the credentialled one is the security argument of the stage;
-`src/rowInfo/rowInfoServe.ts` now shares one pacer instance instead of building its own;
-`render.ts` ranks the new button into the cell's
-control order, so it does not depend on which feature was switched on first;
-`decoration.ts` names the panel, which is not in a row and so can only be swept by being
-named; `content.ts` drops the decoded-payload cache when the master switch or the codec
-setting changes; and `settings.ts` and `popup.ts` carry the one field that names a host.
-Everything else is 02 byte-for-byte, which `npm run lineage` enforces rather than claims.
+Beyond `src/payloads/`, the files that differ from 02: `apiInject.ts` accepts a second
+message; `src/page/pageApi.ts` gains the credential-free fetch;
+`src/rowInfo/rowInfoServe.ts` shares one pacer instance instead of building its own;
+`render.ts` ranks the new button into the cell's control order; `decoration.ts` names
+the panel so the master switch can sweep it; `content.ts` drops the decoded-payload cache
+when the master switch or the codec setting changes; `settings.ts` and `popup.ts` carry
+the one field that names a host. Everything else is 02 byte-for-byte.
 
 ## What one hover costs
 
 | Rule | Why |
 |---|---|
-| **Nothing is fetched on render** | A hundred-row list costs zero requests; the only entry points are `pointerover`, `focusin` and `click`, and a traverse asks only about the row you stopped on. The Temporal UI re-renders on its own schedule, so anything a render pass fetched would be fetched by the tableful, all day, with nobody at the keyboard. The header's `⟳` re-asks the two per-row questions but does **not** re-decode: one click would otherwise push a table's worth of personal data through the codec host. |
-| **One history event per question** | `maximumPageSize=1`. Input is the first event, the outcome the last; a **closed** row asks two questions, a running one says *"Still running."* without asking. A hover on a hundred-thousand-event workflow costs what a three-event one costs. |
-| **One question is one request** | A click fires `focusin` **and** `click`, and the cache still says "no" while the first request is in flight — so a question already in flight is *joined*. Otherwise one click is two copies of the same payload leaving the machine. |
-| **Answers are cached, bounded, evictable** | Keyed by `(namespace, workflowId, runId, kind)`; errors are not cached, being usually a setting about to be fixed. The bound is not a memory rule: the values are decoded payloads, so an unbounded cache is a tab quietly retaining every customer record its owner glanced at all afternoon. |
-| **It shares ONE pacer with the per-row questions** | Four **Temporal** requests in flight for the whole extension, 429/503 backoff honouring `Retry-After`. Writing `makePacer(…)` again in this path type-checks and would have given two independent limits of four, with neither file looking wrong alone — so the instance is a module-level `const` in `src/page/requestPacing.ts` that both servers import. The codec POST is deliberately outside that cap, so a slow decoder cannot occupy a slot that exists to be polite to Temporal. |
-| **A question that is never answered gives up** | `REQUEST_TIMEOUT_MS`, with a message saying to reload the tab — so a missing MAIN-world script cannot leave a section reading `Loading…` for the life of the page. |
+| **Nothing is fetched on render** | A hundred-row list costs zero requests; the only entry points are `pointerover`, `focusin` and `click`, and a traverse asks only about the row you stopped on. The header's `⟳` re-asks the two per-row questions but does **not** re-decode. |
+| **One history event per question** | `maximumPageSize=1`. Input is the first event, the outcome the last; a **closed** row asks two questions, a running one says *"Still running."* without asking. |
+| **One question is one request** | A click fires `focusin` **and** `click`; a question already in flight is *joined*, never duplicated. |
+| **Answers are cached, bounded, evictable** | Keyed by `(namespace, workflowId, runId, kind)`; errors are not cached. The bound exists because the values are decoded payloads: an unbounded cache is a tab retaining every customer record its owner glanced at. |
+| **It shares ONE pacer with the per-row questions** | Four **Temporal** requests in flight for the whole extension, 429/503 backoff honouring `Retry-After`; the instance is a module-level `const` in `src/page/requestPacing.ts`. The codec POST is outside that cap, so a slow decoder cannot occupy a slot that exists to be polite to Temporal. |
+| **A question that is never answered gives up** | `REQUEST_TIMEOUT_MS`, with a message saying to reload the tab. |
+
+A running row costs one question; the result section says so without asking one:
+
+<img src="../docs/images/03-hover-running.png" alt="The panel over a running archive job: its input, and a RESULT section reading Still running" width="720">
 
 ## What is readable without any server
 
@@ -109,86 +97,80 @@ codec server is for. `json/protobuf` is deliberately not in that set even though
 not encrypted: decoding it needs the message descriptor, which this extension does not
 have and a codec server usually does.
 
-Three rules in [`src/payloads/payloads.ts`](src/payloads/payloads.ts) are worth stealing,
-and its header states them at full width:
+Three rules in [`src/payloads/payloads.ts`](src/payloads/payloads.ts):
 
 - **Match on the attributes key, not on `eventType`** — the same event is
   `WorkflowExecutionStarted` from one Temporal version and
   `EVENT_TYPE_WORKFLOW_EXECUTION_STARTED` from another, while
   `workflowExecutionStartedEventAttributes` is one string in both.
-- **No JSON parsing and no reformatting.** `JSON.parse` makes every number an IEEE double,
-  so an id of `12345678901234567890` comes back as `12345678901234567000` — wrong in a way
-  that looks exactly like real data, and account numbers are precisely the fields long
-  enough for it to happen to. `decodePayload` does base64, then UTF-8, then stops.
-- **A history it cannot read says so, rather than looking empty**, and where that line
-  falls is proto3's JSON mapping rather than our preference: `null` is a legal encoding of
-  an unset message field, so absent and `null` mean *recorded nothing* while a scalar or
-  array container means *cannot read this response*. A malformed list is rejected whole
-  and never filtered — dropping element 2 of 3 would relabel the two that remain.
+- **No JSON parsing and no reformatting.** `JSON.parse` makes every number an IEEE
+  double, so an id of `12345678901234567890` comes back as `12345678901234567000` —
+  wrong in a way that looks exactly like real data. `decodePayload` does base64, then
+  UTF-8, then stops.
+- **A history it cannot read says so, rather than looking empty.** Where that line
+  falls is proto3's JSON mapping: `null` is a legal encoding of an unset message field,
+  so absent and `null` mean *recorded nothing*, while a scalar or array container means
+  *cannot read this response*. A malformed list is rejected whole and never filtered.
 
 ## The codec server
 
 One field in the popup, empty by default. **An empty field means no payload byte can
 leave this machine**, and it is the only place an endpoint can come from — nothing is
-read off the page, nothing is guessed from the namespace.
+read off the page, nothing is guessed from the namespace. The one setting that names a
+host, as shipped:
+
+<img src="../docs/images/03-popup.png" alt="The popup's codec-server field, empty, with the line: Empty, no payload byte can leave this machine" width="400">
 
 The request is the one Temporal's own UI makes, **minus its two credential options**:
-`POST {endpoint}/decode`, the namespace in `X-Namespace`, `{"payloads": […]}` in and out.
-Route, header and body match exactly, so a codec server that already serves the Temporal
-UI needs no change to serve this. The one thing this extension cannot do is a codec
-server that authenticates its callers.
+`POST {endpoint}/decode`, the namespace in `X-Namespace`, `{"payloads": […]}` in and
+out. A codec server that already serves the Temporal UI needs no change to serve this.
+The one thing this extension cannot do is a codec server that authenticates its callers.
 
-What bounds it, all of it visible from outside the extension:
+What bounds it:
 
-- **Only the payloads that cannot be read here are sent.** Sending the whole array
-  whenever *any* member needs a codec keeps the answers aligned by index and costs one
-  line less; the cost of that line is data, because a workflow started with a plaintext
-  customer record *and* one encrypted blob would have had both POSTed. `planCodecCall`
-  carries the positions instead and `mergeDecoded` puts the answers back.
-- **https, or http on loopback. Nothing else.** The rule is about the payloads, not the
-  URL: a codec server hands back *decrypted* data, so plain http to anywhere but this
-  machine would put exactly that on the wire in the clear. An endpoint that fails is
-  treated as no endpoint at all, and the popup says so before anything is hovered.
+- **Only the payloads that cannot be read here are sent.** A workflow started with a
+  plaintext customer record *and* one encrypted blob has only the blob POSTed:
+  `planCodecCall` carries the positions and `mergeDecoded` puts the answers back.
+- **https, or http on loopback. Nothing else.** A codec server hands back *decrypted*
+  data, so plain http to anywhere but this machine would put exactly that on the wire in
+  the clear. An endpoint that fails the rule is treated as no endpoint at all, and the
+  popup says so before anything is hovered.
 - **No credential is reachable on that path, and there is no option to add one.**
-  Temporal's own UI has both switches — pass the token, send cookies — and this extension
-  had the cookie one until the request path was read as a trust boundary: the endpoint
-  arrives over `postMessage`, which anything on the page can send, so a default of *off*
-  would protect only the honest path through the popup while a forged request naming
-  `includeCredentials: true` and a host of its choosing was honoured. There is therefore
-  no flag to forge. `codecDecodeCall()` *describes* the request and its return type has no
+  Temporal's own UI has both switches — pass the token, send cookies. Here the endpoint
+  arrives over `postMessage`, which anything on the page can send, so there is no flag to
+  forge: `codecDecodeCall()` *describes* the request and its return type has no
   `credentials` field; `fetchFromPageWorld()` *spends* it, writing `credentials: 'omit'`
   as a literal and refusing an `Authorization`, `Cookie` or `Proxy-Authorization` header
-  outright — at the boundary rather than in the description, so a caller added later
-  inherits it instead of remembering it.
+  outright.
 - **The host is named in the panel, every hover** — "decoded" alone reads as if the
   extension had done it locally.
 - **The ledger still gates it**: a payload can be asked about only for a run this page
-  itself listed, checked before any request is issued. And a codec server's own 429 does
-  not pause Temporal requests; a busy decoder is its own business.
+  itself listed, checked before any request is issued. A codec server's own 429 does not
+  pause Temporal requests.
 
 **Both fetches are made from the page's world**, because a content script cannot make
-either. Chrome's documentation, verbatim: *"Cross-origin requests are always treated as
-such in content scripts, even if the extension has host permissions."* On Cloud the
-Temporal API is on the tenant host, and a codec server is configured with
-`Access-Control-Allow-Origin: https://cloud.temporal.io` because that is what the
-Temporal UI needs — the page's origin in both cases, never ours. So an already-working
-codec server needs no reconfiguration, and this project still declares no
-`host_permissions`.
+either: Chrome treats a content-script fetch as cross-origin even with host permissions.
+A codec server configured with `Access-Control-Allow-Origin: https://cloud.temporal.io`
+for the Temporal UI therefore already admits this extension — the page's origin in both
+cases, never ours.
 
 ## The hover panel
 
-Two files, each carrying its rules in its own header, because they answer different
-questions. [`tooltip.ts`](src/payloads/tooltip.ts) owns the element and the gesture:
-hover intent that remembers *which* button it is waiting for, a panel that does not close
-under the pointer or under a drag-selection, a generation stamp so a late answer cannot
-paint into the panel that replaced it, and a switch-off that takes the node, the reference
-**and** the text — the panel lives on `<body>`, where no render pass looks.
+[`tooltip.ts`](src/payloads/tooltip.ts) owns the element and the gesture: hover intent
+that remembers *which* button it is waiting for, a panel that does not close under the
+pointer or under a drag-selection, a generation stamp so a late answer cannot paint into
+the panel that replaced it, and a switch-off that takes the node, the reference **and**
+the text — the panel lives on `<body>`, where no render pass looks.
 [`payloadClient.ts`](src/payloads/payloadClient.ts) owns which answer may be believed: an
 answer has to name the question it answers on all four key fields, one question is one
 request, no answer outlives the setting it was decoded under, and a request that never
-comes back still resolves. Most of those rules are bugs that happened first, several
-inside code written to uphold another rule; the chronology is in
+comes back still resolves. The reasoning behind each rule is in
 [`docs/design-notes.md`](../docs/design-notes.md#the-payload-panel).
+
+What "result" means for a failed run is the failure message — the first thing on screen
+in this repository that is somebody's application data:
+
+<img src="../docs/images/03-hover-failed.png" alt="The panel over a failed row: the input, and a FAILED section carrying the failure message" width="720">
 
 The button carries **no row identity** — no workflow id, no run id, not even a title that
 names one — which is what makes it correct under `<tr>` recycling: the panel resolves the
@@ -198,8 +180,6 @@ reaches the DOM through `textContent` inside a `<pre>`.
 
 ## Security card
 
-Every project here carries one, in a fixed shape so the projects compare line by line.
-
 | | 03 — payloads |
 |---|---|
 | **Permissions requested** | `storage`, and nothing else — **the same permission surface as 02** |
@@ -207,18 +187,18 @@ Every project here carries one, in a fixed shape so the projects compare line by
 | **Runs on** | `https://cloud.temporal.io/*`, `http://localhost/*`, `http://127.0.0.1/*` |
 | **Service worker** | none |
 | **Data it reads** | everything 02 reads, plus **the payloads themselves**: one history event per question, decoded into a workflow's input, its result, its failure message and stack trace, a termination reason |
-| **Data it writes** | `chrome.storage.sync` — toggles, link templates, the codec endpoint. No cookies, no `localStorage`, no files. **No payload is ever written to storage**; decoded text lives in one bounded in-memory cache for the life of the tab, and switching the panel off empties it |
-| **Requests it makes** | up to two per *running* row for the `Last event` column and retry badge, floored at one round per run per 5s — plus **one history event per payload question** (one for a running row, two for a closed one), on hover only. All to the page's own Temporal API. And, when you have named one, `POST {your codec server}/decode` |
-| **Data that leaves the machine** | **yes, and this is the row that changed.** Only when you have typed a codec endpoint: the *undecodable* payloads of the row you hovered, plus the namespace in `X-Namespace`, to that host and nowhere else. Never a payload this extension could read itself; never a decoded one; never row metadata; never a credential. With the field empty, no payload byte goes anywhere — what remains is 02's deep link, which carries identifiers only when you click it |
+| **Data it writes** | `chrome.storage.sync` — toggles, link templates, the codec endpoint. **No payload is ever written to storage**; decoded text lives in one bounded in-memory cache for the life of the tab, and switching the panel off empties it |
+| **Requests it makes** | up to two per *running* row for the `Last event` column and retry badge — plus **one history event per payload question** (one for a running row, two for a closed one), on hover only. All to the page's own Temporal API. And, when you have named one, `POST {your codec server}/decode` |
+| **Data that leaves the machine** | **yes, and this is the row that changed.** Only when you have typed a codec endpoint: the *undecodable* payloads of the row you hovered, plus the namespace in `X-Namespace`, to that host and nowhere else. Never a payload this extension could read itself; never a decoded one; never row metadata; never a credential. With the field empty, no payload byte goes anywhere |
 | **Payloads it decodes** | yes — that is the feature. `json/plain`, `binary/plain`, `text/plain`, `binary/null` in the browser; anything else through your codec server, or not at all |
-| **Credentials it holds** | none. It stores no token. The page's `Authorization` header is read in the page's world and attached **only** to Temporal's own API — no parameter, setting or message field can attach any credential to a codec request |
-| **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace — the same single ledger, now also gating the hover. A request naming any other run is refused *before* the page's token is spent on it |
-| **Third-party code in the bundle** | the same set as 02, and none of it builds or sends the codec request — `valibot` shape-checks the message that names the endpoint, and the answer that comes back. See [Dependencies](#dependencies) |
+| **Credentials it holds** | none. The page's `Authorization` header is read in the page's world and attached **only** to Temporal's own API — no parameter, setting or message field can attach any credential to a codec request |
+| **Whose data it will fetch** | only the runs the server listed to this page, tracked per namespace — the same single ledger, now also gating the hover |
+| **Third-party code in the bundle** | the same set as 02, and none of it builds or sends the codec request. See [Dependencies](#dependencies) |
 
 ### The row that matters: data leaves the browser
 
-- **What is sent, in full:** the payloads that could not be decoded here — `metadata` and
-  `data` exactly as Temporal returned them — in a `{"payloads": […]}` body, with the
+- **What is sent, in full:** the payloads that could not be decoded here — `metadata`
+  and `data` exactly as Temporal returned them — in a `{"payloads": […]}` body, with the
   namespace in `X-Namespace` and `Content-Type: application/json`. No other header, no
   query string, no other body field.
 - **Where it goes:** a host the user typed, in their own browser, named on screen next to
@@ -226,78 +206,61 @@ Every project here carries one, in a fixed shape so the projects compare line by
 - **What is not sent:** anything readable, any decoded text, the page's bearer, any
   cookie, row metadata, the workflow id, the run id, the ids of rows you did not hover,
   and anything whatever before you fill the field in.
-- **It is off until it is configured** — not a checkbox nobody looks at: with the endpoint
-  empty there is no host to send to and the code path does not exist.
+- **It is off until it is configured**: with the endpoint empty there is no host to send
+  to and the code path does not exist.
 
 Every clause is asserted from **outside** the extension in
 [`tests/unit/apiInjectCodec.spec.ts`](tests/unit/apiInjectCodec.spec.ts), against a fake
 network that records the URL, the headers and the **body** of everything that reached it.
-The body is what makes the claims non-vacuous — "only the payloads it cannot read left the
-browser" is a statement about bytes, so the plaintext payload is searched for in every
-encoding of the request body. And the assertion that no request can attach the page's
-bearer sits beside a positive control proving the bearer *was* available on that hover: a
-`toHaveLength(0)` that would also pass on a build making no requests at all is not
-evidence of anything.
 
 ### The weakness, and what closing most of it took
 
 **The message bus is not authenticated.** `window.postMessage` carries no sender identity
-that cannot be forged: `event.source === window` means "somebody in this page", and two
-quite different somebodies qualify. **MAIN-world code** — the Temporal UI itself, or any
-npm dependency bundled into it — executes *as* the page, with the same heap, the same
-in-memory bearer and the same same-origin `fetch`. **Another installed extension's
-ISOLATED-world content script** shares the page's DOM and therefore its `postMessage` bus,
-but not its JS state: it cannot read the bearer out of the UI's memory, and its own `fetch`
-is cross-origin regardless of its host permissions — the identical restriction that keeps
-our content script off the API.
+that cannot be forged, and two different senders qualify. **MAIN-world code** — the
+Temporal UI itself, or any npm dependency bundled into it — executes *as* the page, with
+the same heap, the same in-memory bearer and the same same-origin `fetch`. **Another
+installed extension's ISOLATED-world content script** shares the page's DOM and therefore
+its `postMessage` bus, but not its JS state: it cannot read the bearer out of the UI's
+memory, and its own `fetch` is cross-origin regardless of its host permissions.
 
-Three things narrow it, and none is a shape check: the **ledger** (`fetchForListedRun()` is
-still the only route to the `Authorization` header and checks the ledger itself, so a
-feature added on this rung could not forget to — **one gate, not one per feature**); the
-**second fetch carrying nothing**, with deliberately no `auth: true` parameter to add; and
-validation **in the other direction**, because the answer crosses the same bus into the
-half that renders.
+Three things narrow it: the **ledger** (`fetchForListedRun()` is still the only route to
+the `Authorization` header and checks the ledger itself — **one gate, not one per
+feature**); the **second fetch carrying nothing**, with deliberately no `auth: true`
+parameter to add; and validation **in the other direction**, because the answer crosses
+the same bus into the half that renders.
 
-**What is left, at its real width.** Either sender can forge a `payload-request` and get:
-any run the ledger has retained, not only the rows on screen; without a gesture, because it
-is our UI that requires one and not the bus; the **plaintext** back over `postMessage` for
-everything decodable locally, which on a cluster with no codec is usually all of it; and the
-**ciphertext** out to a host it names. For MAIN-world code that bound is real — it already
-holds the bearer and can reach all of it by a shorter route, so the ledger's job is only to
-keep us from being a *wider* one. For an installed extension's content script the bound
-**does not hold**, and that is the residual risk stated rather than argued away.
-`fetchFromPageWorld()`'s own type closes the credential half for good, because it accepts
-neither an `Authorization` header nor a cookie as a parameter, but it closes neither the
-read nor the directed egress of ciphertext, and nothing in this repository does.
+**What is left.** Either sender can forge a `payload-request` and get: any run the
+ledger has retained, not only the rows on screen; without a gesture, because it is our UI
+that requires one and not the bus; the **plaintext** back over `postMessage` for
+everything decodable locally; and the **ciphertext** out to a host it names. For
+MAIN-world code that bound is real — it already holds the bearer and can reach all of it
+by a shorter route. For an installed extension's content script the bound **does not
+hold**, and that is the residual risk. `fetchFromPageWorld()`'s own type closes the
+credential half — it accepts neither an `Authorization` header nor a cookie as a
+parameter — but it closes neither the read nor the directed egress of ciphertext.
 
-Closing it needs the *request*, not only the endpoint in it, to arrive by a channel a page
-script cannot write: `chrome.scripting.executeScript({world: 'MAIN'})` from a service
-worker, and therefore `host_permissions` — **a bigger permission budget in exchange for a
-smaller attack surface.** Closing only the endpoint half would leave the plaintext half
-open, which is the kind of partial fix that reads as a whole one. This section is the one
-place that argument is written out in full; the header of `src/payloads/payloadServe.ts`
-and this project's entry in [`../scripts/surface.json`](../scripts/surface.json) carry the
-short form and point here.
+Closing it needs the *request*, not only the endpoint in it, to arrive by a channel a
+page script cannot write: `chrome.scripting.executeScript({world: 'MAIN'})` from a
+service worker, and therefore `host_permissions` — **a bigger permission budget in
+exchange for a smaller attack surface.** The header of `src/payloads/payloadServe.ts` carries the
+short form and points here.
 
-Two smaller limits, stated rather than omitted. `safeCodecEndpoint` returns the string you
-typed rather than a normalised `href`, so a relative segment still resolves and
+Two smaller limits. `safeCodecEndpoint` returns the string you typed rather than a
+normalised `href`, so a relative segment still resolves and
 `https://codec.example.com/base/../other` posts to `/other/decode` — surprising, same
 origin, not a leak. And switching the feature off is not a revocation: a payload already
-POSTed is already there, and the popup does not claim otherwise.
+POSTed is already there.
 
 ### Personal data, deliberately
 
-02 could not display anybody's data — the retry badge declines `lastFailure.message` on
-purpose. **This project's whole purpose is to display the data**, so: nothing is persisted
-anywhere, and `console` output names counts and states but never payload text; the
-in-memory cache is treated as retained personal data, so it is bounded, and cleared by the
-payload switch, the master switch and a change of endpoint — with an epoch bump, because
-emptying the map is not enough while a request under the old setting is in flight; and every
-value reaches the DOM through `textContent`, with `npm run surface` failing the build on
-`innerHTML` and its relatives by *parsing* each file rather than matching lines of it.
-Egress through this extension's own UI is always a gesture — there is no path from a render
-pass to a codec request — while **a forged `payload-request` needs no gesture**, which is a
-property of the bus and not of this code.
+**This project's purpose is to display the data**, so: nothing is persisted anywhere,
+and `console` output names counts and states but never payload text; the in-memory
+cache is treated as retained personal data — bounded, and cleared by the payload
+switch, the master switch and a change of endpoint, with an epoch bump so a request in
+flight under the old setting is discarded too; and every value reaches the DOM through
+`textContent` — there is no `innerHTML` anywhere. Egress through this extension's own UI is always a gesture — there is no path
+from a render pass to a codec request — while **a forged `payload-request` needs no
+gesture**, which is a property of the bus and not of this code.
 
 ## Dependencies
 
@@ -307,27 +270,22 @@ property of the bus and not of this code.
 | `p-limit` | 7.3.2 (MIT) | The four-in-flight ceiling on requests to Temporal's API |
 | `yocto-queue` | 1.2.2 (MIT) | `p-limit`'s queue — nothing of ours imports it |
 
-**03 adds no dependency of its own**, which is worth a sentence rather than silence,
-because this is the rung where a reader would most expect one. It briefly had
-`jsonc-parser`, for a lossless pretty-printer and token colouring, and both went back
-out: this rung does not format a payload at all. **No third-party library constructs or
-executes the codec request** — our own code assembles it, gates it and sends it, and
-`p-limit` never sees it. `valibot` *is* on that path, in the place worth naming: it
-shape-checks the inbound `payload-request` — the message that names the endpoint — before
-[`src/apiInject.ts`](src/apiInject.ts) acts on it, and it checks the server's answer on the
-way back. A shape check is not an authorisation check; whose data may be fetched is decided
-by the ledger, not by a schema.
+**03 adds no dependency of its own.** This rung does not format a payload at all. **No
+third-party library constructs or executes the codec request** — our own code assembles
+it, gates it and sends it, and `p-limit` never sees it. `valibot` shape-checks the inbound
+`payload-request` before [`src/apiInject.ts`](src/apiInject.ts) acts on it, and the
+server's answer on the way back; whose data may be fetched is decided by the ledger, not
+by a schema.
 
-The policy behind the choices, and what the one enforced rule does and does not cover, are
-in the [root README](../README.md#dependencies); the comparisons that made them are in
-[`docs/design-notes.md`](../docs/design-notes.md#dependencies). `npm run measure` prints
-what is actually in each bundle today.
+The policy behind the choices is in the [root README](../README.md#dependencies); the
+comparisons that made them are in
+[`docs/design-notes.md`](../docs/design-notes.md#dependencies).
 
 ## Layout
 
 `src/` is grouped by lesson: its root holds the bundle entry points and the modules every
 lesson touches, and each directory below is one thing the extension does.
-`src/payloads/` is new here; the rest is 02's, with the changed files enumerated
+`src/payloads/` is new here; the rest is 02's, with the changed files listed
 [above](#read-these-files-in-order).
 
 ```
@@ -365,26 +323,22 @@ tests/              the ordering rules, the DOM bugs that cost the most, the req
                     gate, and every egress claim — from the attacker's side
 ```
 
-The split is what makes the security card checkable: `payloads.ts` and `codec.ts` are pure
-and therefore testable, `src/page/pageApi.ts` is the only file that issues a request, and
-`grep -rlnE 'createElement|classList' src/` lists every file that can write to the page.
-**Reviewing "what can this thing send" means reading four files, not one** — `pageApi.ts`
-constrains the fetch but does not decide that it happens. And one rule there is worth
-stealing even though no gate enforces it: **`fetchForListedRun()` is the only function that
-can attach the page's `Authorization` header**, while its sibling `fetchFromPageWorld()`
-posts to an origin its caller chose with no credential of ours. The difference between them
-is one word — who chooses the origin. Collapsing them into one function with an `auth: true`
-flag would type-check, and is exactly the change to refuse in review.
+`payloads.ts` and `codec.ts` are pure and therefore testable; `src/page/pageApi.ts` is
+the only file that issues a request; `grep -rlnE 'createElement|classList' src/` lists
+every file that can write to the page. One rule there is worth keeping in a fork:
+**`fetchForListedRun()` is the only function that can attach the page's `Authorization`
+header**, while its sibling `fetchFromPageWorld()` posts to an origin its caller chose
+with no credential of ours. The difference between them is who chooses the origin;
+collapsing them into one function with an `auth: true` flag would type-check, and is
+exactly the change to refuse in review.
 
 ## What it deliberately does not do
 
 No copy button, no download, no export, no proxy of ours — each is a second egress path
-with its own redaction question. No search or filtering inside payloads: a large amount of
-UI that teaches nothing about the trust boundary. No write to Temporal, anywhere in any
-project here. And it does not read the codec endpoint out of the Temporal UI's own
-settings, which an earlier version did: a nicer first run, in exchange for a second trust
-question and a resolution order that has to stay in step with the UI's own.
-[The endpoint used to come from the
+with its own redaction question. No search or filtering inside payloads. No write to
+Temporal, anywhere in any project here. And it does not read the codec endpoint out of
+the Temporal UI's own settings — a nicer first run, in exchange for a second trust
+question; [the endpoint used to come from the
 page](../docs/design-notes.md#the-endpoint-used-to-come-from-the-page) says what to read
 if you want it in a fork.
 
@@ -396,7 +350,3 @@ if you want it in a fork.
 | `npm run watch` | Rebuild on change (does **not** re-copy `public/`) |
 | `npm test` | Unit + jsdom specs |
 | `npm run typecheck` | `tsc --noEmit` over `src/` and `tests/` |
-
-From the repository root, `npm run preflight` runs all of that for every project at once,
-plus the gates — and reports anything it could not run as **UNVERIFIED** rather than as a
-pass.

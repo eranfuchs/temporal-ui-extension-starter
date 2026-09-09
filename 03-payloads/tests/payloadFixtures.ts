@@ -6,8 +6,7 @@
 // file: both payload fields are base64 in Temporal's JSON, and a fixture that skips
 // the encoding would let every decode path pass without decoding anything.
 //
-// It is not in tests/helpers.ts because that file is registered as lineage-SHARED,
-// so anything added to it has to be added to 02's byte-identical copy — and 02 has
+// It is not in tests/helpers.ts because every project carries that file, and 02 has
 // no payload path to build fixtures for.
 
 import { fakeRunId } from './helpers';

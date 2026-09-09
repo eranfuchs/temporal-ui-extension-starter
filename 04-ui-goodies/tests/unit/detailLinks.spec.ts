@@ -197,9 +197,8 @@ function barText(): string {
 }
 
 beforeEach(() => {
-    // textContent, not innerHTML: the sink ban in scripts/surface.json has no
-    // allowance list and covers the specs too, which is the point — a spec is where
-    // `innerHTML` gets habitual.
+    // textContent, not innerHTML: this repository has no innerHTML anywhere, the
+    // specs included, which is the point — a spec is where `innerHTML` gets habitual.
     document.body.textContent = '';
     // The module holds the observed run for the tab's lifetime, and every spec in
     // this file shares one instance of it.

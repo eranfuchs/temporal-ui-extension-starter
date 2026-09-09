@@ -22,8 +22,7 @@ there is a story:
 
 Dates, the reproduction, and what was tried first belong in the section. Existing
 headers are longer than that because they were written before there was anywhere else
-to put the argument, and `npm run doc:paths` checks that the `#anchor` half of such a
-link names a heading that exists.
+to put the argument.
 
 ## Contents
 
@@ -65,11 +64,6 @@ link names a heading that exists.
   - [The formatter that was fine and the applier that was not](#the-formatter-that-was-fine-and-the-applier-that-was-not)
   - [The guard that checked the envelope and cast the rest](#the-guard-that-checked-the-envelope-and-cast-the-rest)
   - [Every JSON viewer wanted a parsed value](#every-json-viewer-wanted-a-parsed-value)
-- [The gates](#the-gates)
-  - [A Node range the dependencies never promised](#a-node-range-the-dependencies-never-promised)
-  - [Two algorithms the gates had no business owning](#two-algorithms-the-gates-had-no-business-owning)
-  - [A card nobody was checking](#a-card-nobody-was-checking)
-  - [A hostname with no letters in it](#a-hostname-with-no-letters-in-it)
 - [The clip underneath the cap](#the-clip-underneath-the-cap)
 - [The observer that outlived its panel](#the-observer-that-outlived-its-panel)
 
@@ -747,16 +741,14 @@ describes *now* has to ask now.
 
 ## Dependencies
 
-The policy is one sentence, and `scripts/surface.json` keeps it under `dependencies`:
+The policy is one sentence:
 **browser APIs and code in this repository for anything specific to this extension;
 mature, maintained libraries for generic algorithms, where using one makes the example
 easier to read and harder to get wrong.** Each project's README lists what it bundles
-and why, by hand; `npm run measure` prints what those packages cost the bundles a user
-actually loads.
+and why, by hand.
 
-Nothing checks a table against its bundle — the same `dependencies` note in `surface.json`
-says what removing that enforcement gave up. One rule survived it, because a lockfile diff
-cannot answer it: a third-party package that enters a bundle through a project's own source
+Nothing checks a table against its bundle. One rule is worth keeping by hand, because a
+lockfile diff cannot answer it: a third-party package that enters a bundle through a project's own source
 must be declared in *that* project's `dependencies`, since the three projects share one
 hoisted install and an import of a sibling's package would otherwise resolve, bundle, and
 appear in no diff anywhere. For
@@ -823,7 +815,7 @@ per-task timeouts, task ids, an event emitter, pause/resume and an `intervalCap`
 which this file uses. Measured 2026-09-03 in `dist/apiInject.js`, the only bundle either
 of them enters:
 
-| Library | Version | Packages bundled | Third-party weight added, in the units `npm run measure` prints |
+| Library | Version | Packages bundled | Third-party weight added |
 |---|---|---|---|
 | p-limit | 7.3.2 | 2 (p-limit, yocto-queue) | 2.6kb + 1.2kb |
 | p-queue | 9.3.3 | 3 (p-queue, eventemitter3, p-timeout) | 27.2kb + 6.4kb + 2.2kb |
@@ -989,7 +981,7 @@ payload actually says.
 | Package | Input | Why not |
 |---|---|---|
 | `renderjson` | a parsed value | renders leaves through `JSON.stringify(value)`, so escapes are normalised: not byte-faithful even before the numbers |
-| `json-formatter-js` | a parsed value | its ESM build uses `innerHTML`, which `npm run surface` fails the build on |
+| `json-formatter-js` | a parsed value | its ESM build uses `innerHTML`, which this repository does not allow |
 | `@andypf/json-viewer` | text or value, parses internally | `innerHTML` and `JSON.parse` both in its dist, plus a custom element registered in the page |
 | `react-json-view`, `@textea/json-viewer`, `react-json-tree` | a parsed value | peer-depend on React and react-dom (and MUI and emotion, for one of them). The Temporal UI is Svelte |
 
@@ -1032,165 +1024,10 @@ one thing a payload that might be half a megabyte cannot afford to do twice. Eve
 on screen is a raw substring of the original text, offset and length from the scanner,
 never a value the scanner or a parser decoded for it.
 
-## The gates
-
-`npm run preflight`. There is no CI for this repository, so this is the only thing
-standing between a mistake and the default branch.
-
-### A Node range the dependencies never promised
-
-`package.json` said `engines.node: ">=22"` and the README said "Node 22 or newer". Both were
-true when written. Then jsdom raised its own floor, and nothing noticed: npm enforces
-`engines` only under `--engine-strict`, and only against the Node that happens to be
-running, so on a machine inside the range every check passes and the declaration is never
-read.
-
-Measured rather than assumed, `>=22` was wider than what many locked packages declare — the
-two a reader would guess (`@asamuzakjp/css-color`, `@asamuzakjp/dom-selector`, both via
-jsdom) want `^22.13.0 || >=24.0.0`, and jsdom itself is stricter still. So the honest range
-is jsdom's own, `^22.22.2 || ^24.15.0 || >=26.0.0`, declared in five places a parity check
-keeps together: the root, all three projects, and `package-lock.json`.
-
-Who this hurt is the point: everyone already working here is on a Node inside the range, so
-the declaration is dead text to them. It is live only for the person cloning the repository
-for the first time, on Node 22.4 or 23, whose install fails before any check of ours gets to
-explain itself — the reader with the least context, at the moment they cannot tell a stale
-promise from a broken repository.
-
-`checkEngineRange()` in `scripts/preflight.mjs` compares the declared range against every
-`engines.node` in the lockfile, and a range it cannot read is reported as **unchecked**
-rather than folded into either verdict. That direction is deliberate: a containment check
-that guesses wide reports "fits" where it does not.
-
-Fixing the declaration left the sentences about it wrong, which is the more interesting
-half. The range was correct in five machine-readable places and still false in four pieces
-of prose — preflight's own advice to an incompatible runtime, and each project's install
-block — each a bare major the declared range no longer admits, read by exactly the person
-the range exists for, telling them to install a version that would fail again. A version
-restated in prose is a copy, and a copy goes stale with nobody editing it. So the advice is
-interpolated from `engines.node`, and the project READMEs link to the one statement in the
-root README instead — a link `npm run doc:paths` checks, which a sentence about a version is
-not.
-
-There is deliberately no gate asserting "every Node range in the documentation matches
-`engines.node`", because this very section quotes `^22.13.0 || >=24.0.0` as the range that
-was *not* adopted. A check like that would need an exemption list, and an exemption list
-is where a gate quietly stops checking the thing it is named after.
-
-### Two algorithms the gates had no business owning
-
-The dependency policy applies to the tooling too, and it pointed at two places where a gate
-had reimplemented a standard, published algorithm well enough to pass its own tests. Neither
-package reaches a bundle — they are root `devDependencies`. A broken gate cannot ship to a
-user, but a gate that is wrong in the accepting direction is worse than no gate.
-
-**Semver range containment**, in `scripts/preflight.mjs`. The check above was doing interval
-arithmetic by hand over the grammar it happened to find in the lockfile — honest, and also a
-standing bet that the tree never grows a shape it had not met. `semver.subset(ours, theirs)`
-asks the reference implementation instead, with `semver.validRange` in front of it so an
-unreadable range still lands on **unchecked** rather than on a guess. Four functions went.
-
-The interesting part is what the swap *fixed*. `declaredNodeMajor()` read the lowest
-supported major with `/(\d+)/` — the first number in the string. For
-`^22.22.2 || ^24.15.0 || >=26.0.0` that is 22, and it is right only because the branches
-happen to be written in ascending order. Written `>=26.0.0 || ^22.22.2` the same range
-reports 26, and the DOM-test capability probe compares against a floor the range does not
-have. `semver.minVersion(range).major` answers it for the range rather than for the way it
-was typed, and the self-test drives exactly that reordered string.
-
-**GitHub's heading-slug algorithm**, in `scripts/doc-paths.mjs`. Anchor checking needs the
-anchor GitHub will actually mint, and the copied version got a run of spaces and non-ASCII
-wrong in the direction that *rejects a link which works*. Both are `github-slugger`'s job,
-and it is the package GitHub's own toolchain uses.
-
-The heading *text* was the larger of the two. The old loop matched `^#{1,6}` per line and
-slugged the raw remainder, so a heading holding inline markup produced an anchor GitHub
-never mints — its own comment recorded this as a KNOWN LIMIT, having already cost a correct
-link a rejection. Once headings come from `mdast-util-from-markdown` and their text from
-`mdast-util-to-string`, three shapes the regex had been silently missing come free: setext
-headings, which have no leading `#`; headings reached through a blockquote or list; and a
-`#` inside a fenced code block, which is code. `marked` lost on the one thing that mattered
-— its lexer gives a heading token raw inline markdown, so extracting what a reader sees
-would mean hand-writing the inline walker this replacement exists to delete.
-
-Both changes were mutation-audited, and the audit earned its keep by deleting a test.
-Reusing one slugger across documents, joining raw child `.value`s instead of rendered text,
-and walking only top-level children were each caught — but the second mutation failed only
-one of the two markup cases, which proved the other could not discriminate: a heading
-holding inline code slugs the same either way. A test no wrong answer can fail is
-decoration, so that case is a comment now.
-
-`scripts/preflight.mjs` also acquired the self-test it never had, which is the real finding
-of this exercise: it runs four other gates' self-tests and had none of its own, so the one
-gate trusted purely on the strength of looking correct was the one deciding whether anything
-else ran. Its cases cover the range decision and the minimum-major reading, and two of them
-exist only to pin the direction of the doubt — an unreadable range reports unchecked and
-never satisfied, and a provably too-wide range is still FAILED even when some *other*
-dependency's range could not be read. A fact is not less of a fact because the tool was
-uncertain elsewhere.
-
-### A card nobody was checking
-
-The history of a gate that no longer exists, kept because two of its findings outlived it.
-`scripts/surface.mjs` used to carry two dependency rules: one deciding whether a package was
-allowed inside a bundle at all, and one reading each project's `## Dependencies` section and
-comparing every card in it — version, licence, transitives — against the bundles esbuild had
-just produced, resolved out of the metafile rather than from `package.json` so the gate and
-`npm run measure` could not describe different installed copies of the same package.
-
-Both rules were removed in the readability pass, and the honest summary is that they
-worked and cost more to read than they caught: a reader arriving at stage 02 met two
-per-package cards before reaching the two questions the stage asks Temporal. A hand-written
-table per project replaced them.
-
-**One rule went back in: rule 9.** Every third-party package that enters a bundle through a
-project's own source must be declared in that project's `dependencies` — kept because
-hoisting makes a sibling's package resolve with no `package.json` edit and no lockfile line,
-which is the one case a lockfile diff cannot show. The version, licence and transitive
-machinery stayed deleted, and the `dependencies` note in `scripts/surface.json` states that
-loss plainly: nothing mechanical announces a new *transitive* package.
-
-**Not checked is not clean.** When a card's installed `package.json` could not be read, the
-rule reported that rather than passing the card — not a hypothetical direction, because
-while it was being written *every* card reported "could not be read", the metafile's package
-roots being relative to the project built rather than to the repository. A rule that
-shrugged would have printed a count of documented packages and verified none of them.
-
-**A mutation audit finds the case nobody thought to write.** Nine of ten mutations — the
-rule never firing, the section reader running past the next heading, a missing section, a
-missing card, a dropped version or licence comparison, an unmentioned transitive, one named
-without its version, a card for a package no bundle contains — were each caught by the case
-written for them. The tenth, silently skipping a package whose metadata could not be read,
-survived, because there was no case for it. That is the direction to check first in any gate
-written here since.
-
-### A hostname with no letters in it
-
-The leak gate reads every URL it can find and asks whether the host is one this
-repository is allowed to name — `cloud.temporal.io`, `localhost`, `example.com`. Anything
-else is a finding, because an unrecognised hostname is exactly how a private deployment
-leaks into a public example.
-
-Run over the commit messages rather than the working tree, that rule failed on prose. The
-commit recording the base-URL decision quotes the endpoint with its middle taken out,
-`https://…/base?`, so the whole host is a single ellipsis character — a hostname the gate
-could not vouch for: right to be suspicious in general, wrong here in particular.
-
-The narrowing is one line: a host with no ASCII letter and no digit in it cannot name a
-machine, so it names nothing and is allowed. That is deliberately not a rule about ellipses
-— an elision *inside* a host keeps its alphanumerics and stays checked, which is the case
-that matters. `api…a-real-internal-hostname` is still a leak, and the self-test pins both
-directions so the accepting half cannot grow into the flagging half by accident.
-
-Where this was found matters. `npm run leak:history` had been red since that commit was
-written, and it only runs deliberately; the tree scan every preflight runs was green
-throughout, because the sentence lives in a commit message and not in a file. A gate only
-correct over the inputs somebody looks at every day has a blind spot on a schedule.
-
 ## The ceiling nobody had to drag to reach
 
-Stage 04's payload panel (`src/payloads/tooltip.ts`, forked from 03's — see the lineage
-registry) shipped `public/content.css` with a comment claiming `.tuis-panel` and
+Stage 04's payload panel (`src/payloads/tooltip.ts`, forked from 03's) shipped
+`public/content.css` with a comment claiming `.tuis-panel` and
 `.tuis-panel-body` "size to their content" by default, and that their viewport-relative
 `max-width`/`max-height` only became relevant once a reader dragged the body's native
 resize handle wide. Nothing tested that claim against real content — the unit tests run
@@ -1412,10 +1249,9 @@ handed the JSON viewer a string that was no longer valid JSON. Fixed by raising
 `MAX_DISPLAY_CHARS` to 2,000,000 the same evidence-based way `maxNodes` was raised —
 measured against the same fixture stringified, not guessed.
 
-`payloads.ts` is registered `shared` in `scripts/lineage.json`, byte-identical between
-`03-payloads` and `04-ui-goodies`, and 03 has no JSON viewer at all — the lineage gate
-rejected an early version of the comment for justifying the number by naming 04-only
-`jsonViewer.ts`. Rewritten to be consumer-agnostic, then propagated to 03 byte-for-byte.
+`payloads.ts` is byte-identical between `03-payloads` and `04-ui-goodies`, and 03 has no
+JSON viewer at all, so the comment that justifies the number is written for both
+consumers — it names the fixture and the measurement, not 04-only `jsonViewer.ts`.
 
 Verified through the real message path, not around it: `tests/unit/apiInjectPayloadDisplay.spec.ts`
 sends a payload past the old clip through `askPayload()` — the actual `apiInject.ts`

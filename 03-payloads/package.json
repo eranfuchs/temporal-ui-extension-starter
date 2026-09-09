@@ -1,6 +1,6 @@
 {
     "name": "temporal-ui-starter-03-payloads",
-    "version": "0.7.10",
+    "version": "0.7.11",
     "private": true,
     "type": "module",
     "description": "Everything 02 does, plus each workflow's input and result on hover — decoded through a codec server you name yourself. The rung where payloads, an outbound host and the personal-data question all arrive together. One permission: storage.",
@@ -13,8 +13,7 @@
         "watch": "node esbuild.mjs --watch",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
-        "test:watch": "vitest",
-        "package": "node ../scripts/package.mjs ."
+        "test:watch": "vitest"
     },
     "devDependencies": {
         "@types/chrome": "^0.2.7",

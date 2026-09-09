@@ -10,9 +10,9 @@
 // drift from the other's, and the drift would be invisible, because each file would
 // still be internally consistent.
 //
-// WHY IT IS NOT IN tests/helpers.ts. That file is lineage-SHARED across all three
-// projects and byte-identical in each; this harness imports src/apiInject.ts, which
-// 01-family-tree does not have and whose absence is the whole point of that stage.
+// WHY IT IS NOT IN tests/helpers.ts. Every project carries that file; this harness
+// imports src/apiInject.ts, which 01-family-tree does not have and whose absence is
+// the whole point of that stage.
 //
 // THE STATE HERE OUTLIVES A TEST, deliberately and dangerously: apiInject.ts
 // registers a 'message' listener on a window vitest reuses for the entire file, and

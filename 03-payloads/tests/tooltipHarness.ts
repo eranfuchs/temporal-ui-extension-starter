@@ -9,8 +9,8 @@
 // slightly different fixture while the rules and the invariants they pin no longer
 // meet in the middle.
 //
-// WHY IT IS NOT IN tests/helpers.ts. That file is lineage-SHARED with 02-techniques
-// (see scripts/lineage.json), which has no payload panel. Putting a panel fixture
+// WHY IT IS NOT IN tests/helpers.ts. That file is shared with 02-techniques, which
+// has no payload panel. Putting a panel fixture
 // there would force 02 to carry a harness for a feature it does not have.
 //
 // The panel is installed ONCE, in installHarness(): it registers listeners on the
@@ -204,9 +204,8 @@ export function resetHarness(): void {
         if (request.success) posted.push(request.output);
     }) as typeof window.postMessage);
     // A table row, because openNow resolves the row through button.closest('tr').
-    // Built node by node rather than with innerHTML: `npm run surface` parses the
-    // test tree too, and a fixture is not a good enough reason to teach the gate
-    // that some innerHTML is fine.
+    // Built node by node rather than with innerHTML: there is no innerHTML anywhere
+    // in this repository, and a fixture is not a good enough reason to start.
     document.body.replaceChildren();
     const table = document.body.appendChild(document.createElement('table'));
     const cell = table

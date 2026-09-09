@@ -12,8 +12,8 @@
 // that drifted would each keep passing while the interaction between them stopped
 // being tested.
 //
-// WHY IT IS NOT IN tests/helpers.ts. That file is lineage-SHARED across all three
-// projects (see scripts/lineage.json) and is byte-identical in each, so it cannot
+// WHY IT IS NOT IN tests/helpers.ts. That file is SHARED across the
+// projects and byte-identical in each, so it cannot
 // hold a RenderOptions — the shape of that type is exactly what differs between the
 // stages. tests/helpers.ts stays the table-and-row builder every project needs;
 // this file is the render-specific layer on top of it.
@@ -140,7 +140,7 @@ export const MIXED: TemporalApiWorkflow[] = [
 // The real table has a <thead>; the shared fixture does not build one, because
 // nothing else in this repository reads it. The “Last event” column does — it has to
 // put its header somewhere — so the specs for it add one. (tests/helpers.ts is
-// byte-identical across the projects, per scripts/lineage.json, so it is not the
+// byte-identical across the projects, so it is not the
 // place to grow a fixture only the stages with that column need.)
 export function withHeader(tbody: HTMLTableSectionElement, labels: string[]): HTMLTableRowElement {
     const table = tbody.closest('table')!;

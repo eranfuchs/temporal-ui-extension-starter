@@ -189,7 +189,7 @@ function linkRow(link: DeepLinkTemplate, index: number): HTMLElement {
     });
     // example.com, not a made-up hostname: it is the reserved documentation
     // domain (RFC 2606), so a placeholder in a public repo can never be read as
-    // a real internal address — by a person or by the leak gate.
+    // a real internal address — by a person or by a scanner.
     const template = textInput(link.urlTemplate, 'https://logs.example.com/?q={workflowId}', (value) => {
         settings.links[index]!.urlTemplate = value;
         showTemplateVerdict(template, warning);

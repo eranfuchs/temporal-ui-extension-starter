@@ -24,9 +24,8 @@
 // still sends it.
 //
 // INVARIANT: where a boundary is described by a schema, it is the same library in every
-// project. Not every read uses one — some are small local guards — and `npm run surface`
-// does not check this; what it checks is narrower, that a package reaching a bundle is
-// declared by the project importing it.
+// project. Not every read uses one — some are small local guards — and nothing checks
+// this mechanically.
 // Breaking it: two APIs to learn for one job, on a ladder meant to be read in order.
 
 import * as v from 'valibot';
