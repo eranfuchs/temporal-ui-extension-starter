@@ -14,6 +14,12 @@
 import { PAGE_SIZE_OPTION_CLASS } from '../decoration';
 
 const PAGE_SIZE_OPTION_VALUE = '1000';
+// The label carries a trailing `*`; the value must not. The `*` marks the option as
+// one this extension added rather than one Temporal ships — a reader of the dropdown
+// can see which entries are not the site's own, and a bug report says `1000*` and
+// points at the right code. The value is what Temporal's own change handler puts in
+// `?per-page=`, so it stays a bare number.
+const PAGE_SIZE_OPTION_LABEL = `${PAGE_SIZE_OPTION_VALUE}*`;
 const NATIVE_PAGE_SIZE_VALUES = ['100', '500'];
 
 export function findPageSizeSelect(root: ParentNode): HTMLSelectElement | null {
@@ -32,7 +38,7 @@ export function syncPageSizeOption(select: HTMLSelectElement): void {
     const option = select.ownerDocument.createElement('option');
     option.className = PAGE_SIZE_OPTION_CLASS;
     option.value = PAGE_SIZE_OPTION_VALUE;
-    option.textContent = PAGE_SIZE_OPTION_VALUE;
+    option.textContent = PAGE_SIZE_OPTION_LABEL;
     // Appended, never selected: which page size is in effect is the user's choice,
     // made through the native control exactly as it always was.
     select.appendChild(option);

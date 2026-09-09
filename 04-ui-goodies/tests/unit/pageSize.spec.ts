@@ -50,6 +50,18 @@ describe('syncPageSizeOption', () => {
         expect(added[0]!.getAttribute('value')).toBe('1000');
     });
 
+    // The `*` is the label only. Sending it as the value would put `per-page=1000*`
+    // in the URL Temporal builds from the selection.
+    it('labels the option 1000* and keeps the value a bare number', () => {
+        const select = selectWithValues(['100', '250', '500']);
+        syncPageSizeOption(select);
+        const added = select.querySelector<HTMLOptionElement>(`option.${PAGE_SIZE_OPTION_CLASS}`)!;
+        expect(added.textContent).toBe('1000*');
+        expect(added.value).toBe('1000');
+        select.value = '1000';
+        expect(select.value).toBe('1000');
+    });
+
     it('never selects the option it adds', () => {
         const select = selectWithValues(['100', '250', '500']);
         const before = select.value;
